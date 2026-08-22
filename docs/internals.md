@@ -218,6 +218,15 @@ feature cannot supply for itself — addressing, membership, a delivery path —
 it is deliberately all of it: there is no operation model, no conflict rule and
 no opinion about documents here.
 
+**Opening one names the revision it starts from, and that is not optional.** The
+people in a room apply each other's operations to a document, which means
+nothing unless they all began from the same document, and the revision is the
+only thing that says which one that was. Without it the members would have no
+way of telling whether their texts agreed, and every operation after the first
+would land somewhere slightly different — silently, because nothing here
+compares them. This server still does not read the string; it carries it, so
+that the clients about to trust each other's edits can.
+
 **A room holds nothing, which is why it is memory.** Nothing said in one is kept;
 whatever the people in it produce is written through the overlay store or pushed
 to the repository, and both are still there when the room is not. So this server

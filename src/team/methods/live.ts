@@ -100,13 +100,22 @@ export function liveMethods(): TeamMethod[] {
         const read = paramsObject(params);
         const id = project(context, read);
         const instance = callingInstance(context, id);
-        const revision = optionalText(read, "revision", ANCHOR_FIELD_LIMIT);
+        // The one thing a room may not be opened without. The people in one
+        // apply each other's operations to a document, which means nothing
+        // unless they all began from the same document, and this is what names
+        // that starting point. Opened without it, the room's members would have
+        // no way of telling whether their texts agreed, and every operation
+        // after the first would land somewhere slightly different - silently,
+        // since nothing in this protocol compares them. Still unread here: it is
+        // carried so that the clients can compare it, as `title` is carried so
+        // that a person can read it.
+        const revision = requiredText(read, "revision", ANCHOR_FIELD_LIMIT);
         const title = optionalText(read, "title", INSTANCE_FIELD_LIMIT);
         try {
           return {
             session: context.presence.open(instance, {
               project: id,
-              ...(revision === undefined ? {} : { revision }),
+              revision,
               ...(title === undefined ? {} : { title }),
             }),
           };

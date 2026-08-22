@@ -430,8 +430,20 @@ export type TeamClientsEvent =
 export interface TeamLiveSession {
   readonly id: string;
   readonly project: string;
-  /** What the project stood at when it was opened, as the opener reported it. */
-  readonly revision?: string;
+  /**
+   * What the project stood at when it was opened, as the opener reported it.
+   *
+   * **Required, alone among the things a room is described by.** A room is a
+   * place where people apply each other's operations to a document, so it only
+   * means anything if everybody in it started from the same document, and this
+   * is the only thing that names that starting point. A room without one is a
+   * room whose members have no way of telling whether they began from the same
+   * text; the operations passing through it would land on documents that differ
+   * from the first message onwards, and silently, because nothing here compares
+   * them. This server still does not read the string - it carries it, so that
+   * the people about to trust each other's edits can.
+   */
+  readonly revision: string;
   /** What the opener called it, absent when they called it nothing. */
   readonly title?: string;
   /** Who opened it, by username. */
