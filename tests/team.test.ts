@@ -940,7 +940,7 @@ describe("a live session", () => {
     expect((await ada.value(TEAM_METHODS.liveList, { project }))["sessions"]).toEqual([]);
   });
 
-  it("ends when the last machine leaves, without anybody closing it", async () => {
+  it("outlives a guest leaving, and ends when its opener does", async () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
@@ -955,6 +955,33 @@ describe("a live session", () => {
 
     await ada.value(TEAM_METHODS.liveLeave, { session: id });
     expect((await ada.value(TEAM_METHODS.liveList, { project }))["sessions"]).toEqual([]);
+  });
+
+  it("ends when its opener leaves, with somebody else still in it", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project });
+    const id = (opened["session"] as { id: string }).id;
+    await bob.value(TEAM_METHODS.liveJoin, { session: id });
+
+    await ada.value(TEAM_METHODS.liveLeave, { session: id });
+
+    expect((await bob.value(TEAM_METHODS.liveList, { project }))["sessions"]).toEqual([]);
+  });
+
+  it("ends when its opener's window closes, with somebody else still in it", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project });
+    await bob.value(TEAM_METHODS.liveJoin, {
+      session: (opened["session"] as { id: string }).id,
+    });
+
+    await ada.value(TEAM_METHODS.clientsWithdraw, { project });
+
+    expect((await bob.value(TEAM_METHODS.liveList, { project }))["sessions"]).toEqual([]);
   });
 
   it("ends when the last machine's socket dies, which is the same thing", async () => {
@@ -972,6 +999,25 @@ describe("a live session", () => {
     let open = 1;
     while (open > 0 && Date.now() - started < 4000) {
       open = ((await ada.value(TEAM_METHODS.liveList, { project }))["sessions"] as unknown[]).length;
+    }
+    expect(open).toBe(0);
+  });
+
+  it("ends when its opener's socket dies, with somebody else still in it", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project });
+    await bob.value(TEAM_METHODS.liveJoin, {
+      session: (opened["session"] as { id: string }).id,
+    });
+
+    ada.close();
+
+    const started = Date.now();
+    let open = 1;
+    while (open > 0 && Date.now() - started < 4000) {
+      open = ((await bob.value(TEAM_METHODS.liveList, { project }))["sessions"] as unknown[]).length;
     }
     expect(open).toBe(0);
   });

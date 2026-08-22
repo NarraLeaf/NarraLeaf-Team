@@ -388,12 +388,26 @@ export class TeamPresence {
     this.publish(liveTopic(session), payload);
   }
 
-  /** Take one member out, ending the room if that was the last of them. */
+  /**
+   * Take one member out, ending the room if that was the last of them - or if it
+   * was the one that opened it.
+   *
+   * **The opener leaving ends the room even with others still in it.** A room is
+   * a place for the instances editing one project to reach each other, and the
+   * one that opened it is the one holding the copy the others are following. With
+   * it gone the rest would be talking to nobody in particular: still delivered
+   * to, still able to speak, and with nothing on the other end that can act on
+   * any of it. Ending the room says so at once instead of leaving people to work
+   * it out from the silence.
+   *
+   * Every way an instance can go leads here - `leave`, a window withdrawing, a
+   * socket closing - so this is the only place that has to know it.
+   */
   private part(session: LiveEntry, instanceId: string): void {
     if (!session.members.delete(instanceId)) {
       return;
     }
-    if (session.members.size === 0) {
+    if (session.members.size === 0 || session.openedByInstance === instanceId) {
       this.end(session);
       return;
     }
