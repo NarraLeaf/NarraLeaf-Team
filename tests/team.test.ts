@@ -760,7 +760,7 @@ describe("which installation is on the other end", () => {
 
     // And a room opened from one window belongs to that window rather than to
     // the machine: the instance is resolved by the project the call is about.
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     expect((opened["session"] as { openedByInstance: string }).openedByInstance).toBe(
       `nomen.${project}`,
     );
@@ -852,7 +852,7 @@ describe("which installation is on the other end", () => {
 describe("a live session", () => {
   it("cannot be opened by a session that never said what it is", async () => {
     const { ada, project } = await withTwo();
-    const refusal = await ada.call(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const refusal = await ada.call(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     expect(refusal.code).toBe("refused");
   });
 
@@ -868,12 +868,51 @@ describe("a live session", () => {
     expect(refusal.code).toBe("bad-params");
   });
 
+  it("cannot be opened without saying which document it is about", async () => {
+    const { ada, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+
+    const refusal = await ada.call(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+
+    // The second half of the same rule the revision is subject to, and not a
+    // repetition of it: the revision says which text everybody began from, this
+    // says which document of it they are editing. A room carrying only the
+    // first leaves a joiner to guess, and the only thing it can guess is a
+    // document it already has - which shuts out the person for whom joining is
+    // how they get the project at all.
+    expect(refusal.code).toBe("bad-params");
+  });
+
+  it("carries the document it is about to everyone who asks", async () => {
+    const { ada, bob, project } = await withTwo();
+    await bob.send("subscribe", { topic: projectLiveTopic(project) });
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+
+    const opened = await ada.value(TEAM_METHODS.liveOpen, {
+      project,
+      revision: "rev-1",
+      story: "story-éé",
+    });
+    // Carried whole and unparsed, as every anchor on this server is: the string
+    // is Studio's, and this test is here to say that nothing looks inside it.
+    expect((opened["session"] as { story: string }).story).toBe("story-éé");
+
+    const listed = (await bob.value(TEAM_METHODS.liveList, { project }))["sessions"] as {
+      story: string;
+    }[];
+    expect(listed.map((each) => each.story)).toEqual(["story-éé"]);
+
+    await bob.until(() => bob.events.length > 0);
+    const announced = bob.events[0]?.payload as { session: { story: string } };
+    expect(announced.session.story).toBe("story-éé");
+  });
+
   it("carries the revision it started from to everyone who asks", async () => {
     const { ada, bob, project } = await withTwo();
     await bob.send("subscribe", { topic: projectLiveTopic(project) });
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
 
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-7" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-7", story: "story-1" });
     expect((opened["session"] as { revision: string }).revision).toBe("rev-7");
 
     // The same string on the list a client reads to find a room to join, and on
@@ -899,6 +938,7 @@ describe("a live session", () => {
     const opened = await ada.value(TEAM_METHODS.liveOpen, {
       project,
       revision: "rev-1",
+      story: "story-1",
       title: "act one",
     });
     const session = opened["session"] as {
@@ -915,7 +955,7 @@ describe("a live session", () => {
     await bob.send("subscribe", { topic: projectLiveTopic(project) });
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
 
-    await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
 
     await bob.until(() => bob.events.length > 0);
     expect((bob.events[0]?.payload as { kind: string }).kind).toBe("live-opened");
@@ -925,7 +965,7 @@ describe("a live session", () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     const id = (opened["session"] as { id: string }).id;
 
     const joined = await bob.value(TEAM_METHODS.liveJoin, { session: id });
@@ -937,7 +977,7 @@ describe("a live session", () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     const id = (opened["session"] as { id: string }).id;
     await bob.value(TEAM_METHODS.liveJoin, { session: id });
     await ada.send("subscribe", { topic: liveTopic(id) });
@@ -960,7 +1000,7 @@ describe("a live session", () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     const id = (opened["session"] as { id: string }).id;
 
     const refusal = await bob.call(TEAM_METHODS.liveSay, { session: id, payload: null });
@@ -971,7 +1011,7 @@ describe("a live session", () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     const id = (opened["session"] as { id: string }).id;
     await bob.value(TEAM_METHODS.liveJoin, { session: id });
 
@@ -984,7 +1024,7 @@ describe("a live session", () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     const id = (opened["session"] as { id: string }).id;
     await bob.value(TEAM_METHODS.liveJoin, { session: id });
 
@@ -1001,7 +1041,7 @@ describe("a live session", () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     const id = (opened["session"] as { id: string }).id;
     await bob.value(TEAM_METHODS.liveJoin, { session: id });
 
@@ -1014,7 +1054,7 @@ describe("a live session", () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     await bob.value(TEAM_METHODS.liveJoin, {
       session: (opened["session"] as { id: string }).id,
     });
@@ -1028,7 +1068,7 @@ describe("a live session", () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
-    const opened = await bob.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await bob.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     expect((opened["session"] as { id: string }).id).toBeTruthy();
 
     bob.close();
@@ -1047,7 +1087,7 @@ describe("a live session", () => {
     const { ada, bob, project } = await withTwo();
     await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
     await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
-    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1" });
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
     await bob.value(TEAM_METHODS.liveJoin, {
       session: (opened["session"] as { id: string }).id,
     });

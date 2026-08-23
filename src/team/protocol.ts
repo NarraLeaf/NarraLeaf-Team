@@ -444,6 +444,25 @@ export interface TeamLiveSession {
    * the people about to trust each other's edits can.
    */
   readonly revision: string;
+  /**
+   * Which document of that project the room is about, as the opener named it.
+   *
+   * **Required, for the same reason `revision` is, and it is not the same
+   * reason twice.** The revision says which *text* everybody started from; this
+   * says which *document* they are all editing. A room carrying only the first
+   * leaves the second to be guessed, and the only thing a joiner could guess
+   * from is its own copy - so two people would agree about the version and
+   * still be applying each other's operations to different files, which is the
+   * failure the revision was made required to prevent, arrived at by the other
+   * road. It also decides who can join at all: a joiner that has to guess can
+   * only guess a document it already has, which shuts out exactly the person
+   * for whom joining is how they get the project in the first place.
+   *
+   * Opaque here, like every other anchor on this server (see `overlay`): it is
+   * carried and compared for equality, never parsed. What the string means is
+   * Studio's business.
+   */
+  readonly story: string;
   /** What the opener called it, absent when they called it nothing. */
   readonly title?: string;
   /** Who opened it, by username. */

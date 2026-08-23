@@ -110,12 +110,22 @@ export function liveMethods(): TeamMethod[] {
         // carried so that the clients can compare it, as `title` is carried so
         // that a person can read it.
         const revision = requiredText(read, "revision", ANCHOR_FIELD_LIMIT);
+        // The other thing a room may not be opened without, and required for a
+        // reason of its own rather than as a second copy of the one above: the
+        // revision says which text the members started from, this says which
+        // document of it they are editing. Left out, a joiner has nothing to go
+        // on but its own copy - so it can only ever follow a document it
+        // already has, and two people can agree about the version while
+        // applying each other's operations to different files. Unread here, as
+        // everything anchor-shaped on this server is.
+        const story = requiredText(read, "story", ANCHOR_FIELD_LIMIT);
         const title = optionalText(read, "title", INSTANCE_FIELD_LIMIT);
         try {
           return {
             session: context.presence.open(instance, {
               project: id,
               revision,
+              story,
               ...(title === undefined ? {} : { title }),
             }),
           };

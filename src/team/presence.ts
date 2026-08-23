@@ -66,6 +66,8 @@ interface LiveEntry {
   readonly project: string;
   /** Where the people in this room began, and see {@link TeamLiveSession} for why it must be said. */
   readonly revision: string;
+  /** Which document they are all editing, and see {@link TeamLiveSession} for why that is not the same thing. */
+  readonly story: string;
   readonly title?: string;
   readonly openedBy: string;
   readonly openedByInstance: string;
@@ -314,7 +316,7 @@ export class TeamPresence {
    */
   open(
     instance: TeamClientInstance,
-    input: { project: string; revision: string; title?: string },
+    input: { project: string; revision: string; story: string; title?: string },
   ): TeamLiveSession {
     const open = [...this.sessions.values()].filter((each) => each.project === input.project);
     if (open.length >= LIVE_SESSION_LIMIT) {
@@ -325,6 +327,7 @@ export class TeamPresence {
       id: randomUUID(),
       project: input.project,
       revision: input.revision,
+      story: input.story,
       ...(input.title === undefined ? {} : { title: input.title }),
       openedBy: instance.account,
       openedByInstance: instance.id,
@@ -442,6 +445,7 @@ function view(session: LiveEntry): TeamLiveSession {
     id: session.id,
     project: session.project,
     revision: session.revision,
+    story: session.story,
     ...(session.title === undefined ? {} : { title: session.title }),
     openedBy: session.openedBy,
     openedByInstance: session.openedByInstance,
