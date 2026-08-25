@@ -133,13 +133,20 @@ Nothing else is served there: no user data, no way to write anything, and no
 CORS headers. It is plain HTTP because a set of public keys is not a secret, and
 because `loreserver` fetches it over the loopback of the machine Team runs on.
 
-`up --identity` additionally writes the `[server.auth]` and
-`[environment.endpoint]` blocks into `local.toml`, which is what makes
-`loreserver` demand a token. Without the flag the generated configuration is the
-one Team server has always written, and the server accepts any client. Both blocks are
-written together: with the first alone, the server demands a token while having
-nowhere to ask about one, and every repository access fails with "Failed to
-connect to lore auth service".
+`up` additionally writes the `[server.auth]` and `[environment.endpoint]` blocks
+into `local.toml`, which is what makes `loreserver` demand a token. Both blocks
+are written together: with the first alone, the server demands a token while
+having nowhere to ask about one, and every repository access fails with "Failed
+to connect to lore auth service".
+
+`up --no-identity` writes neither, and that is the whole of what it does. A
+`loreserver` configured that way demands nothing and never calls back into Team,
+so the accounts, the tokens, the signing keys and the decision log are all
+bypassed at once and every repository on the server is readable and writable by
+whoever can reach the port. It is a deliberate configuration for a machine
+nothing else can reach, and `up` says so on standard error each time it starts
+that way. `--identity` is still accepted and asks for the default, so a command
+line written before this was the default still runs.
 
 ## Signing in, and the certificate that makes it possible
 
@@ -223,7 +230,7 @@ untouched by any of that.
 A certificate proves a name, so Team has to be told the names people will use:
 
 ```sh
-nlteam up --root /srv/team --identity --hostname team.example.com
+nlteam up --root /srv/team --hostname team.example.com
 ```
 
 `--hostname` is repeatable, and `DNS:localhost`, `IP:127.0.0.1` and `IP:::1` are
@@ -314,9 +321,9 @@ on. Nothing in it is secret: it is what an operator would otherwise have written
 in a chat message, and every field of it is checkable against the token that
 arrives later.
 
-`auth.required` is false on a server whose `loreserver` was configured without
-`--identity`, which accepts anyone who can reach it; asking its authors for a
-token would be asking for something nobody can issue. `data.url` is the remote
+`auth.required` is false on a server brought up with `--no-identity`, which
+accepts anyone who can reach it; asking its authors for a token would be asking
+for something nobody can issue. `data.url` is the remote
 the repositories live on — Studio stores it and shows it to nobody, because it
 is a detail of the storage this server happens to run, and naming it in an
 interface would make it something people learn and type. `authority.sha256` lets

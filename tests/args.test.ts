@@ -57,13 +57,14 @@ describe("parseArgs, up", () => {
       root: "/srv/team",
       dataPort: DEFAULT_PORTS.dataPort,
       healthPort: DEFAULT_PORTS.healthPort,
-      // Identity is off unless it is asked for: a loreserver that suddenly
-      // demanded a token would lock out every client an operator already has.
-      identity: false,
-      // And so is the web interface, for the same shape of reason: everything
-      // else `up` starts is something another program needs, and switching a
-      // page on by default would widen what an existing deployment answers on
-      // its public port without anybody deciding to.
+      // Identity is on unless it is switched off: without it loreserver is
+      // never told to demand a token and Team is never asked about anybody, so
+      // a command line that says nothing about it has to mean the safe one.
+      identity: true,
+      // The web interface is not, and for a reason that does not apply to
+      // identity: everything else `up` starts is something another program
+      // needs, and switching a page on by default would widen what an existing
+      // deployment answers on its public port without anybody deciding to.
       web: false,
       overrides: {},
     });
@@ -71,6 +72,24 @@ describe("parseArgs, up", () => {
 
   it("serves the web interface when it is asked for", () => {
     expect(parseArgs(["up", "--root", "/srv/team", "--web"])).toMatchObject({ web: true });
+  });
+
+  it("switches identity off when it is deliberately given up", () => {
+    expect(parseArgs(["up", "--root", "/srv/team", "--no-identity"])).toMatchObject({
+      identity: false,
+    });
+  });
+
+  it("still takes --identity, which every operator's script already passes", () => {
+    expect(parseArgs(["up", "--root", "/srv/team", "--identity"])).toMatchObject({
+      identity: true,
+    });
+  });
+
+  it("refuses a command line that asks for identity and gives it up at once", () => {
+    expect(messageFor(["up", "--root", "/srv/team", "--identity", "--no-identity"])).toContain(
+      "cannot both be given",
+    );
   });
 
   it("switches identity on, and carries the settings that go with it", () => {

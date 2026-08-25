@@ -89,7 +89,13 @@ Every command takes --root <path>, the directory Team keeps its files in.
 
 Options for up:
       --health-port <port>  loreserver's HTTP health check port (default ${DEFAULT_PORTS.healthPort})
-      --identity            Configure loreserver to demand a Team token
+      --no-identity         Configure loreserver to demand nothing, so that
+                            anybody who can reach it may read and write every
+                            repository on this server. It demands a Team token
+                            unless this is given
+      --identity            Ask for what happens anyway; accepted so that a
+                            command line written before it was the default
+                            still runs
       --web                 Serve the web interface on the auth endpoint, for
                             accounts in the admin group
 

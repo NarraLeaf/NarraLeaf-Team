@@ -462,7 +462,16 @@ export async function up(
     await writeInstance(layout, ports, auth);
     stdout(`wrote ${layout.configPath}\n`);
     if (auth === undefined) {
-      stdout("loreserver will accept any client: pass --identity to make it demand a token\n");
+      // On stderr, and saying what it costs rather than what to type. This is
+      // the branch somebody has to ask for: loreserver is configured with no
+      // authorization at all, so nothing between a stranger and every
+      // repository on this server is left, and the accounts, the tokens and
+      // the keys this process is otherwise about are not consulted once.
+      stderr(
+        "nlteam: --no-identity: loreserver will accept any client that can reach it, and\n" +
+          "        Team will not be asked about anybody. Every repository on this server is\n" +
+          "        readable and writable by whoever finds the port.\n",
+      );
     } else {
       stdout(`loreserver will demand a token from ${auth.issuer} for ${auth.audience[0]}\n`);
       stdout(`clients are told to sign in at ${auth.authUrl}\n`);

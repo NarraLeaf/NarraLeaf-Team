@@ -63,7 +63,15 @@ export type Invocation =
       readonly root: string;
       readonly dataPort: number;
       readonly healthPort: number;
-      /** True when loreserver is to be told to demand a Team server token. */
+      /**
+       * True when loreserver is to be told to demand a Team server token.
+       *
+       * True unless `--no-identity` was given. Without it loreserver is
+       * configured with no `[server.auth]` and no `auth_url`, so it demands
+       * nothing and never asks Team about anybody: the whole of the
+       * authorization layer is bypassed, and the safe configuration cannot be
+       * the one that needs an extra word on the command line.
+       */
       readonly identity: boolean;
       /** True to serve the web interface on the TLS listener as well. */
       readonly web: boolean;
@@ -453,7 +461,10 @@ function parseUp(argv: readonly string[]): Invocation {
   const result = readTokens(
     argv,
     ["--root", "--health-port", ...IDENTITY_OPTIONS],
-    ["--identity", "--web"],
+    // `--identity` is still taken and means what it has always meant. It now
+    // asks for what happens anyway, which is what keeps an operator's existing
+    // command line working rather than becoming an unknown argument.
+    ["--identity", "--no-identity", "--web"],
     IDENTITY_LIST_OPTIONS,
   );
   if (result.kind !== "tokens") {
@@ -469,6 +480,12 @@ function parseUp(argv: readonly string[]): Invocation {
   const root = tokens.values.get("--root");
   if (root === undefined) {
     return missingRoot("up");
+  }
+
+  // Refused rather than settled one way, because the two say opposite things
+  // and the safe reading and the recently-typed reading are not the same one.
+  if (tokens.flags.has("--identity") && tokens.flags.has("--no-identity")) {
+    return error("--identity and --no-identity cannot both be given");
   }
 
   let healthPort = DEFAULT_PORTS.healthPort;
@@ -512,7 +529,7 @@ function parseUp(argv: readonly string[]): Invocation {
     root,
     dataPort,
     healthPort,
-    identity: tokens.flags.has("--identity"),
+    identity: !tokens.flags.has("--no-identity"),
     web: tokens.flags.has("--web"),
     overrides,
   };

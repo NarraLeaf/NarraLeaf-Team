@@ -44,14 +44,16 @@ command takes it.
 **1. Start it.**
 
 ```sh
-nlteam up --root /srv/team --identity --hostname team.example.com --web
+nlteam up --root /srv/team --hostname team.example.com --web
 ```
 
 `up` installs `loreserver`, configures it, starts it, serves the endpoint
 Studio signs in at, and runs until it is interrupted.
 
-- `--identity` is what makes `loreserver` demand a token. Without it the server
-  accepts any client that can reach it.
+- `loreserver` demands a token, and Team is what it asks about one. This needs
+  no flag. `--no-identity` gives it up: the server then accepts any client that
+  can reach it, and every repository on it is readable and writable by whoever
+  finds the port. `--identity` is still accepted, and asks for the default.
 - `--hostname` is a name people will reach this server by. It goes into the
   certificate **and into the audience of every token**, so a server told none
   issues tokens that work on its own machine and nowhere else. Repeatable.
