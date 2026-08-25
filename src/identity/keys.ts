@@ -28,6 +28,24 @@ import { join } from "node:path";
 /** The modulus size of the keys Team generates. */
 export const MODULUS_LENGTH = 2048;
 
+/**
+ * The shortest time between two re-reads of the keys directory.
+ *
+ * {@link KeyStore.reload} is reached from two doors anybody may knock on: the
+ * JWKS document, which is served to whoever asks, and a token naming a `kid`
+ * this process has not seen — and a `kid` is read out of a token's header
+ * before its signature is, so a caller holding no credential at all can ask for
+ * one. A re-read is a `readdir` and then, per key file, a read, a private key
+ * parsed, a public half exported and a SHA-256 thumbprint taken, all on the
+ * four threads libuv shares with every other file operation in the process.
+ *
+ * Five seconds is the whole of what that can cost. Long enough that a flood of
+ * unknown `kid`s buys one scan rather than one scan each; short enough that a
+ * `nlteam key rotate` in another terminal is picked up before the person who
+ * ran it has finished typing the command that uses the new key.
+ */
+const RELOAD_INTERVAL_MS = 5000;
+
 /** One public key, as a JWKS entry. */
 export interface PublicJsonWebKey {
   readonly kty: "RSA";
@@ -162,6 +180,13 @@ async function readKey(keysDir: string, serial: number, retired: boolean): Promi
 export class KeyStore {
   readonly #keysDir: string;
   #keys: TeamKey[];
+  /**
+   * When the directory was last re-read, as a clock reading.
+   *
+   * Zero until something asks, so the first {@link KeyStore.reload} after
+   * opening always looks: what was loaded at open may be minutes old by then.
+   */
+  #reloadedAt = 0;
 
   private constructor(keysDir: string, keys: TeamKey[]) {
     this.#keysDir = keysDir;
@@ -212,8 +237,21 @@ export class KeyStore {
    *
    * Nothing is generated here: an empty directory reloads as no keys, where
    * opening one would have made a key.
+   *
+   * At most one re-read every {@link RELOAD_INTERVAL_MS}. A caller inside that
+   * window is answered without the directory being touched, which is what a
+   * re-read that found nothing new would have done anyway — the store it is
+   * asking about is left exactly as it was.
    */
   async reload(): Promise<void> {
+    const now = Date.now();
+    if (now - this.#reloadedAt < RELOAD_INTERVAL_MS) {
+      return;
+    }
+    // Stamped before the read rather than after it, so that callers arriving
+    // while this one is still reading are turned away rather than starting
+    // scans of their own.
+    this.#reloadedAt = now;
     this.#keys = await KeyStore.#load(this.#keysDir);
   }
 

@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { identityLayout } from "../src/identity/layout.js";
 import { jwkThumbprint, KeyStore, MODULUS_LENGTH } from "../src/identity/keys.js";
@@ -113,5 +113,43 @@ describe("KeyStore.reload", () => {
     await serving.reload();
 
     expect(serving.jwks().keys.map((key) => key.kid)).toEqual([added.kid, rotating.all[1]?.kid]);
+  });
+
+  it("re-reads the directory once in an interval, however often it is asked", async () => {
+    const keysDir = identityLayout(await temporaryRoot()).keysDir;
+    const serving = await KeyStore.open(keysDir);
+    const rotating = await KeyStore.open(keysDir);
+
+    // A reload is a readdir and then, per key file, a read, a private key
+    // parsed, a public half exported and a thumbprint taken — all on the four
+    // threads libuv shares with every other file operation in the process. It
+    // is reached from doors anybody may knock on, so what it costs has to be
+    // what one caller can spend rather than what every caller can.
+    await serving.reload();
+    const added = await rotating.rotate();
+    await serving.reload();
+
+    // A reload that was skipped says what a reload finding nothing new says.
+    expect(serving.find(added.kid)).toBeUndefined();
+  });
+
+  it("picks up a rotation once the interval has passed", async () => {
+    const keysDir = identityLayout(await temporaryRoot()).keysDir;
+    const serving = await KeyStore.open(keysDir);
+    const rotating = await KeyStore.open(keysDir);
+    await serving.reload();
+    const added = await rotating.rotate();
+
+    // Only the clock is faked; what this reads is a real directory. A minute is
+    // well past any interval a rotation should have to wait out.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(Date.now() + 60_000));
+      await serving.reload();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(serving.find(added.kid)?.kid).toBe(added.kid);
   });
 });
