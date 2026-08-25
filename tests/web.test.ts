@@ -21,6 +21,7 @@ import { identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
+import { SignInLimiter } from "../src/identity/signin.js";
 import { decodeToken, type TokenClaims } from "../src/identity/tokens.js";
 import {
   createUser,
@@ -143,6 +144,10 @@ async function withOperator(groups: readonly string[]): Promise<{
   const origin = await serve({
     context,
     sessions,
+    // One per server. A running server shares one between its doors, and two
+    // servers in one test run share nothing: an account this suite spent in one
+    // of them is not one the next has to start counting from.
+    signIns: new SignInLimiter(),
     gather: () => {
       state.gathered += 1;
       return Promise.resolve(emptyView());
@@ -286,6 +291,24 @@ describe("signing in", () => {
 
     expect(response.status).toBe(403);
   });
+
+  it("stops checking the password once enough from one place have been refused", async () => {
+    const { origin, logged } = await withOperator(["admin"]);
+
+    let attempt = await signIn(origin, "not the password");
+    for (let count = 0; count < 10 && attempt.status === 401; count += 1) {
+      attempt = await signIn(origin, "not the password");
+    }
+
+    // The same guard on both doors, because they are two ways to the same
+    // accounts and the same scrypt: whichever somebody knocks on, the rate at
+    // which they may make this server check a password is the one rate.
+    expect(attempt.status).toBe(429);
+    expect(attempt.body.error).toContain("try again in");
+    expect(logged.some((line) => line.includes("held off"))).toBe(true);
+    // Every refused sign-in is held before it is answered, so the run of them
+    // this needs takes a few seconds on its own.
+  }, 60_000);
 });
 
 describe("once signed in", () => {

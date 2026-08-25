@@ -31,6 +31,7 @@ import { KeyStore } from "../src/identity/keys.js";
 import { identityLayout } from "../src/identity/layout.js";
 import { setTokenLifetimes } from "../src/identity/settings.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
+import { SignInLimiter } from "../src/identity/signin.js";
 import { decodeToken, mintToken, type TokenClaims } from "../src/identity/tokens.js";
 import {
   createUser,
@@ -137,6 +138,10 @@ async function harness(
     config,
     dataPort: config.dataPort,
     fingerprint: FINGERPRINT,
+    // One per harness. The limiter a running server uses is shared by every
+    // door of one process, and two harnesses in one test run are two servers:
+    // sharing one would let a test spend what the next one is counting on.
+    signIns: new SignInLimiter(),
     ...(held === undefined ? {} : { readings: held }),
     ...(log === undefined ? {} : { log }),
   };
@@ -1344,5 +1349,44 @@ describe("signing in with a password", () => {
       expect(line).not.toContain(PASSWORD);
       expect(line).not.toContain("not the password");
     }
+  });
+
+  it("stops checking the password once enough from one place have been refused", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+
+    let answer = await signIn(team.origin, { username: "ada", password: "not the password" });
+    for (let attempt = 0; attempt < 10 && answer.status === 401; attempt += 1) {
+      answer = await signIn(team.origin, { username: "ada", password: "not the password" });
+    }
+
+    // A password check is the most expensive thing this server does for
+    // somebody who has presented nothing, and an unknown username costs the
+    // same as a known one, so how often it may be asked for is the whole of
+    // what stops a password being guessed at wholesale.
+    expect(answer.status).toBe(429);
+    expect(answer.body["error"]).toContain("try again in");
+    // The right password is not checked either while the wait stands: it is the
+    // check that is being held off, not the answer.
+    const right = await signIn(team.origin, { username: "ada", password: PASSWORD });
+    expect(right.status).toBe(429);
+    // Every refused sign-in is held before it is answered, so the run of them
+    // this needs takes a few seconds on its own.
+  }, 60_000);
+
+  it("refuses a sign-in driven from a page of somewhere else", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+
+    const response = await fetch(`${team.origin}${SIGN_IN}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://somewhere.example" },
+      body: JSON.stringify({ username: "ada", password: PASSWORD }),
+    });
+
+    // The token comes back in the body rather than in a cookie, so a page
+    // elsewhere gains nothing by reaching this. What it would gain is a
+    // visitor's browser spending this server's password checking for it.
+    expect(response.status).toBe(403);
   });
 });

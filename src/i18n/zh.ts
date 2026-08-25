@@ -186,6 +186,8 @@ export const zh: Messages = {
     sessionEnded: "这个会话已经结束",
     // 和英文一样只说一句：说“没有这个账号”就等于让任何人都能枚举出服务器上有哪些账号。
     signInRefused: "用户名或密码不对",
+    // 只说这里被拒了多少次，不提被问的账号在不在：上面那条规矩在这里同样适用。
+    tooManySignIns: ({ seconds }) => `这里被拒绝的登录太多了，请 ${seconds} 秒后再试`,
     notAnOperator: ({ group }) => `网页界面只对 ${group} 组开放，这个账号不在其中`,
     needUsernameAndPassword: "需要用户名和密码",
     fromSomewhereElse: "这个请求来自别的站点",

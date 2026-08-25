@@ -185,6 +185,10 @@ export const en: Messages = {
     notSignedIn: "this browser is not signed in",
     sessionEnded: "this session has ended",
     signInRefused: "the username or password is not right",
+    // How often this caller has been wrong, and nothing about the account they
+    // named: the rule the sentence above is written to holds here too.
+    tooManySignIns: ({ seconds }) =>
+      `too many sign-ins from here have been refused; try again in ${seconds} seconds`,
     notAnOperator: ({ group }) =>
       `the web interface is for the ${group} group, which this account is not in`,
     needUsernameAndPassword: "a username and a password are needed",

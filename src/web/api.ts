@@ -45,10 +45,17 @@ import { describeError } from "../i18n/errors.js";
 import { en, messagesFor, type Messages } from "../i18n/index.js";
 import { isLocale, LANGUAGE_HEADER, negotiateLocale } from "../i18n/locales.js";
 import { defaultPasswordHasher } from "../identity/passwords.js";
+import {
+  holdRefusedSignIn,
+  sharedSignInLimiter,
+  verifyingPassword,
+  type SignInLimiter,
+} from "../identity/signin.js";
 import { authenticate } from "../identity/users.js";
 import type { Action } from "../tui/state.js";
 import type { TeamView } from "../tui/teamview.js";
 import type { ViewContext } from "../view.js";
+import { originIsOurs, remoteAddressOf } from "./origin.js";
 import {
   clearedSessionCookie,
   readCookie,
@@ -88,21 +95,19 @@ export const OPERATOR_ROLE = "admin";
  */
 const MAX_BODY_BYTES = 16 * 1024;
 
-/**
- * How long a failed sign-in is held before it is answered.
- *
- * Password checking is already slow on purpose — scrypt at OWASP's parameters
- * costs a few hundred milliseconds — so this is not about the cost of a guess.
- * It is about the rate of them: with this, one connection gets at most a couple
- * of attempts a second, and the sentence it is answered with says nothing about
- * which half was wrong anyway.
- */
-export const REFUSED_SIGN_IN_DELAY_MS = 500;
-
 /** What the web interface needs in order to answer. */
 export interface ApiOptions {
   readonly context: ViewContext;
   readonly sessions: SessionStore;
+  /**
+   * How often a password may be guessed at here.
+   *
+   * Absent means the one every door of this server shares, which is what a
+   * running server wants: the rate somebody may guess at a password should not
+   * depend on which door they knock on. A caller passes its own when it wants
+   * one that no other caller has already spent.
+   */
+  readonly signIns?: SignInLimiter;
   /** Gather the current view. The same call the terminal interface refreshes with. */
   readonly gather: () => Promise<TeamView>;
   /** Ask for the repositories to be read again; it must not be waited on. */
@@ -185,48 +190,6 @@ async function readJsonBody(
 
 function isError(value: unknown): value is { error: string } {
   return typeof value === "object" && value !== null && typeof (value as { error?: unknown }).error === "string";
-}
-
-/**
- * Whether a request that means to change something came from this interface.
- *
- * An absent `origin` is allowed: a browser sends one on every request that can
- * do harm, and a command-line client which sends none has a session cookie only
- * because somebody deliberately gave it one. A present one that names another
- * host is refused, which is the case the header exists for.
- */
-function originIsOurs(request: IncomingMessage): boolean {
-  const origin = request.headers.origin;
-  if (origin === undefined || origin === "null") {
-    return origin === undefined;
-  }
-  const host = request.headers.host;
-  if (host === undefined) {
-    return false;
-  }
-  try {
-    return new URL(origin).host === host;
-  } catch {
-    return false;
-  }
-}
-
-/** Wait, without holding the process open if it is on its way out. */
-function pause(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds).unref();
-  });
-}
-
-/**
- * Hold a refused sign-in for as long as every refused sign-in is held.
- *
- * Exported because there are two doors now — this interface and the API a
- * Studio installation signs in at — and the rate a password may be guessed at
- * should not depend on which one somebody knocks on.
- */
-export function holdRefusedSignIn(): Promise<void> {
-  return pause(REFUSED_SIGN_IN_DELAY_MS);
 }
 
 /** Whether an account is in the group that may open this interface. */
@@ -372,9 +335,28 @@ async function signIn(
     return;
   }
 
+  // Asked before the password is checked rather than after, because checking it
+  // is the expensive part and this is the door that decides how often anybody
+  // may make this server spend it.
+  const limiter = options.signIns ?? sharedSignInLimiter();
+  const address = remoteAddressOf(request);
+  const wait = limiter.waitFor(username, address);
+  if (wait > 0) {
+    const seconds = Math.ceil(wait / 1000);
+    options.log?.(`web: sign-in for ${JSON.stringify(username)} held off for ${seconds}s`);
+    // 429 rather than the refusal below, and it says nothing this caller does
+    // not already know: what it reports is how often they themselves have been
+    // wrong, not whether the account they named is one this server has.
+    sendJson(response, 429, { error: messages.refusal.tooManySignIns({ seconds }) });
+    return;
+  }
+
   const { database } = options.context;
-  const result = await authenticate(database, defaultPasswordHasher(), username, password);
+  const result = await verifyingPassword(() =>
+    authenticate(database, defaultPasswordHasher(), username, password),
+  );
   if (result.kind === "refused") {
+    limiter.refused(username, address);
     // One sentence for every way it can fail, as `nlteam token mint` does:
     // whoever is at the other end learns nothing about which accounts exist.
     await holdRefusedSignIn();
@@ -382,6 +364,9 @@ async function signIn(
     sendJson(response, 401, { error: messages.refusal.signInRefused });
     return;
   }
+  // The password was right, whatever is decided about the account below, so
+  // there is nothing left to hold against whoever typed it.
+  limiter.accepted(username, address);
 
   if (!isOperator(result.user.groups)) {
     // A different sentence, and it can be: the password was right, so there is

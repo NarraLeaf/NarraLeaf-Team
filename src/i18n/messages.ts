@@ -210,6 +210,8 @@ export interface RefusalMessages {
   readonly notSignedIn: string;
   readonly sessionEnded: string;
   readonly signInRefused: string;
+  /** Said in place of a check, when too many from this place have been refused. */
+  readonly tooManySignIns: (fields: { readonly seconds: number }) => string;
   readonly notAnOperator: (fields: { readonly group: string }) => string;
   readonly needUsernameAndPassword: string;
   readonly fromSomewhereElse: string;

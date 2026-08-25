@@ -68,6 +68,12 @@ import { bearerToken, describeRefusal, identifyToken } from "../identity/bearer.
 import type { KeyStore } from "../identity/keys.js";
 import { defaultPasswordHasher } from "../identity/passwords.js";
 import { storedTokenLifetimes } from "../identity/settings.js";
+import {
+  holdRefusedSignIn,
+  sharedSignInLimiter,
+  verifyingPassword,
+  type SignInLimiter,
+} from "../identity/signin.js";
 import { mintToken } from "../identity/tokens.js";
 import type { UserRecord } from "../identity/users.js";
 import {
@@ -91,7 +97,8 @@ import { loreserverUrl, repositoryCreate } from "../projects/repository.js";
 import type { TeamProjectsEvent } from "../team/protocol.js";
 import { NOT_READ_YET } from "../tui/teamview.js";
 import type { ProjectFileView, RevisionView } from "../tui/teamview.js";
-import { holdRefusedSignIn, isOperator } from "./api.js";
+import { isOperator } from "./api.js";
+import { originIsOurs, remoteAddressOf } from "./origin.js";
 
 /** Where the routes live. Versioned, because a client older than the server is ordinary. */
 const PREFIX = "/api/studio/v1";
@@ -174,6 +181,15 @@ export interface StudioApiOptions {
    * fingerprint, and Studio falls back to asking a person for one.
    */
   readonly fingerprint?: string;
+  /**
+   * How often a password may be guessed at here.
+   *
+   * Absent means the one every door of this server shares, which is what a
+   * running server wants: the rate somebody may guess at a password should not
+   * depend on which door they knock on. A caller passes its own when it wants
+   * one that no other caller has already spent.
+   */
+  readonly signIns?: SignInLimiter;
   /** What the repositories last said. Absent on a server that reads none. */
   readonly readings?: StudioReadings;
   /** Somewhere to say what happened, in the same place `up` says everything else. */
@@ -335,6 +351,25 @@ function sendNothing(response: ServerResponse): void {
  */
 function refuse(response: ServerResponse, status: number, message: string): void {
   sendJson(response, status, { error: message });
+}
+
+/**
+ * Say that this one was not tried, and when the next one will be.
+ *
+ * `retry-after` as well as the sentence, because a client that reads it can
+ * wait rather than keep asking, and one that does not has been told in words.
+ */
+function holdOff(response: ServerResponse, seconds: number): void {
+  const body = JSON.stringify({
+    error: `too many sign-ins from here have been refused; try again in ${seconds} seconds`,
+  });
+  response.writeHead(429, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store",
+    "retry-after": String(seconds),
+  });
+  response.end(body);
 }
 
 /**
@@ -724,12 +759,30 @@ function answerProjectForget(
  * was tried, because an operator reading the log needs to know what is being
  * guessed at; the password does not appear in any line here, or in any error
  * this can raise.
+ *
+ * What it costs to knock
+ * ----------------------
+ * A password check is the most expensive thing this server does for somebody
+ * who has presented nothing, and an unknown username costs the same as a known
+ * one because it is hashed against a decoy. So the door is guarded before the
+ * check rather than after it: a request from a page of another site is refused
+ * on its `origin`, and a name that has been refused often enough from one place
+ * is answered without its password being looked at.
  */
 async function answerSignIn(
   options: StudioApiOptions,
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
+  if (!originIsOurs(request)) {
+    // The token this answers with goes in the body rather than in a cookie, so
+    // a page elsewhere gains nothing by making the request. What it would gain
+    // is the ability to spend this server's password checking through the
+    // browser of anybody who visits it.
+    refuse(response, 403, "that request came from somewhere else");
+    return;
+  }
+
   const body = await readJson(request);
   if (typeof body === "string") {
     // What was wrong with the request, which is not a statement about any
@@ -745,18 +798,36 @@ async function answerSignIn(
     return;
   }
 
-  const result = await authenticate(
-    options.database,
-    defaultPasswordHasher(),
-    username,
-    password,
+  const limiter = options.signIns ?? sharedSignInLimiter();
+  const address = remoteAddressOf(request);
+  const wait = limiter.waitFor(username, address);
+  if (wait > 0) {
+    const seconds = Math.ceil(wait / 1000);
+    options.log?.(`studio: sign-in for ${JSON.stringify(username)} held off for ${seconds}s`);
+    // A different sentence from the refusal below, and it may be: what it says
+    // is how often this caller has been wrong, which they already know, and
+    // nothing about whether the account they named is one this server has.
+    holdOff(response, seconds);
+    return;
+  }
+
+  const result = await verifyingPassword(() =>
+    authenticate(options.database, defaultPasswordHasher(), username, password),
   );
   if (result.kind === "refused" || result.user.isServiceAccount) {
+    if (result.kind === "refused") {
+      limiter.refused(username, address);
+    } else {
+      // The password was right; the account is simply not one a person signs
+      // in to. Counting it would hold that against whoever typed it.
+      limiter.accepted(username, address);
+    }
     await holdRefusedSignIn();
     options.log?.(`studio: sign-in refused for ${JSON.stringify(username)}`);
     refuse(response, 401, SIGN_IN_REFUSED_MESSAGE);
     return;
   }
+  limiter.accepted(username, address);
 
   const config = { ...options.config, ...storedTokenLifetimes(options.database) };
   const minted = mintToken(result.user, options.keys.signingKey, config, {

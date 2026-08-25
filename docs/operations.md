@@ -404,6 +404,26 @@ learns from it which accounts exist. It is the same mint the command makes,
 claim for claim, so an operator can hand over an address and let people sign in
 rather than sending each of them a token.
 
+Checking a password is the most expensive thing this server does for somebody
+who has presented nothing — scrypt at the parameters here is about 128 MiB and a
+few hundred milliseconds — and an unknown username costs the same as a known one
+because it is hashed against a decoy. So both doors that take a password, this
+one and the operator's own, are guarded before the check rather than after it:
+
+- A name refused several times from one address is answered `429` with a
+  `Retry-After`, and the wait doubles with each refusal after that up to five
+  minutes. It is the check that is held off, so the right password is not
+  accepted during the wait either; a sign-in that succeeds clears the run.
+  The count is against the pair, so nobody can lock somebody else's account out
+  by knowing their name.
+- Two password checks run at once across the whole process, and the rest queue.
+  Node's threadpool is four threads shared with every file this server reads, so
+  a handful of simultaneous attempts would otherwise stop everything else it is
+  doing.
+- Both refuse a request whose `origin` names another site. Neither answers with
+  a cookie, so a page elsewhere gains nothing by the answer — but without this,
+  any page a person visits can drive their browser at this server's sign-in.
+
 There are two kinds of token here, with two lifetimes, and what separates them
 is who is asked before one is honoured.
 
