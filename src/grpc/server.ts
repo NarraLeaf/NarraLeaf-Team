@@ -188,7 +188,8 @@ function handleStream(
   const path = headerValue(headers, ":path") ?? "";
   const method = options.methods[path];
   const assembler = new FrameAssembler();
-  const messages: Buffer[] = [];
+  /** The one message a call carries, once enough of the stream has arrived. */
+  let message: Buffer | undefined;
 
   // A stream can fail at any point — the peer going away mid-call is ordinary.
   // Without this listener the failure is thrown at the process instead.
@@ -206,8 +207,31 @@ function handleStream(
   }
 
   stream.on("data", (chunk: Buffer) => {
+    // Nothing more is read once the call has been answered, which is what
+    // makes the refusal below cost something to send rather than something to
+    // hold: an answered stream stops feeding the assembler.
+    if (stream.destroyed || stream.headersSent) {
+      return;
+    }
     try {
-      messages.push(...assembler.push(chunk));
+      for (const decoded of assembler.push(chunk)) {
+        if (message === undefined) {
+          message = decoded;
+          continue;
+        }
+        // Every method this service serves is one message in and one message
+        // out, so a second is not part of a call this can answer. Keeping them
+        // to read the first would mean a four-mebibyte body of five-byte empty
+        // frames retaining the best part of a million buffers, for a call
+        // whose answer was decided by its first frame.
+        respondWithStatus(
+          stream,
+          GRPC_INVALID_ARGUMENT,
+          "this method takes one message, and this call carried more than one",
+        );
+        stream.close();
+        return;
+      }
     } catch (error) {
       const status = error instanceof GrpcStatusError ? error.status : GRPC_INTERNAL;
       respondWithStatus(stream, status, describe(error));
@@ -219,8 +243,8 @@ function handleStream(
     if (stream.destroyed || stream.headersSent) {
       return;
     }
-    const message = messages[0];
-    if (message === undefined || assembler.incomplete) {
+    const carried = message;
+    if (carried === undefined || assembler.incomplete) {
       respondWithStatus(
         stream,
         GRPC_INVALID_ARGUMENT,
@@ -234,7 +258,7 @@ function handleStream(
     const call: GrpcCall = {
       path,
       authorization: headerValue(headers, "authorization"),
-      message,
+      message: carried,
       peer: `${stream.session?.socket.remoteAddress ?? "?"}:${
         stream.session?.socket.remotePort ?? 0
       }`,

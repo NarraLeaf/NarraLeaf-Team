@@ -1,8 +1,10 @@
+import { connect } from "node:http2";
 import type { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { GrpcCallError, unaryCall } from "../src/grpc/client.js";
+import { encodeFrame } from "../src/grpc/framing.js";
 import {
   decodeCheckUserPermissionResponse,
   decodeLookupUserPermissionsResponse,
@@ -16,7 +18,12 @@ import {
   METHOD_LOOKUP_USER_PERMISSIONS,
 } from "../src/grpc/messages.js";
 import type { GrpcServer } from "../src/grpc/server.js";
-import { GRPC_RESOURCE_EXHAUSTED, GRPC_UNIMPLEMENTED } from "../src/grpc/status.js";
+import {
+  decodeStatusMessage,
+  GRPC_INVALID_ARGUMENT,
+  GRPC_RESOURCE_EXHAUSTED,
+  GRPC_UNIMPLEMENTED,
+} from "../src/grpc/status.js";
 import { listDecisions } from "../src/identity/audit.js";
 import { identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
@@ -142,6 +149,80 @@ async function harness(): Promise<Harness> {
   started.push(instance);
   return instance;
 }
+
+/**
+ * Make one call carrying whatever frames it is given, and report how it ended.
+ *
+ * `unaryCall` sends exactly one message, which is the whole of what a caller of
+ * this service ever should. What is being checked below is what happens when
+ * something sends more, so the frames are written by hand.
+ */
+async function callCarrying(
+  url: string,
+  path: string,
+  frames: readonly Uint8Array[],
+): Promise<{ status: number; message: string }> {
+  const session = connect(url);
+  try {
+    return await new Promise<{ status: number; message: string }>((resolve, reject) => {
+      session.on("error", reject);
+      const request = session.request({
+        ":method": "POST",
+        ":path": path,
+        "content-type": "application/grpc",
+        te: "trailers",
+      });
+      let outcome: { status: number; message: string } | undefined;
+      const read = (headers: Record<string, unknown>): void => {
+        const status = headers["grpc-status"];
+        if (status !== undefined) {
+          outcome = {
+            status: Number(status),
+            message: decodeStatusMessage(String(headers["grpc-message"] ?? "")),
+          };
+        }
+      };
+      request.on("response", read);
+      request.on("trailers", read);
+      request.on("data", () => undefined);
+      request.on("error", reject);
+      request.on("close", () => {
+        resolve(outcome ?? { status: Number.NaN, message: "the call ended saying nothing" });
+      });
+      request.end(Buffer.concat(frames.map((frame) => Buffer.from(frame))));
+    });
+  } finally {
+    session.close();
+  }
+}
+
+describe("a call to this service", () => {
+  it("takes one message, and refuses a stream that carries a second", async () => {
+    const team = await harness();
+    // Every method here is one message in and one message out. Anything else
+    // arriving on the stream was never going to be read, and an unread message
+    // held until the stream ends is memory somebody else chose to spend.
+    const frame = encodeFrame(encodeCheckUserPermissionRequest({ resourceIds: [] }));
+
+    const outcome = await callCarrying(team.server.url, METHOD_CHECK_USER_PERMISSION, [
+      frame,
+      frame,
+    ]);
+
+    expect(outcome.status).toBe(GRPC_INVALID_ARGUMENT);
+    expect(outcome.message).toContain("one message");
+  });
+
+  it("answers a call that carries exactly one", async () => {
+    const team = await harness();
+
+    const outcome = await callCarrying(team.server.url, METHOD_CHECK_USER_PERMISSION, [
+      encodeFrame(encodeCheckUserPermissionRequest({ resourceIds: [] })),
+    ]);
+
+    expect(outcome.status).toBe(0);
+  });
+});
 
 describe("CheckUserPermission", () => {
   it("answers with the projects the grant table says the caller may reach", async () => {
