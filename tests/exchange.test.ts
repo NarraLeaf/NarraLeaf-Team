@@ -13,7 +13,11 @@ import {
   type UserToken,
 } from "../src/grpc/messages.js";
 import type { GrpcServer } from "../src/grpc/server.js";
-import { GRPC_PERMISSION_DENIED, GRPC_UNAUTHENTICATED } from "../src/grpc/status.js";
+import {
+  GRPC_PERMISSION_DENIED,
+  GRPC_RESOURCE_EXHAUSTED,
+  GRPC_UNAUTHENTICATED,
+} from "../src/grpc/status.js";
 import { authUrl, identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { KeyStore } from "../src/identity/keys.js";
@@ -438,6 +442,18 @@ describe("ExchangeUserTokenForMultiresourceToken", () => {
 
     await expect(multiresource(team, "not a token", ["urc-whatever"])).rejects.toMatchObject({
       status: GRPC_UNAUTHENTICATED,
+    });
+  });
+
+  it("refuses a request naming more resources than it will mint a token for", async () => {
+    const team = await harness();
+    const ada = await team.user("ada");
+    const many = Array.from({ length: 5000 }, (_, index) => `urc-${index}`);
+
+    // Every id in the list would otherwise become a claim in a token this
+    // signs, so the length of the list decides how much one request costs.
+    await expect(multiresource(team, team.tokenFor(ada), many)).rejects.toMatchObject({
+      status: GRPC_RESOURCE_EXHAUSTED,
     });
   });
 

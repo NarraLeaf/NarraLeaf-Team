@@ -55,6 +55,19 @@ describe("CheckUserPermission", () => {
     );
   });
 
+  it("refuses a request naming more resources than this service will answer about", () => {
+    // The enclosing message is capped at four mebibytes and an entry costs two
+    // bytes, so one request can name millions of them. Each id that is decoded
+    // becomes a database lookup and a written row further on, which is why the
+    // list is bounded here rather than by the size of the message around it.
+    const many = encodeCheckUserPermissionRequest({
+      resourceIds: Array.from({ length: 5000 }, (_, index) => `urc-${index}`),
+      targetUser: undefined,
+    });
+
+    expect(() => decodeCheckUserPermissionRequest(many)).toThrow(/at most \d+ resources/);
+  });
+
   it("round-trips a response holding both lists", () => {
     const response = {
       allowed: [{ resourceId: "urc-aa", permission: ["read", "write"] }],

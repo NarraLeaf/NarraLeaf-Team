@@ -164,6 +164,32 @@ function resourceName(context: AuthorizationContext, resourceId: string): string
 }
 
 /**
+ * What a refused check is filed under, for the whole call at once.
+ *
+ * A refusal has one reason and one subject: whoever presented the token. Which
+ * resources the request happened to name changes nothing about it, so it is
+ * recorded once rather than once per resource — the second, third and
+ * sixty-fourth rows would be copies of the first, and this is the branch an
+ * unidentified caller reaches, so the copies are what an unauthenticated
+ * request can make this server write.
+ *
+ * loreserver asks about one resource, so that one is named and the record goes
+ * on saying which project somebody was turned away from. A request naming
+ * several is filed under how many, which is all a refusal has to say about
+ * them.
+ */
+function refusedResource(
+  context: AuthorizationContext,
+  resourceIds: readonly string[],
+): string {
+  const only = resourceIds[0];
+  if (only === undefined) {
+    return NOTHING;
+  }
+  return resourceIds.length === 1 ? resourceName(context, only) : `${resourceIds.length} resources`;
+}
+
+/**
  * Identify whoever the question is about.
  *
  * Normally that is the bearer of the token loreserver forwarded. A request may
@@ -200,24 +226,25 @@ async function checkUserPermission(
 
   if (caller.kind === "refused") {
     const because = describeRefusal(caller.reason);
-    // One line per resource, and one line even when the request named none, so
-    // that a refusal is never a gap in the log.
-    if (request.resourceIds.length === 0) {
-      decided(context, `auth: check ${UNIDENTIFIED} for nothing: refused, ${because}`, {
+    const asked = request.resourceIds[0];
+    // One line for the call, including one that named no resource at all, so
+    // that a refusal is never a gap in the log and never more than a line of it.
+    decided(
+      context,
+      `auth: check ${UNIDENTIFIED} ${
+        asked === undefined
+          ? "for nothing"
+          : request.resourceIds.length === 1
+            ? asked
+            : `for ${request.resourceIds.length} resources`
+      }: refused, ${because}`,
+      {
         username: UNIDENTIFIED_ACCOUNT,
-        resource: NOTHING,
+        resource: refusedResource(context, request.resourceIds),
         allowed: false,
         detail: because,
-      });
-    }
-    for (const resourceId of request.resourceIds) {
-      decided(context, `auth: check ${UNIDENTIFIED} ${resourceId}: refused, ${because}`, {
-        username: UNIDENTIFIED_ACCOUNT,
-        resource: resourceName(context, resourceId),
-        allowed: false,
-        detail: because,
-      });
-    }
+      },
+    );
     // An empty allow list, not a gRPC failure. A refusal is an answer to the
     // question loreserver asked, and it turns into "not found" for the client
     // either way; failing the call would make an expired token look like a

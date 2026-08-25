@@ -27,6 +27,38 @@ import {
   WIRE_DELIMITED,
   WIRE_VARINT,
 } from "./protobuf.js";
+import { GRPC_RESOURCE_EXHAUSTED, GrpcStatusError } from "./status.js";
+
+/**
+ * The most resource ids one request may name.
+ *
+ * loreserver 0.8.6 asks about exactly one — the note at the top of
+ * src/projects/service.ts sets out what it does with the answer — so nothing
+ * this service exists to answer comes near this. The limit is for the requests
+ * it does not exist to answer: the message around the list is capped at four
+ * mebibytes, an entry costs two bytes, and each id that is decoded becomes a
+ * lookup, a written row and a claim signed with RSA further on. Sixty-four
+ * leaves room for a caller that asks about several repositories at once and
+ * ends the arithmetic that turns one request into two million decisions.
+ */
+export const MAXIMUM_RESOURCE_IDS = 64;
+
+/**
+ * Refuse a list that is longer than this will read.
+ *
+ * RESOURCE_EXHAUSTED rather than INVALID_ARGUMENT, and the same status
+ * src/grpc/framing.ts answers an oversized message with: the request is well
+ * formed and says exactly what it means, and the answer is that it asks for
+ * more than this service will spend on one call. A typed failure is how the
+ * server already learns which status to send; nothing else has to know this
+ * limit exists.
+ */
+function tooManyResourceIds(): GrpcStatusError {
+  return new GrpcStatusError(
+    GRPC_RESOURCE_EXHAUSTED,
+    `a request may name at most ${MAXIMUM_RESOURCE_IDS} resources`,
+  );
+}
 
 /** The full gRPC method paths, as they appear on an HTTP/2 `:path`. */
 export const METHOD_CHECK_USER_PERMISSION = "/epic_urc.UrcAuthApi/CheckUserPermission";
@@ -127,6 +159,9 @@ export function decodeCheckUserPermissionRequest(bytes: Uint8Array): CheckUserPe
   let targetUser: TargetUser | undefined;
   readFields(new MessageReader(bytes), (tag, message) => {
     if (tag.field === 1 && tag.wireType === WIRE_DELIMITED) {
+      if (resourceIds.length === MAXIMUM_RESOURCE_IDS) {
+        throw tooManyResourceIds();
+      }
       resourceIds.push(message.readString());
       return true;
     }
@@ -439,6 +474,9 @@ export function decodeExchangeUserTokenForMultiresourceTokenRequest(
   const resourceIds: string[] = [];
   readFields(new MessageReader(bytes), (tag, message) => {
     if (tag.field === 1 && tag.wireType === WIRE_DELIMITED) {
+      if (resourceIds.length === MAXIMUM_RESOURCE_IDS) {
+        throw tooManyResourceIds();
+      }
       resourceIds.push(message.readString());
       return true;
     }

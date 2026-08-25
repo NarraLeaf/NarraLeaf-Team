@@ -16,7 +16,7 @@ import {
   METHOD_LOOKUP_USER_PERMISSIONS,
 } from "../src/grpc/messages.js";
 import type { GrpcServer } from "../src/grpc/server.js";
-import { GRPC_UNIMPLEMENTED } from "../src/grpc/status.js";
+import { GRPC_RESOURCE_EXHAUSTED, GRPC_UNIMPLEMENTED } from "../src/grpc/status.js";
 import { listDecisions } from "../src/identity/audit.js";
 import { identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
@@ -382,6 +382,38 @@ describe("CheckUserPermission", () => {
     // The reason the log gave, kept with it. A refusal recorded as a refusal
     // and nothing else would make an expired token look like a missing grant.
     expect(listDecisions(team.database)[0]?.detail).toBe("the call carried no bearer token");
+  });
+
+  it("keeps one row for a refused call, however many resources it named", async () => {
+    const team = await harness();
+
+    await team.check(undefined, ["urc-one", "urc-two", "urc-three"]);
+
+    // A refused call has one reason, and a row per resource repeats it without
+    // saying anything the count does not. It is also the branch an
+    // unidentified caller reaches, so its cost is what an unauthenticated
+    // request can make this server spend.
+    expect(listDecisions(team.database)).toMatchObject([
+      { username: "unknown", resource: "3 resources", allowed: false },
+    ]);
+    expect(team.log).toHaveLength(1);
+  });
+
+  it("refuses a call naming more resources than it will answer about", async () => {
+    const team = await harness();
+    const many = Array.from({ length: 5000 }, (_, index) => `urc-${index}`);
+
+    // Refused before a token is looked at, which is the point: this branch is
+    // reached with no credential at all, and every id in it would otherwise
+    // cost a lookup and a synchronous insert.
+    const refusal = await team
+      .check(undefined, many)
+      .then(() => undefined, (error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(GrpcCallError);
+    expect((refusal as GrpcCallError).status).toBe(GRPC_RESOURCE_EXHAUSTED);
+    expect(listDecisions(team.database)).toEqual([]);
+    expect(team.log).toEqual([]);
   });
 });
 
