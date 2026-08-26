@@ -98,7 +98,8 @@ Options for up:
       --no-identity         Configure loreserver to demand nothing, so that
                             anybody who can reach it may read and write every
                             repository on this server. It demands a Team token
-                            unless this is given
+                            unless this is given, or unless NLTEAM_IDENTITY is
+                            set to 0, false or no
       --identity            Ask for what happens anyway; accepted so that a
                             command line written before it was the default
                             still runs

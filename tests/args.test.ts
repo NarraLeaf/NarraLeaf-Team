@@ -318,6 +318,42 @@ describe("parseArgs, the ports and identity from the environment", () => {
   });
 });
 
+describe("parseArgs, identity on or off from the environment", () => {
+  it("turns identity off when NLTEAM_IDENTITY says so, without a flag", () => {
+    for (const off of ["0", "false", "no", "NO", "False"]) {
+      expect(parseArgs(["up", "--root", "/srv/team"], { NLTEAM_IDENTITY: off })).toMatchObject({
+        identity: false,
+      });
+    }
+  });
+
+  it("turns identity on for the on-ish values, which is also the default", () => {
+    for (const on of ["1", "true", "yes", "YES"]) {
+      expect(parseArgs(["up", "--root", "/srv/team"], { NLTEAM_IDENTITY: on })).toMatchObject({
+        identity: true,
+      });
+    }
+    // No variable at all is on, because the safe reading is the one that needs
+    // nothing said.
+    expect(parseArgs(["up", "--root", "/srv/team"], {})).toMatchObject({ identity: true });
+  });
+
+  it("lets a flag beat the variable, in both directions", () => {
+    expect(
+      parseArgs(["up", "--root", "/srv/team", "--no-identity"], { NLTEAM_IDENTITY: "true" }),
+    ).toMatchObject({ identity: false });
+    expect(
+      parseArgs(["up", "--root", "/srv/team", "--identity"], { NLTEAM_IDENTITY: "false" }),
+    ).toMatchObject({ identity: true });
+  });
+
+  it("refuses a variable that is neither on nor off", () => {
+    expect(
+      messageFor2(parseArgs(["up", "--root", "/srv/team"], { NLTEAM_IDENTITY: "maybe" })),
+    ).toContain("NLTEAM_IDENTITY is on or off");
+  });
+});
+
 describe("parseArgs, the identity commands", () => {
   it("makes the first account, and wants a name for it", () => {
     expect(parseArgs(["init", "ada", "--root", "/srv/team"])).toEqual({

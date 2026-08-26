@@ -192,6 +192,10 @@ const ENVIRONMENT: Readonly<Record<string, string>> = {
   // Repeatable on the line and comma-separated in the variable; the split is in
   // {@link hostnamesFrom}, because one host per entry is what the rest expects.
   "--hostname": "NLTEAM_HOSTNAME",
+  // A flag on the line, and a boolean-ish variable off it; the reading is in
+  // {@link identityFrom}, because a flag stands for itself and a variable does
+  // not.
+  "--identity": "NLTEAM_IDENTITY",
 };
 
 /**
@@ -251,6 +255,44 @@ function hostnamesFrom(tokens: Tokens, env: NodeJS.ProcessEnv): readonly string[
     .split(",")
     .map((host) => host.trim())
     .filter((host) => host !== "");
+}
+
+/** What `NLTEAM_IDENTITY` accepts for on, and for off. */
+const IDENTITY_ON = ["1", "true", "yes"];
+const IDENTITY_OFF = ["0", "false", "no"];
+
+/**
+ * Whether loreserver is to demand a token, from the flags and the environment.
+ *
+ * A flag stands for itself: `--identity` or `--no-identity` decides, and the
+ * caller has already refused the command line that gives both. Without either,
+ * `NLTEAM_IDENTITY` decides, so a deployment can turn identity off without a
+ * flag. Without any of the three it is on, which is the safe reading and so the
+ * one that needs nothing said. Returns a sentence when the variable is neither
+ * on nor off.
+ */
+function identityFrom(tokens: Tokens, env: NodeJS.ProcessEnv): boolean | string {
+  if (tokens.flags.has("--no-identity")) {
+    return false;
+  }
+  if (tokens.flags.has("--identity")) {
+    return true;
+  }
+  const value = envValue(env, "--identity");
+  if (value === undefined) {
+    return true;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (IDENTITY_ON.includes(normalized)) {
+    return true;
+  }
+  if (IDENTITY_OFF.includes(normalized)) {
+    return false;
+  }
+  return (
+    `NLTEAM_IDENTITY is on or off: ${IDENTITY_ON.join("/")} or ${IDENTITY_OFF.join("/")}, ` +
+    `not "${value}"`
+  );
 }
 
 /**
@@ -567,6 +609,11 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
     return error("--identity and --no-identity cannot both be given");
   }
 
+  const identity = identityFrom(tokens, env);
+  if (typeof identity === "string") {
+    return error(identity);
+  }
+
   let healthPort = DEFAULT_PORTS.healthPort;
   const healthPortText = optionValue(tokens, env, "--health-port");
   if (healthPortText !== undefined) {
@@ -608,7 +655,7 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
     root,
     dataPort,
     healthPort,
-    identity: !tokens.flags.has("--no-identity"),
+    identity,
     overrides,
   };
 }
