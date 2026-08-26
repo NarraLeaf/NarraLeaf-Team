@@ -30,7 +30,6 @@ import {
   TEAM_METHODS,
   TEAM_PROTOCOL_VERSION,
   TEAM_SOCKET_PATH,
-  TOPIC_MEMBERS,
   TOPIC_PROJECTS,
   liveTopic,
   projectClientsTopic,
@@ -101,7 +100,6 @@ describe("the protocol contract", () => {
 
   it("builds the topics the contract spells out", () => {
     expect(TOPIC_PROJECTS).toBe(contract.topics["projects"]);
-    expect(TOPIC_MEMBERS).toBe(contract.topics["members"]);
     expect(projectTopic("abc")).toBe(contract.topics["project"]?.replace("{project}", "abc"));
     expect(projectThreadsTopic("abc")).toBe(
       contract.topics["projectThreads"]?.replace("{project}", "abc"),

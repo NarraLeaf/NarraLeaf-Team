@@ -383,6 +383,10 @@ describe("subscribing", () => {
     const good = await client.send("subscribe", { topic: TOPIC_PROJECTS });
     expect(good.seq).toBe(0);
     expect((await client.send("subscribe", { topic: "weather" })).code).toBe("not-found");
+    // The people list is read on demand, not watched: `members` is not a topic,
+    // so subscribing to it is refused rather than left waiting for an event
+    // nobody publishes.
+    expect((await client.send("subscribe", { topic: "members" })).code).toBe("not-found");
   });
 
   it("refuses a project topic for a project that is not here", async () => {

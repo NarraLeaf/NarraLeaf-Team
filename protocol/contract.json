@@ -47,7 +47,6 @@
   ],
   "topics": {
     "projects": "projects",
-    "members": "members",
     "project": "project:{project}",
     "projectThreads": "project:{project}/threads",
     "projectOverlay": "project:{project}/overlay",

@@ -286,9 +286,6 @@ export type TeamClientFrame = TeamCallFrame | TeamSubscribeFrame | TeamUnsubscri
 /** The list of projects on this server changed. */
 export const TOPIC_PROJECTS = "projects";
 
-/** The accounts on this server changed. */
-export const TOPIC_MEMBERS = "members";
-
 /** One project's row, or what this server has read out of its repository. */
 export function projectTopic(projectId: string): string {
   return `project:${projectId}`;
@@ -753,7 +750,6 @@ export const CONTRACT = {
   methods: Object.values(TEAM_METHODS),
   topics: {
     projects: TOPIC_PROJECTS,
-    members: TOPIC_MEMBERS,
     project: "project:{project}",
     projectThreads: "project:{project}/threads",
     projectOverlay: "project:{project}/overlay",

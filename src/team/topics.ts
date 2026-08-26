@@ -24,7 +24,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { findProjectById } from "../projects/registry.js";
 import type { UserRecord } from "../identity/users.js";
 import type { TeamPresence } from "./presence.js";
-import { TOPIC_MEMBERS, TOPIC_PROJECTS } from "./protocol.js";
+import { TOPIC_PROJECTS } from "./protocol.js";
 
 /** What a topic turned out to be. */
 export type TopicVerdict =
@@ -59,7 +59,7 @@ export function judgeTopic(
   topic: string,
   presence?: TeamPresence,
 ): TopicVerdict {
-  if (topic === TOPIC_PROJECTS || topic === TOPIC_MEMBERS) {
+  if (topic === TOPIC_PROJECTS) {
     return { kind: "allowed" };
   }
 
