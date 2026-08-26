@@ -185,9 +185,8 @@ export function setSetting(
     return said(messages.action.settingReadOnly);
   }
 
-  // The row is found by the label the view carries, and named by whatever this
-  // language calls it. A row no language has a name for is named by the label.
-  const label = messages.page.settings.rowNames[row.label] ?? row.label;
+  // Named by the label the view carries, which is what it was found by.
+  const label = row.label;
 
   // Not every setting is a duration. The name is stored as it was typed, and
   // reading it as one would refuse every name that is not a number.

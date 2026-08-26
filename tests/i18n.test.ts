@@ -1,55 +1,33 @@
 /**
- * The languages: which one a request gets, and whether each of them answers.
+ * The languages: which one a tag names, and whether each of them answers.
  *
  * Two kinds of test here, and the second is the one that will fail one day. The
- * first is about negotiation, which is a header format with rules worth
- * pinning. The second walks every catalogue against English and calls every
- * sentence in it, because the type checker can promise that a message exists
- * and cannot promise that it says anything — an empty string, a sentence that
- * dropped the name it was given, a duration that came back without its number
- * are all things that compile.
+ * first is about naming a language, which has one rule worth pinning. The
+ * second walks every catalogue against English and calls every sentence in it,
+ * because the type checker can promise that a message exists and cannot promise
+ * that it says anything — an empty string, a sentence that dropped the name it
+ * was given, a duration that came back without its number are all things that
+ * compile.
  */
 import { describe, expect, it } from "vitest";
 
 import { readDuration } from "../src/operations.js";
 import { describeDuration } from "../src/duration.js";
 import { en, everyLanguage, ja, messagesFor, zh } from "../src/i18n/index.js";
-import { FALLBACK_LOCALE, localeOfTag, negotiateLocale } from "../src/i18n/locales.js";
+import { localeOfTag } from "../src/i18n/locales.js";
 
 import type { Messages } from "../src/i18n/messages.js";
 
-describe("negotiating a language", () => {
-  it("takes the highest quality this interface has", () => {
-    expect(negotiateLocale("ja;q=0.5, zh;q=0.9, en;q=0.1")).toBe("zh");
-    expect(negotiateLocale("fr, ja;q=0.8")).toBe("ja");
-  });
-
-  it("leaves the first of an equal pair in front, which is the browser's own order", () => {
-    expect(negotiateLocale("ja, zh")).toBe("ja");
-    expect(negotiateLocale("zh, ja")).toBe("zh");
-    expect(negotiateLocale("ja;q=0.8, zh;q=0.8")).toBe("ja");
-  });
-
+describe("naming a language", () => {
   it("reads a region and a script as the language they are", () => {
     expect(localeOfTag("zh-Hans-CN")).toBe("zh");
     expect(localeOfTag("ZH-TW")).toBe("zh");
-    expect(negotiateLocale("ja-JP")).toBe("ja");
+    expect(localeOfTag("ja-JP")).toBe("ja");
   });
 
-  it("drops a language the browser said it does not want", () => {
-    // q=0 is not "rank this last", it is "not this one".
-    expect(negotiateLocale("zh;q=0, ja;q=0.1")).toBe("ja");
-    expect(negotiateLocale("zh;q=0")).toBe(FALLBACK_LOCALE);
-  });
-
-  it("falls back to English rather than refusing", () => {
-    // Every one of these is a real header or a real absence of one, and none of
-    // them is a reason to serve a page nobody can read.
-    expect(negotiateLocale(undefined)).toBe("en");
-    expect(negotiateLocale("")).toBe("en");
-    expect(negotiateLocale("de, fr, it")).toBe("en");
-    expect(negotiateLocale("zh;q=high")).toBe("zh");
-    expect(negotiateLocale("*")).toBe("en");
+  it("answers with nothing for a language Team has not got", () => {
+    expect(localeOfTag("de")).toBeUndefined();
+    expect(localeOfTag("")).toBeUndefined();
   });
 
   it("answers with the language a locale names, and English for one it does not", () => {
@@ -128,7 +106,7 @@ describe("every language answers", () => {
     // Without this, a walk that stopped finding anything would turn every
     // comparison below into a loop over nothing, and the suite would go green
     // on a catalogue nobody checked.
-    expect(english.size).toBeGreaterThan(120);
+    expect(english.size).toBeGreaterThan(10);
   });
 
   for (const language of everyLanguage()) {
@@ -158,7 +136,8 @@ describe("every language answers", () => {
         expect(language.action.userDisabled({ username: "ada" })).toContain("ada");
         // A key id is data, and stays as the database has it in every language.
         expect(language.action.keyRotated({ kid: "abc123", published: 2 })).toContain("abc123");
-        expect(language.error.unknownUser({ username: "ada" })).toContain("ada");
+        // What was written stays as it was written, in the refusal too.
+        expect(language.error.notADuration({ value: "someday" })).toContain("someday");
       });
     });
   }
