@@ -87,11 +87,13 @@ describe("the protocol contract", () => {
   });
 
   it("advertises every capability the contract names, when the build serves them all", () => {
-    // The socket capabilities the method table implies, and the two the HTTP
-    // routes add when there is a reader to page a history. A build serving all
-    // of it advertises exactly the contract's vocabulary and no more.
+    // The socket capabilities the method table implies, and the three the HTTP
+    // routes add when there is a reader to page a history and somewhere to put a
+    // file down. A build serving all of it advertises exactly the contract's
+    // vocabulary and no more.
     const everything = {
       readings: { get: () => undefined, revisions: async () => undefined },
+      blobs: true,
     } as unknown as TeamService;
     expect(serverCapabilities(methodTable(teamMethods()), everything).sort()).toEqual(
       [...contract.capabilities].sort(),

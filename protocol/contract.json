@@ -9,7 +9,8 @@
     "live",
     "overlay",
     "password-sign-in",
-    "project-history"
+    "project-history",
+    "blobs"
   ],
   "errorCodes": [
     "unknown-method",

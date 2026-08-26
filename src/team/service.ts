@@ -95,6 +95,15 @@ export interface TeamService {
   readonly readings?: RepositoryReadings;
   /** Somewhere to say what happened, in the same place `up` says everything else. */
   readonly log?: (line: string) => void;
+  /**
+   * Whether this build has somewhere for a live session to put a file down.
+   *
+   * A flag rather than the store itself, because nothing that reads this serves
+   * those addresses - src/web/blobs.ts does, on its own arm of the router. What
+   * belongs here is the announcement, because this is where the capabilities the
+   * method table cannot say are worked out.
+   */
+  readonly blobs?: boolean;
 }
 
 /**
@@ -117,6 +126,10 @@ export interface TeamService {
  * page a history, and a client that wants to offer a person a list of versions
  * checks it rather than inferring one from an empty page.
  *
+ * `blobs` is about the store, and about it for the same reason: the addresses a
+ * file travels over are HTTP rather than methods, so no method table can say
+ * whether this build serves them.
+ *
  * Worked out from what this build was given rather than written down, so that the
  * discovery document cannot come to say something this server does not do.
  */
@@ -124,6 +137,9 @@ export function serviceCapabilities(options: TeamService): TeamCapability[] {
   const capabilities: TeamCapability[] = ["password-sign-in"];
   if (options.readings?.revisions !== undefined) {
     capabilities.push("project-history");
+  }
+  if (options.blobs === true) {
+    capabilities.push("blobs");
   }
   return capabilities;
 }
