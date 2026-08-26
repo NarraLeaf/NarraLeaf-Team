@@ -41,8 +41,10 @@ command with its options.
 
 ## Quick start
 
-One directory holds everything a Team server owns, and `--root` names it. Every
-command takes it.
+One directory holds everything a Team server owns, and `--root` names it; every
+command takes it, or reads it from `NLTEAM_ROOT`. That variable is one of a set
+mirroring the command-line options, for a container with no command line to
+compose — [operations.md](docs/operations.md) has the whole layer.
 
 **1. Start it.**
 
