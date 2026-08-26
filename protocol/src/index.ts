@@ -67,20 +67,32 @@ export const TEAM_HEARTBEAT_MS = 30_000;
 /**
  * The names a client matches literally to know what a server offers.
  *
- * **There are two things called a session here and they are not the same thing.**
+ * One vocabulary, carried the same way by the discovery document and the opening
+ * `hello` frame so that a client is told the same thing before and after it
+ * connects. Which of these a given deployment advertises is derived from what its
+ * build actually serves, never written down a second time.
+ *
+ * Most of the list is about the socket. **There are two things called a session
+ * here and they are not the same thing.**
  *
  *  - A **link session** is the socket: one per client instance, opened by Studio
  *    on its own the moment something needs this server, closed when nothing
- *    does. That is the `session` capability, and everything else travels on it.
+ *    does. That is the `session` capability, and everything else on the socket
+ *    travels on it - including the project list, one project's detail and the
+ *    member list, which are methods gated by `session` rather than capabilities
+ *    of their own.
  *  - A **live session** is a room: opened by a person, on one project, joined by
  *    other client instances, and used to find them and say things to them. That
  *    is the `live` capability.
  *
- * The list is the vocabulary; which of these a given deployment advertises is
- * derived from what its build actually serves.
+ * Two names are about what the server answers over HTTP before a socket exists,
+ * because a session needs a token and a token has to come from somewhere:
+ *
+ *  - `password-sign-in` - a username and a password may be exchanged for a token.
+ *  - `project-history` - a project's revisions may be read a page at a time.
  */
 export const TEAM_CAPABILITIES = [
-  /** The link session exists at all. Everything else implies it. */
+  /** The link session exists at all. Everything else on the socket implies it. */
   "session",
   /** Threads and comments anchored in a project. */
   "comments",
@@ -90,6 +102,10 @@ export const TEAM_CAPABILITIES = [
   "live",
   /** Data attached to a project at a revision, which never enters the repository. */
   "overlay",
+  /** A username and a password may be exchanged for a token, before any session. */
+  "password-sign-in",
+  /** A project's revisions may be read a page at a time. */
+  "project-history",
 ] as const;
 
 export type TeamCapability = (typeof TEAM_CAPABILITIES)[number];

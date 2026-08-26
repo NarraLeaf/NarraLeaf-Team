@@ -7,7 +7,9 @@
     "comments",
     "clients",
     "live",
-    "overlay"
+    "overlay",
+    "password-sign-in",
+    "project-history"
   ],
   "errorCodes": [
     "unknown-method",

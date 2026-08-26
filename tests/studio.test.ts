@@ -53,10 +53,12 @@ import {
 import type { ProjectFileView, RevisionView } from "../src/teamview.js";
 import { webHandler } from "../src/web/router.js";
 import {
-  studioCapabilities,
+  restCapabilities,
   type StudioApiOptions,
   type StudioReadings,
 } from "../src/web/studio.js";
+import { methodTable, serverCapabilities } from "../src/team/methods.js";
+import { teamMethods } from "../src/team/endpoint.js";
 import { useTemporaryRoots } from "./temporary.js";
 
 const temporaryRoot = useTemporaryRoots("nlteam-studio-");
@@ -148,7 +150,13 @@ async function harness(
     ...(log === undefined ? {} : { log }),
   };
   const server = createServer(
-    webHandler(() => ({ ...DISCOVERY, capabilities: studioCapabilities(studio) }), { studio }),
+    webHandler(
+      () => ({
+        ...DISCOVERY,
+        capabilities: serverCapabilities(methodTable(teamMethods()), studio),
+      }),
+      { studio },
+    ),
   );
   openServers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
@@ -391,24 +399,23 @@ describe("the projects a Studio installation is shown", () => {
   });
 });
 
-describe("what a server says it serves", () => {
-  it("names the routes this build answers, and nothing it only plans to", async () => {
-    // Matched literally by Studio, so the spelling is the assertion.
-    expect(studioCapabilities(await anyOptions())).toEqual([
-      "projects",
-      "project-detail",
-      "members",
-      "password-sign-in",
-    ]);
+describe("what the HTTP routes add to the capability vocabulary", () => {
+  it("names only what is answered before a session, not what a socket method also serves", async () => {
+    // The project list, one project and the members are methods gated by
+    // `session` over the socket, so they are not named again as HTTP
+    // capabilities. Only the sign-in, which happens before any session, is left
+    // to the routes. Matched literally by Studio, so the spelling is the
+    // assertion.
+    expect(restCapabilities(await anyOptions())).toEqual(["password-sign-in"]);
   });
 
   it("adds the history only where there is something to read one out of", async () => {
-    expect(studioCapabilities({ ...(await anyOptions()), readings: READ_NOTHING })).toContain(
+    expect(restCapabilities({ ...(await anyOptions()), readings: READ_NOTHING })).toContain(
       "project-history",
     );
     // A reader that cannot page a history is a build that does not claim to.
     expect(
-      studioCapabilities({ ...(await anyOptions()), readings: { get: () => undefined } }),
+      restCapabilities({ ...(await anyOptions()), readings: { get: () => undefined } }),
     ).not.toContain("project-history");
   });
 
@@ -419,7 +426,7 @@ describe("what a server says it serves", () => {
     // password sign-in, and this is that route refusing a sign-in rather than
     // saying there is nothing here.
     const team = await harness();
-    expect(studioCapabilities({ ...(await anyOptions()) })).toContain("password-sign-in");
+    expect(restCapabilities({ ...(await anyOptions()) })).toContain("password-sign-in");
 
     const response = await fetch(`${team.origin}${SIGN_IN}`, {
       method: "POST",
@@ -441,9 +448,14 @@ describe("what a server says it serves", () => {
     // The one number a client compares before anything else, and the same one
     // the opening socket frame carries.
     expect(document.protocol).toBe(2);
-    expect(document.capabilities).toContain("project-detail");
-    expect(document.capabilities).toContain("members");
+    // One vocabulary: the socket capabilities and the two the HTTP routes add,
+    // in the same document. The project list, one project and the members are
+    // reached over the socket under `session`, so they are not names of their
+    // own here.
+    expect(document.capabilities).toContain("session");
     expect(document.capabilities).toContain("project-history");
+    expect(document.capabilities).not.toContain("project-detail");
+    expect(document.capabilities).not.toContain("members");
   });
 });
 
@@ -1152,10 +1164,7 @@ describe("what the reader this server actually runs makes it say", () => {
       config: options.config,
     });
 
-    expect(studioCapabilities({ ...options, readings })).toEqual([
-      "projects",
-      "project-detail",
-      "members",
+    expect(restCapabilities({ ...options, readings })).toEqual([
       "password-sign-in",
       "project-history",
     ]);

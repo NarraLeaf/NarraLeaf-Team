@@ -94,7 +94,7 @@ import {
   type ProjectRecord,
 } from "../projects/registry.js";
 import { loreserverUrl, repositoryCreate } from "../projects/repository.js";
-import type { TeamProjectsEvent } from "../team/protocol.js";
+import type { TeamCapability, TeamProjectsEvent } from "../team/protocol.js";
 import { NOT_READ_YET } from "../teamview.js";
 import type { ProjectFileView, RevisionView } from "../teamview.js";
 import { originIsOurs, remoteAddressOf } from "./origin.js";
@@ -145,7 +145,7 @@ export interface StudioReadings {
    * One page of a project's revisions, read on demand.
    *
    * Optional because it is what decides whether this build says it serves a
-   * history at all — see {@link studioCapabilities}. Undefined from the call
+   * history at all — see {@link restCapabilities}. Undefined from the call
    * means Team has no checkout of that project to read yet.
    */
   readonly revisions?: (
@@ -216,44 +216,25 @@ export interface StudioApiOptions {
 }
 
 /**
- * The names Studio matches literally to know what this server answers.
+ * What the HTTP routes contribute to the capability vocabulary.
  *
- * Words rather than a version number, because they are added one at a time and
- * a client wants to know about each on its own.
- */
-export type StudioCapability =
-  | "projects"
-  | "project-detail"
-  | "members"
-  | "project-history"
-  | "password-sign-in";
-
-/**
- * What every build of this file serves, whatever it was given.
+ * These are the capabilities that name something answered over HTTP before a
+ * session exists, and so have no socket method to be derived from: a password is
+ * exchanged for a token here, and a project's history is paged here. Everything
+ * else a Studio installation reads over HTTP - the project list, one project, the
+ * members - is also a method on the socket gated by `session`, so it is not named
+ * again as a capability of its own.
  *
- * These are the routes {@link serveStudioApi} answers unconditionally, and this
- * is the list the discovery document is built from: a route that stops being
- * served has to be taken out of one place, not two. `password-sign-in` is among
- * them because the route below needs nothing beyond the database and the keys,
- * both of which every caller of this API already has.
+ * Worked out from what this build was given rather than written down, so that the
+ * discovery document cannot come to say something this file does not do.
+ * `password-sign-in` is unconditional: the sign-in route needs nothing beyond the
+ * database and the keys, both of which every caller of this API already has.
+ * `project-history` is there only where there is a reader that can page one, for
+ * the reason a project row leaves its history absent until one has been read - a
+ * name in the list that nothing answers would be a client waiting on a 404.
  */
-const ALWAYS_SERVED: readonly StudioCapability[] = [
-  "projects",
-  "project-detail",
-  "members",
-  "password-sign-in",
-];
-
-/**
- * What this build serves, worked out from what it was given.
- *
- * Read from the options rather than written down, so that the discovery
- * document cannot come to say something this file does not do. The history is
- * the one that is not unconditional: it is there only where there is something
- * to read a history out of.
- */
-export function studioCapabilities(options: StudioApiOptions): StudioCapability[] {
-  const capabilities: StudioCapability[] = [...ALWAYS_SERVED];
+export function restCapabilities(options: StudioApiOptions): TeamCapability[] {
+  const capabilities: TeamCapability[] = ["password-sign-in"];
   if (options.readings?.revisions !== undefined) {
     capabilities.push("project-history");
   }

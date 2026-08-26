@@ -51,7 +51,7 @@ import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
 import { trustCommandFor } from "./tls/trust.js";
 import { VERSION } from "./version.js";
 import { webHandler } from "./web/router.js";
-import { studioCapabilities, type StudioApiOptions } from "./web/studio.js";
+import type { StudioApiOptions } from "./web/studio.js";
 
 export interface UpOptions extends LoreserverPorts {
   /** The storage root; everything Team writes goes underneath it. */
@@ -340,15 +340,13 @@ export async function up(
       host: hostOf(config.authOrigin),
       auth: { required: options.identity === true, url: authUrl(config) },
       data: { url: dataRemoteUrl(hostOf(config.authOrigin), config.dataPort) },
-      // Asked of the thing that answers them rather than written out again
-      // here, so that a route added to src/web/studio.ts is announced by the
-      // same change that serves it.
-      // What the routes serve and what a session serves, as one list. Both are
-      // worked out from what this build actually answers rather than written
-      // down a second time: a capability announced by a build that does not
-      // serve it is the one failure a client cannot recover from, because
-      // checking before asking is the whole of what a capability is for.
-      capabilities: [...studioCapabilities(studio), ...team.capabilities],
+      // The one capability list, taken from the socket that worked it out - the
+      // same list its `hello` frame carries. Worked out from what this build
+      // actually answers rather than written down a second time: a capability
+      // announced by a build that does not serve it is the one failure a client
+      // cannot recover from, because checking before asking is the whole of what
+      // a capability is for.
+      capabilities: team.capabilities,
       authority: { sha256: certificates.authority.fingerprint256 },
       version: VERSION,
     };

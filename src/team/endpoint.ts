@@ -26,7 +26,12 @@ import { bearerToken, describeRefusal, identifyToken } from "../identity/bearer.
 import { storedServerName } from "../identity/settings.js";
 import type { StudioApiOptions } from "../web/studio.js";
 import { TeamHub } from "./hub.js";
-import { capabilitiesOf, methodTable, type TeamMethod } from "./methods.js";
+import {
+  assertProtocolConsistency,
+  methodTable,
+  serverCapabilities,
+  type TeamMethod,
+} from "./methods.js";
 import { clientMethods } from "./methods/clients.js";
 import { commentMethods } from "./methods/comments.js";
 import { liveMethods } from "./methods/live.js";
@@ -92,7 +97,14 @@ export function teamMethods(): readonly TeamMethod[] {
 
 export function createTeamSocket(options: TeamSocketOptions): TeamSocket {
   const methods = methodTable(teamMethods());
-  const capabilities = capabilitiesOf(methods);
+  // At startup, before a single call is answered: the registered handlers, the
+  // declared method names and the published contract have to be one set. A build
+  // where they differ would advertise what it cannot answer, so it refuses to
+  // start rather than serve that.
+  assertProtocolConsistency(methods);
+  // The one list the discovery document and the hello frame both carry, worked
+  // out from what this build serves rather than written down twice.
+  const capabilities = serverCapabilities(methods, options.service);
   const hub = new TeamHub(capabilities);
   // Given the hub's publish rather than the hub, because what presence needs is
   // a way to reach whoever is listening and nothing else. The one-way dependency

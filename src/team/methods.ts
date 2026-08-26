@@ -16,8 +16,9 @@
  * capability is for.
  */
 import type { UserRecord } from "../identity/users.js";
-import type { StudioApiOptions } from "../web/studio.js";
+import { restCapabilities, type StudioApiOptions } from "../web/studio.js";
 import type { TeamPresence } from "./presence.js";
+import { CONTRACT, TEAM_METHODS } from "./protocol.js";
 import type { TeamAccount, TeamCapability, TeamClientInstance, TeamErrorCode } from "./protocol.js";
 
 /**
@@ -127,6 +128,65 @@ export function capabilitiesOf(table: ReadonlyMap<string, TeamMethod>): TeamCapa
     capabilities.add(method.capability);
   }
   return [...capabilities];
+}
+
+/**
+ * Everything this build advertises, socket and HTTP, as one derived list.
+ *
+ * The discovery document and the opening `hello` frame both carry this, so a
+ * client is told the same thing before and after it connects. It is two halves
+ * worked out from what the build actually does: the socket capabilities the
+ * method table implies, and the capabilities the HTTP routes add for the two
+ * things answered before a session exists - see {@link restCapabilities}. Neither
+ * half is written down a second time, so a module left out of the build takes its
+ * capability with it.
+ */
+export function serverCapabilities(
+  table: ReadonlyMap<string, TeamMethod>,
+  service: StudioApiOptions,
+): TeamCapability[] {
+  const capabilities = new Set<TeamCapability>(capabilitiesOf(table));
+  for (const capability of restCapabilities(service)) {
+    capabilities.add(capability);
+  }
+  return [...capabilities];
+}
+
+/**
+ * Refuse to serve a protocol that does not agree with itself.
+ *
+ * Called when the server starts, before it answers anything. Three lists have to
+ * be the same set: the handlers actually registered, the method names the
+ * contract declares, and the methods the published contract carries. A build
+ * where they differ would advertise a method it cannot answer, or answer one it
+ * did not advertise, and a client that read the list and then called what it
+ * found would be refused - the one failure checking before asking exists to
+ * prevent. Better to fail loudly at startup than to serve the lie.
+ *
+ * The capability each method is announced under is checked against the contract's
+ * vocabulary too, for the same reason: a word in the discovery document that no
+ * client has a definition for is a word that helps nobody.
+ */
+export function assertProtocolConsistency(table: ReadonlyMap<string, TeamMethod>): void {
+  const registered = [...table.keys()].sort();
+  const declared = [...Object.values(TEAM_METHODS)].sort();
+  const published = [...CONTRACT.methods].sort();
+  const differ = (left: readonly string[], right: readonly string[]): boolean =>
+    left.length !== right.length || left.some((name, index) => name !== right[index]);
+  if (differ(registered, declared) || differ(registered, published)) {
+    throw new Error(
+      "the Team protocol does not agree with itself: the registered handlers, the declared " +
+        "method names and the published contract are not the same set.\n" +
+        `  registered: ${registered.join(", ")}\n` +
+        `  declared:   ${declared.join(", ")}\n` +
+        `  contract:   ${published.join(", ")}`,
+    );
+  }
+  for (const capability of capabilitiesOf(table)) {
+    if (!CONTRACT.capabilities.includes(capability)) {
+      throw new Error(`the capability ${capability} is served but the contract does not name it`);
+    }
+  }
 }
 
 /* ------------------------------------------------ reading what arrived */

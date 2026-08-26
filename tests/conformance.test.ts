@@ -39,8 +39,13 @@ import {
   projectThreadsTopic,
   projectTopic,
 } from "../src/team/protocol.js";
-import { capabilitiesOf, methodTable } from "../src/team/methods.js";
+import {
+  assertProtocolConsistency,
+  methodTable,
+  serverCapabilities,
+} from "../src/team/methods.js";
 import { teamMethods } from "../src/team/endpoint.js";
+import type { StudioApiOptions } from "../src/web/studio.js";
 
 interface Contract {
   protocol: number;
@@ -82,8 +87,14 @@ describe("the protocol contract", () => {
     expect(Object.values(TEAM_METHODS).sort()).toEqual([...contract.methods].sort());
   });
 
-  it("announces every capability the contract names", () => {
-    expect(capabilitiesOf(methodTable(teamMethods())).sort()).toEqual(
+  it("advertises every capability the contract names, when the build serves them all", () => {
+    // The socket capabilities the method table implies, and the two the HTTP
+    // routes add when there is a reader to page a history. A build serving all
+    // of it advertises exactly the contract's vocabulary and no more.
+    const everything = {
+      readings: { get: () => undefined, revisions: async () => undefined },
+    } as unknown as StudioApiOptions;
+    expect(serverCapabilities(methodTable(teamMethods()), everything).sort()).toEqual(
       [...contract.capabilities].sort(),
     );
   });
@@ -114,5 +125,23 @@ describe("the protocol contract", () => {
     expect(OVERLAY_BODY_LIMIT).toBe(contract.limits["overlayBody"]);
     expect(LIVE_PAYLOAD_LIMIT).toBe(contract.limits["livePayload"]);
     expect(INSTANCE_FIELD_LIMIT).toBe(contract.limits["instanceField"]);
+  });
+});
+
+describe("the startup consistency check", () => {
+  it("passes for the methods this build actually registers", () => {
+    expect(() => assertProtocolConsistency(methodTable(teamMethods()))).not.toThrow();
+  });
+
+  it("refuses a build whose handlers and contract have fallen out of step", () => {
+    // A handler the contract does not name is exactly the state the check exists
+    // to catch: the server would answer a method it never advertised, or - the
+    // mirror of it - advertise one it cannot answer. Either is a lie a client
+    // acts on, so the server must not start.
+    const withPhantom = methodTable([
+      ...teamMethods(),
+      { name: "phantom.method", capability: "session", handle: () => ({}) },
+    ]);
+    expect(() => assertProtocolConsistency(withPhantom)).toThrow(/does not agree with itself/);
   });
 });

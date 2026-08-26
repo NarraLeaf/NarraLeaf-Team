@@ -74,10 +74,12 @@ export interface DiscoveryDocument {
    * longer rely on, and nothing here takes anything away.
    *
    * A newer client matches these strings literally and asks for nothing it did
-   * not find one for, so a route added to a later Team is a route Studio waits
+   * not find one for, so a capability added to a later Team is one Studio waits
    * to see rather than one it has to discover by getting a 404. The list is
-   * built from what this build answers — see {@link studioCapabilities} in
-   * src/web/studio.ts, which is the same file that decides it.
+   * built from what this build actually serves - the socket capabilities derived
+   * from the registered methods, and the two the HTTP routes add - and it is the
+   * same list the opening `hello` frame carries, so a client cannot be told one
+   * thing here and another over the socket.
    */
   readonly capabilities: readonly string[];
   readonly authority: {

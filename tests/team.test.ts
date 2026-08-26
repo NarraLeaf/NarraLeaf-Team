@@ -314,10 +314,18 @@ describe("opening a session", () => {
     expect(client.hello?.account.operator).toBe(false);
     expect(client.hello?.methods).toContain(TEAM_METHODS.projectsList);
     expect(client.hello?.methods).toContain(TEAM_METHODS.threadsCreate);
-    // Announced from the table of methods rather than written down beside it.
-    expect(client.hello?.capabilities).toEqual(
-      expect.arrayContaining(["session", "comments"]),
-    );
+    // One vocabulary, the same list the discovery document carries: the socket
+    // capabilities the method table implies and the sign-in the HTTP routes add.
+    // No history here, because this harness has read no repositories. Announced
+    // from what the build serves rather than written down beside it.
+    expect([...(client.hello?.capabilities ?? [])].sort()).toEqual([
+      "clients",
+      "comments",
+      "live",
+      "overlay",
+      "password-sign-in",
+      "session",
+    ]);
   });
 });
 
