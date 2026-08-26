@@ -106,7 +106,7 @@ describe("the trust command line", () => {
   it("needs a root, like everything that keeps state", () => {
     expect(parseArgs(["trust"])).toEqual({
       kind: "error",
-      message: "trust needs --root <path>, the directory Team keeps its files in",
+      message: "trust needs --root <path> or NLTEAM_ROOT, the directory Team keeps its files in",
     });
   });
 
