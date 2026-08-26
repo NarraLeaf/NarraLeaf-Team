@@ -51,7 +51,7 @@ import {
   verifyingPassword,
   type SignInLimiter,
 } from "../identity/signin.js";
-import { authenticate } from "../identity/users.js";
+import { authenticate, isOperator } from "../identity/users.js";
 import type { Action } from "../tui/state.js";
 import type { TeamView } from "../tui/teamview.js";
 import type { ViewContext } from "../view.js";
@@ -190,11 +190,6 @@ async function readJsonBody(
 
 function isError(value: unknown): value is { error: string } {
   return typeof value === "object" && value !== null && typeof (value as { error?: unknown }).error === "string";
-}
-
-/** Whether an account is in the group that may open this interface. */
-export function isOperator(groups: readonly string[]): boolean {
-  return groups.includes(OPERATOR_ROLE);
 }
 
 /**

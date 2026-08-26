@@ -110,6 +110,19 @@ export const DEFAULT_ROLE = "member";
  */
 export const ADMIN_ROLE = "admin";
 
+/**
+ * Whether an account may administer this server.
+ *
+ * The one question asked of a set of groups anywhere, and it is asked here
+ * beside the groups themselves rather than beside any of the surfaces that ask
+ * it: the label a session puts on an account and the door a request is let
+ * through have to be decided by the same rule, or an account is shown as an
+ * operator by one and refused by the other.
+ */
+export function isOperator(groups: readonly string[]): boolean {
+  return groups.includes(ADMIN_ROLE);
+}
+
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{1,31}$/;
 
 const ROLE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;

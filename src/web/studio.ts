@@ -79,6 +79,7 @@ import type { UserRecord } from "../identity/users.js";
 import {
   authenticate,
   findUserById,
+  isOperator,
   listUsers,
   SIGN_IN_REFUSED_MESSAGE,
 } from "../identity/users.js";
@@ -97,7 +98,6 @@ import { loreserverUrl, repositoryCreate } from "../projects/repository.js";
 import type { TeamProjectsEvent } from "../team/protocol.js";
 import { NOT_READ_YET } from "../tui/teamview.js";
 import type { ProjectFileView, RevisionView } from "../tui/teamview.js";
-import { isOperator } from "./api.js";
 import { originIsOurs, remoteAddressOf } from "./origin.js";
 
 /** Where the routes live. Versioned, because a client older than the server is ordinary. */

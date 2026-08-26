@@ -25,9 +25,8 @@
  * a code it can act on plus a line in the operator's log.
  */
 import { describeRefusal, identifyToken } from "../identity/bearer.js";
-import type { UserRecord } from "../identity/users.js";
+import { isOperator, type UserRecord } from "../identity/users.js";
 import type { StudioApiOptions } from "../web/studio.js";
-import { isOperator } from "../web/api.js";
 import type { TeamHub, HubSession } from "./hub.js";
 import { MethodError, type MethodContext, type TeamMethod } from "./methods.js";
 import type { TeamPresence } from "./presence.js";
