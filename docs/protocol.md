@@ -214,7 +214,7 @@ failure:
 | `not-found` | The thing named is not on this server. |
 | `refused` | The caller may not do that. |
 | `conflict` | It would collide with something already there. |
-| `unavailable` | True now and perhaps not in a moment — a repository not read yet. |
+| `unavailable` | True now and perhaps not in a moment — a repository not read yet, or a content server that would not complete a call. |
 | `unauthenticated` | The token is no longer good; reconnecting will not help. |
 | `internal` | Something nobody planned for. The message is kept off the wire. |
 
@@ -303,7 +303,10 @@ over HTTP see the same document.
 | Method | Capability | What it does |
 |---|---|---|
 | `projects.list` | `session` | Every project on this server. |
-| `projects.get` | `session` | One project, and what has been read of its repository. |
+| `projects.get` | `session` | One project: its row, and the project file read out of its repository — the title, the stage, how many scenes and assets. A file the server could not make sense of comes back `readable: false` with a sentence, never a refusal, and so does one whose first clone has not landed. Takes an id or a name. |
+| `projects.history` | `session` | A page of one project's revisions, newest first. `limit` defaults to 20 and is capped at 100; the cursor is the id of the revision to carry on after, and is absent when there is no page beyond this one. A project the server has no checkout of yet answers an empty page rather than a refusal, which is not the same as a project with no revisions. |
+| `projects.create` | `session` | Make a project, or — given a `repositoryId` — register a repository the author already has. Making one asks the content server for the repository and takes the row back if it refuses; registering one asks it for nothing, because the repository already exists under that id. Announces `project-created` on the `projects` topic. |
+| `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Any account may, and forgetting a project that is already gone answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
 | `members.list` | `session` | Every account, as a name beside a piece of work. |
 | `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. |
 | `threads.get` | `comments` | One thread and every comment in it. |
