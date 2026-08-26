@@ -39,32 +39,15 @@ function serverOptions() {
   format: "esm",
   target: "node24",
   sourcemap: true,
-  // Both of these are needed by the terminal interface, and both of them fail
-  // when the finished file is run rather than when it is built:
-  //
-  //   - Ink imports react-devtools-core at the top of a module, so an external
-  //     import of a package nobody installed reaches the executable and it
-  //     dies with ERR_MODULE_NOT_FOUND before drawing anything.
-  //   - One of Ink's dependencies calls require("assert"), which an ESM bundle
-  //     refuses with "Dynamic require of assert is not supported" unless there
-  //     is a require to call.
-  //
-  // The first line is the one a shell needs to run the file directly; it is
-  // added here rather than in the TypeScript source so that the checker and
-  // the test runner never have to make sense of a line that is not JavaScript.
-  alias: { "react-devtools-core": join(root, "scripts", "devtools-stub.js") },
   // The two that cannot be bundled, for the reason at the top of this file.
   // The platform packages are named as a group because exactly one of the four
   // is ever installed — each declares the os and cpu it is for — and a build on
   // one machine must not decide which one the finished file may look for.
   external: ["koffi", "@lore-vcs/*"],
-  banner: {
-    js: [
-      "#!/usr/bin/env node",
-      'import { createRequire as __nlteamCreateRequire } from "node:module";',
-      "const require = __nlteamCreateRequire(import.meta.url);",
-    ].join("\n"),
-  },
+  // The line a shell needs to run the file directly. It is here rather than in
+  // the TypeScript source so that the checker and the test runner never have to
+  // make sense of a line that is not JavaScript.
+  banner: { js: "#!/usr/bin/env node" },
   // Replaces the identifier throughout the bundle with a literal, so the
   // finished executable carries its own version number. src/version.ts explains
   // why the number is not read from disk at startup.

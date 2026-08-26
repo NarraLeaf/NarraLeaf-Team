@@ -9,11 +9,6 @@
     "moduleResolution": "NodeNext",
     "types": ["node"],
 
-    // The terminal interface is written in JSX, and React 19 supplies the
-    // factory itself: with the automatic runtime there is no React import to
-    // forget, which is the one mistake this setting exists to make impossible.
-    "jsx": "react-jsx",
-
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
