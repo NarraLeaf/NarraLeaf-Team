@@ -24,6 +24,7 @@
   "methods": [
     "projects.list",
     "projects.get",
+    "projects.history",
     "members.list",
     "threads.list",
     "threads.get",

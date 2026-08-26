@@ -443,6 +443,117 @@ describe("calling", () => {
   });
 });
 
+describe("a project's history over the socket", () => {
+  /** A reader that has whole histories for some projects and none for others. */
+  function pagedReader(
+    pages: Record<string, { id: string; at?: number }[]>,
+  ): Partial<StudioApiOptions> {
+    return {
+      readings: {
+        get: () => undefined,
+        revisions: (projectId, page) => {
+          const whole = pages[projectId];
+          if (whole === undefined) {
+            return Promise.resolve(undefined);
+          }
+          const start =
+            page.before === undefined
+              ? 0
+              : whole.findIndex((revision) => revision.id === page.before) + 1;
+          const taken = whole.slice(start, start + page.limit);
+          return Promise.resolve({
+            revisions: taken,
+            more: start + taken.length < whole.length,
+          });
+        },
+      },
+    };
+  }
+
+  it("pages the revisions, handing back a cursor while there is more", async () => {
+    // The reader reads this map when it is asked, so it is filled in once the
+    // project has an id rather than at harness time.
+    const pages: Record<string, { id: string }[]> = {};
+    const team = await harness(pagedReader(pages));
+    const ada = await account(team.database, "ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    pages[project.id] = [{ id: "r3" }, { id: "r2" }, { id: "r1" }];
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const first = await client.value(TEAM_METHODS.projectsHistory, {
+      project: project.id,
+      limit: 2,
+    });
+    expect((first["revisions"] as { id: string }[]).map((revision) => revision.id)).toEqual([
+      "r3",
+      "r2",
+    ]);
+    // A cursor because there is a page after this one, and it is the last id on
+    // this page - a revision id, not a time-and-id pair.
+    expect(first["cursor"]).toBe("r2");
+
+    const second = await client.value(TEAM_METHODS.projectsHistory, {
+      project: project.id,
+      limit: 2,
+      cursor: first["cursor"],
+    });
+    expect((second["revisions"] as { id: string }[]).map((revision) => revision.id)).toEqual([
+      "r1",
+    ]);
+    // The end of the history carries no cursor.
+    expect(second).not.toHaveProperty("cursor");
+  });
+
+  it("answers an empty page for a project it has no checkout of", async () => {
+    const team = await harness(pagedReader({}));
+    const ada = await account(team.database, "ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.projectsHistory, { project: project.id });
+    // "Not read yet", which is a different thing from "no revisions": an empty
+    // page and no cursor, never a refusal.
+    expect(answer["revisions"]).toEqual([]);
+    expect(answer).not.toHaveProperty("cursor");
+  });
+
+  it("answers an empty page on a build that reads no repositories", async () => {
+    // No reader at all - the ordinary test harness. The method is there because
+    // it is gated by `session`, and it says the honest thing rather than refusing.
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.projectsHistory, { project: project.id });
+    expect(answer["revisions"]).toEqual([]);
+  });
+
+  it("refuses a project that is not on this server as not-found", async () => {
+    const team = await harness(pagedReader({}));
+    await account(team.database, "ada");
+    const client = await team.connect(team.tokenFor("ada"));
+    expect((await client.call(TEAM_METHODS.projectsHistory, { project: "nope" })).code).toBe(
+      "not-found",
+    );
+  });
+});
+
 describe("subscribing", () => {
   it("says where a topic stands, and refuses one nobody publishes", async () => {
     const team = await harness();

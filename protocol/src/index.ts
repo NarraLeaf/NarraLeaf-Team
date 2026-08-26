@@ -687,6 +687,8 @@ export const TEAM_METHODS = {
   projectsList: "projects.list",
   /** One project, and what has been read out of its repository. */
   projectsGet: "projects.get",
+  /** A page of one project's revisions, newest first. */
+  projectsHistory: "projects.history",
   /** Every account, as a name beside a piece of work. */
   membersList: "members.list",
   /** The threads anchored in one project, newest activity first. */

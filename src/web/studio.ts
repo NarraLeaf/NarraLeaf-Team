@@ -117,17 +117,24 @@ const HISTORY = "history";
 /** How much of a request body is read before it is refused as nonsense. */
 const MAXIMUM_BODY_BYTES = 4 * 1024;
 
-/** How many revisions a page of history holds when it is not asked for a number. */
-const DEFAULT_HISTORY_LIMIT = 20;
+/**
+ * How many revisions a page of history holds when it is not asked for a number.
+ *
+ * Exported so the socket's `projects.history` pages the same way this route does:
+ * the numbers are the contract's, not one transport's, and two copies would be
+ * two contracts.
+ */
+export const DEFAULT_HISTORY_LIMIT = 20;
 
 /**
  * The most revisions one page may hold.
  *
  * Each one costs a read of its metadata, so a page is a bounded amount of work
  * rather than however much a client asked for. Somebody wanting the whole of a
- * long history pages through it, which is what the cursor is for.
+ * long history pages through it, which is what the cursor is for. Exported for
+ * the same reason {@link DEFAULT_HISTORY_LIMIT} is.
  */
-const MAXIMUM_HISTORY_LIMIT = 100;
+export const MAXIMUM_HISTORY_LIMIT = 100;
 
 /**
  * What Team has read out of the repositories, and a way to read one page more.
