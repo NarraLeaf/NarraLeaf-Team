@@ -157,13 +157,13 @@ export function liveMethods(): TeamMethod[] {
         const id = requiredText(paramsObject(params), "session", ID_LIMIT);
         const session = context.presence.liveSession(id);
         if (session === undefined) {
-          return null;
+          return {};
         }
         const instance = context.presence.instanceOn(context.connection.id, session.project);
         if (instance !== undefined) {
           context.presence.leave(instance.id, id);
         }
-        return null;
+        return {};
       },
     },
     {
@@ -181,7 +181,7 @@ export function liveMethods(): TeamMethod[] {
         if (!closed) {
           throw new MethodError("refused", "only the installation that opened a live session may close it");
         }
-        return null;
+        return {};
       },
     },
     {
@@ -209,7 +209,7 @@ export function liveMethods(): TeamMethod[] {
         // real-time protocol that leaves the sender out grows a second path to
         // put them back in.
         context.presence.say(id, message);
-        return null;
+        return {};
       },
     },
   ];

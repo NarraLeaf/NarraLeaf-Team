@@ -24,6 +24,9 @@
  *    write that arrives twice - the same client, the same id, over a socket that
  *    dropped between the request and the answer - returns the row it already
  *    made. That is the whole of what makes writing over a session safe to retry.
+ *    The key is `(account, method, client id)`: the method is part of it so that
+ *    one client id used for two different writes - opening a thread and replying
+ *    to one - cannot be handed the wrong row.
  */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
@@ -36,6 +39,7 @@ import {
   type Row,
 } from "../identity/database.js";
 import { findUserById } from "../identity/users.js";
+import { TEAM_METHODS } from "../team/protocol.js";
 import type {
   TeamAnchor,
   TeamComment,
@@ -146,10 +150,18 @@ export interface ThreadCreation {
  * would have to have an opinion about that shape.
  */
 export function createThread(database: DatabaseSync, input: NewThread): ThreadCreation {
+  // The stored client id carries the method, so a create cannot collide with a
+  // reply or an overlay put that was given the same client id. The opening
+  // comment gets its own key under the same method, since it shares the comments
+  // table with replies.
+  const threadKey =
+    input.clientId === undefined ? null : `${TEAM_METHODS.threadsCreate}:${input.clientId}`;
+  const openingKey =
+    input.clientId === undefined ? null : `${TEAM_METHODS.threadsCreate}:${input.clientId}:opening`;
   if (input.clientId !== undefined) {
     const existing = database
       .prepare(`${SELECT_THREAD} WHERE created_by = ? AND client_id = ?`)
-      .get(input.createdBy, input.clientId);
+      .get(input.createdBy, threadKey);
     if (existing !== undefined) {
       const thread = toThread(existing);
       const opening = openingComment(database, thread.id);
@@ -179,7 +191,7 @@ export function createThread(database: DatabaseSync, input: NewThread): ThreadCr
         input.createdBy,
         input.now,
         input.now,
-        input.clientId ?? null,
+        threadKey,
       );
     database
       .prepare(
@@ -193,7 +205,7 @@ export function createThread(database: DatabaseSync, input: NewThread): ThreadCr
         input.body,
         input.suggestion ?? null,
         input.now,
-        input.clientId === undefined ? null : `${input.clientId}:opening`,
+        openingKey,
       );
     database.exec("COMMIT");
   } catch (error) {
@@ -222,10 +234,14 @@ export function addComment(
   database: DatabaseSync,
   input: NewComment,
 ): { readonly comment: CommentRecord; readonly repeated: boolean } {
+  // The method is part of the key, so a reply's client id lives in its own
+  // namespace, apart from a created thread's opening comment in the same table.
+  const commentKey =
+    input.clientId === undefined ? null : `${TEAM_METHODS.threadsReply}:${input.clientId}`;
   if (input.clientId !== undefined) {
     const existing = database
       .prepare(`${SELECT_COMMENT} WHERE author_id = ? AND client_id = ?`)
-      .get(input.authorId, input.clientId);
+      .get(input.authorId, commentKey);
     if (existing !== undefined) {
       return { comment: toComment(existing), repeated: true };
     }
@@ -246,7 +262,7 @@ export function addComment(
         input.body,
         input.suggestion ?? null,
         input.now,
-        input.clientId ?? null,
+        commentKey,
       );
     touch(database, input.threadId, input.now);
     database.exec("COMMIT");

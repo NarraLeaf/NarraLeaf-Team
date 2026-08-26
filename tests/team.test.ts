@@ -152,6 +152,8 @@ interface Waiting {
 class Client {
   readonly events: { topic: string; seq: number; payload: unknown }[] = [];
   readonly byes: { code: string; message: string }[] = [];
+  /** The WebSocket close code and reason, once the socket has closed. */
+  readonly closes: { code: number; reason: string }[] = [];
   hello: TeamHelloFrame | undefined;
 
   private next = 1;
@@ -159,6 +161,12 @@ class Client {
   private readonly listeners: (() => void)[] = [];
 
   constructor(private readonly ws: WebSocket) {
+    ws.onclose = (event: CloseEvent) => {
+      this.closes.push({ code: event.code, reason: event.reason });
+      for (const listener of this.listeners.splice(0)) {
+        listener();
+      }
+    };
     ws.onmessage = (message: MessageEvent) => {
       const frame = JSON.parse(String(message.data)) as Record<string, unknown>;
       if (frame["t"] === "hello") {
@@ -546,6 +554,63 @@ describe("conversations", () => {
     expect((listed["threads"] as unknown[]).length).toBe(1);
   });
 
+  it("keeps a reply's idempotency apart from a thread's opening comment", async () => {
+    const { project, ada } = await withProject();
+    // A created thread stores its opening comment under the client id the create
+    // was given; a reply stores its comment under the client id the reply was
+    // given. With the method in the idempotency key those live in separate
+    // namespaces, so a reply whose client id coincides with a created thread's
+    // adds its own comment rather than being handed that thread's opening one.
+    const first = await ada.value(TEAM_METHODS.threadsCreate, {
+      project,
+      anchor: { document: "story/act-one.json" },
+      body: "first thread",
+      clientId: "shared",
+    });
+    const firstThread = (first["thread"] as { id: string }).id;
+    const other = await ada.value(TEAM_METHODS.threadsCreate, {
+      project,
+      anchor: { document: "story/act-two.json" },
+      body: "second thread",
+    });
+    const target = (other["thread"] as { id: string }).id;
+
+    const replied = await ada.value(TEAM_METHODS.threadsReply, {
+      thread: target,
+      body: "a reply of its own",
+      clientId: "shared:opening",
+    });
+    const comment = replied["comment"] as { thread: string; body: string };
+    expect(comment.thread).toBe(target);
+    expect(comment.thread).not.toBe(firstThread);
+    expect(comment.body).toBe("a reply of its own");
+  });
+
+  it("publishes nothing when a resolve does not change the thread", async () => {
+    const { project, ada, bob } = await withProject();
+    const opened = await ada.value(TEAM_METHODS.threadsCreate, {
+      project,
+      anchor: { document: "story/act-one.json" },
+      body: "opening",
+    });
+    const thread = (opened["thread"] as { id: string }).id;
+
+    await bob.send("subscribe", { topic: projectThreadsTopic(project) });
+
+    // The first resolve is a real change, and is announced.
+    await ada.value(TEAM_METHODS.threadsResolve, { thread });
+    await bob.until(() => bob.events.length > 0);
+    expect(bob.events).toHaveLength(1);
+    expect((bob.events[0]?.payload as { kind: string }).kind).toBe("thread-updated");
+
+    // Resolving an already-resolved thread moves nothing, so it announces
+    // nothing: a client that redraws on every event must not be made to redraw
+    // for a write that changed no state.
+    await ada.value(TEAM_METHODS.threadsResolve, { thread });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bob.events).toHaveLength(1);
+  });
+
   it("lets anybody reply and anybody resolve", async () => {
     const { project, ada, bob } = await withProject();
     const opened = await ada.value(TEAM_METHODS.threadsCreate, {
@@ -662,6 +727,48 @@ describe("what a session refuses to carry on with", () => {
     client.send_raw(JSON.stringify({ t: "shout", id: 1 }));
     await client.until(() => client.byes.length > 0);
     expect(client.byes[0]?.code).toBe("bad-params");
+  });
+});
+
+describe("the code a session closes with says why", () => {
+  it("closes 1002 on a frame the protocol does not allow", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    const client = await team.connect(team.tokenFor("ada"));
+    // A well-formed WebSocket message carrying a frame this protocol has no kind
+    // for. The close code is what tells a client author their frame was wrong,
+    // rather than reading as a clean goodbye.
+    client.send_raw(JSON.stringify({ t: "shout", id: 1 }));
+    await client.until(() => client.closes.length > 0);
+    expect(client.closes[0]?.code).toBe(1002);
+  });
+
+  it("closes 1002 on a frame that is not JSON", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    const client = await team.connect(team.tokenFor("ada"));
+    client.send_raw("not json at all");
+    await client.until(() => client.closes.length > 0);
+    expect(client.closes[0]?.code).toBe(1002);
+  });
+});
+
+describe("what an answer with nothing to report carries", () => {
+  it("is an empty object, so every result.value is an object rather than null", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    const client = await team.connect(team.tokenFor("ada"));
+
+    // A method whose whole result is that it worked, answered whether or not
+    // there was anything to withdraw.
+    const withdrawn = await client.call(TEAM_METHODS.clientsWithdraw, { project: "whatever" });
+    expect(withdrawn.code).toBeUndefined();
+    expect(withdrawn.value).toEqual({});
+
+    // The unsubscribe acknowledgement, which is not a method but answers the
+    // same way. Dropping a topic that was never held is a success.
+    const dropped = await client.send("unsubscribe", { topic: TOPIC_PROJECTS });
+    expect(dropped.value).toEqual({});
   });
 });
 

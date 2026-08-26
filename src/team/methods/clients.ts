@@ -84,7 +84,11 @@ export function clientMethods(): TeamMethod[] {
           context.connection.id,
           requiredText(paramsObject(params), "project", ID_LIMIT),
         );
-        return null;
+        // An object with nothing in it rather than null, so that a client reads
+        // every method's answer the same way: `result.value` is always an
+        // object, never a value it has to tell apart from a handler that built
+        // no body at all.
+        return {};
       },
     },
     {

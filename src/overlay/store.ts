@@ -33,6 +33,7 @@ import {
   textColumn,
   type Row,
 } from "../identity/database.js";
+import { TEAM_METHODS } from "../team/protocol.js";
 import type { TeamAnchor } from "../team/protocol.js";
 
 const SELECT_RECORD = `SELECT id, project_id, revision, document, element, kind, body,
@@ -165,10 +166,14 @@ export interface OverlayWritten {
  * what it wrote. Same client id, same author - same row.
  */
 export function putOverlay(database: DatabaseSync, input: OverlayWrite): OverlayWritten {
+  // The stored client id carries the method, so an overlay put's key cannot be
+  // matched by a write of some other method that was given the same client id.
+  const clientKey =
+    input.clientId === undefined ? null : `${TEAM_METHODS.overlayPut}:${input.clientId}`;
   if (input.clientId !== undefined) {
     const existing = database
       .prepare(`${SELECT_RECORD} WHERE author_id = ? AND client_id = ?`)
-      .get(input.authorId, input.clientId);
+      .get(input.authorId, clientKey);
     if (existing !== undefined) {
       return { record: toRecord(existing as Row), repeated: true };
     }
@@ -193,7 +198,7 @@ export function putOverlay(database: DatabaseSync, input: OverlayWrite): Overlay
       input.instance ?? null,
       input.now,
       input.now,
-      input.clientId ?? null,
+      clientKey,
     );
   return { record: require_(database, id), repeated: false };
 }

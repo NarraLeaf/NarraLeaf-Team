@@ -88,6 +88,37 @@ export function accountOf(user: UserRecord): TeamAccount {
   };
 }
 
+/**
+ * The WebSocket close code a `bye` reason maps to.
+ *
+ * A close code is two bytes, and the wrong one is a lie a client acts on: closing
+ * `1000` on a protocol violation reads as a clean goodbye, so a client author has
+ * nothing to fix and reconnects into the same wall. So each reason a session ends
+ * for carries the code that names it.
+ *
+ *  - A frame the protocol does not allow is `1002`, the code for a protocol
+ *    error - the only reason this server sends a `bye{bad-params}`.
+ *  - A token that will not do (`unauthenticated`) or a quota or in-flight cap
+ *    reached (`refused`) is `1008`: the session broke a rule rather than
+ *    finishing.
+ *  - Anything else - the server shutting down, which sends `bye{unavailable}` -
+ *    is `1000`, a clean end worth reconnecting into.
+ *
+ * A message over the ceiling is `1009`, but that never reaches here: the framing
+ * layer closes it before a frame is ever handed up. See src/team/websocket.ts.
+ */
+function closeCodeFor(code: TeamErrorCode): number {
+  switch (code) {
+    case "bad-params":
+      return CLOSE.protocolError;
+    case "unauthenticated":
+    case "refused":
+      return CLOSE.policy;
+    default:
+      return CLOSE.normal;
+  }
+}
+
 export class TeamSession implements HubSession {
   readonly id: string;
 
@@ -311,8 +342,10 @@ export class TeamSession implements HubSession {
     }
     // Dropping one that was never held is a success. There is nothing for the
     // client to do differently, and the state it wanted is the state it has.
+    // The acknowledgement carries an empty object rather than null, so that
+    // `result.value` is an object here as it is for every method.
     this.topics.delete(frame.topic);
-    this.send({ t: "result", id, value: null });
+    this.send({ t: "result", id, value: {} });
   }
 
   /**
@@ -341,13 +374,10 @@ export class TeamSession implements HubSession {
     this.send({ t: "error", id, code, message });
   }
 
-  /** Say why, then close. */
+  /** Say why, then close with the code that reason maps to. */
   private bye(code: TeamByeFrame["code"], message: string): void {
     this.send({ t: "bye", code, message });
-    this.options.connection.close(
-      code === "unauthenticated" ? CLOSE.policy : CLOSE.normal,
-      message,
-    );
+    this.options.connection.close(closeCodeFor(code), message);
     this.closed();
   }
 

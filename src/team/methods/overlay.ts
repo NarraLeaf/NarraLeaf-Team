@@ -182,9 +182,10 @@ export function overlayMethods(): TeamMethod[] {
         const record = findOverlay(context.options.database, id);
         if (record === undefined) {
           // Dropping something that is not there is a success: what the caller
-          // wanted is what there is. Said as `null` rather than as a refusal so
-          // that a retry after a socket dropped mid-answer is quiet.
-          return null;
+          // wanted is what there is. An empty object rather than a refusal, so
+          // that a retry after a socket dropped mid-answer is quiet and every
+          // method's answer is read the same way.
+          return {};
         }
         if (record.authorId !== context.user.id) {
           throw new MethodError("refused", "only the account that wrote a record may take it off");
@@ -195,7 +196,7 @@ export function overlayMethods(): TeamMethod[] {
           record: id,
           anchor: record.anchor,
         });
-        return null;
+        return {};
       },
     },
   ];

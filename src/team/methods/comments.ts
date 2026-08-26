@@ -274,13 +274,22 @@ export function commentMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const threadId = requiredText(read, "thread", ID_LIMIT);
-        if (findThread(context.options.database, threadId) === undefined) {
+        const current = findThread(context.options.database, threadId);
+        if (current === undefined) {
           throw new MethodError("not-found", "there is no thread of that id on this server");
+        }
+        const resolved = flag(read, "resolved", true);
+        // A naturally idempotent write: asking for the state a thread is already
+        // in changes nothing, so it must not touch the row or announce a change
+        // nobody made. A client that redraws on every event would otherwise
+        // redraw for a resolve that moved nothing.
+        if (resolved === (current.status === "resolved")) {
+          return { thread: threadView(context.options.database, current) };
         }
         const thread = setThreadStatus(
           context.options.database,
           threadId,
-          flag(read, "resolved", true),
+          resolved,
           context.user.id,
           Date.now(),
         );
