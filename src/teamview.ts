@@ -117,11 +117,11 @@ export interface AuditView {
 /**
  * One line on the settings surface.
  *
- * `editable` false means the value is shown but cannot be changed here, and
- * pressing return on it must do nothing. `restartRequired` means the change is
- * written now and takes effect when loreserver is next started — the interface
- * has to say which, because a setting that silently did not apply is worse
- * than one that could not be changed.
+ * `editable` false means the value can be shown but not changed, and asking to
+ * change it must do nothing. `restartRequired` means the change is written now
+ * and takes effect when loreserver is next started — which has to be said,
+ * because a setting that silently did not apply is worse than one that could
+ * not be changed.
  */
 export interface SettingView {
   readonly group: string;
@@ -130,11 +130,10 @@ export interface SettingView {
   /**
    * The number `value` was written from, where it was written from one.
    *
-   * Present on the two lifetimes and nowhere else. It is here because the web
-   * interface writes a duration in its own language — "30 天" — and cannot get
-   * there from the words "30 days" without taking them apart again. The value
-   * stays the English the terminal interface draws, so nothing that reads this
-   * view has to learn a second way to read a row.
+   * Present on the two lifetimes and nowhere else. `value` is the duration in
+   * words, and a reader that wanted the number back would have to take those
+   * words apart again — in whatever language they were written in. Sending
+   * both is cheaper than making everybody parse one.
    */
   readonly seconds?: number;
   readonly editable: boolean;
@@ -169,10 +168,9 @@ export interface TeamView {
  * project that has been worked on for months must not read as one nobody has
  * touched while the first clone of it is still running.
  *
- * It is here, beside the shapes it is made of, rather than beside either of
- * the surfaces that answer with it. The terminal interface and the API a
- * Studio installation talks to both have to say this, and two spellings of it
- * would be two sentences about the same silence.
+ * It is here, beside the shapes it is made of, rather than beside any of the
+ * surfaces that answer with it. More than one of them has to say this, and two
+ * spellings would be two sentences about the same silence.
  */
 export const NOT_READ_YET: { history: RevisionView; file: ProjectFileView } = {
   history: {},

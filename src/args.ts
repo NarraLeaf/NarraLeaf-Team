@@ -43,20 +43,6 @@ export interface IdentityOverrides {
 export type Invocation =
   | { readonly kind: "version" }
   | { readonly kind: "help" }
-  /**
-   * Open the terminal interface on the Team server at `root`.
-   *
-   * This is what a command line that names no command means. The identity
-   * settings come along because the interface shows them: a Team server brought up
-   * with `--data-port 41500` is reached at that port whether or not the
-   * screen showing the address was told about it.
-   */
-  | {
-      readonly kind: "interface";
-      readonly root: string;
-      readonly healthPort: number;
-      readonly overrides: IdentityOverrides;
-    }
   /** Bring loreserver up under the storage root at `root`, and keep it up. */
   | {
       readonly kind: "up";
@@ -532,53 +518,6 @@ function parseUp(argv: readonly string[]): Invocation {
   };
 }
 
-/**
- * Parse a command line that names no command.
- *
- * It opens the terminal interface, and it takes the options that decide what
- * that interface is looking at and what it says about how this Team server is
- * reached. Nothing here starts anything: the interface reads.
- */
-function parseInterface(argv: readonly string[]): Invocation {
-  const result = readTokens(
-    argv,
-    ["--root", "--health-port", ...IDENTITY_OPTIONS],
-    [],
-    IDENTITY_LIST_OPTIONS,
-  );
-  if (result.kind !== "tokens") {
-    return result.kind === "help" ? { kind: "help" } : error(result.message);
-  }
-  const { tokens } = result;
-
-  const extra = tokens.positionals[0];
-  if (extra !== undefined) {
-    return error(`unexpected argument: ${extra}`);
-  }
-
-  const root = tokens.values.get("--root");
-  if (root === undefined) {
-    return missingRoot("nlteam with no command");
-  }
-
-  let healthPort = DEFAULT_PORTS.healthPort;
-  const healthPortText = tokens.values.get("--health-port");
-  if (healthPortText !== undefined) {
-    const port = parsePort("--health-port", healthPortText);
-    if (typeof port === "string") {
-      return error(port);
-    }
-    healthPort = port;
-  }
-
-  const overrides = readIdentityOverrides(tokens);
-  if (typeof overrides === "string") {
-    return error(overrides);
-  }
-
-  return { kind: "interface", root, healthPort, overrides };
-}
-
 /** Parse the arguments that follow `init`. */
 function parseInit(argv: readonly string[]): Invocation {
   const result = readTokens(argv, ["--root", "--display-name", "--email"]);
@@ -989,13 +928,10 @@ export function parseArgs(argv: readonly string[]): Invocation {
     case "trust":
       return parseTrust(rest);
     default:
-      // A command line of nothing but options names no command, and the one
-      // thing it can mean is the interface. Anything else is still a mistake:
-      // a mistyped command is a word, and a mistyped option starts with a
-      // dash but is not one this takes.
-      if (first.startsWith("--")) {
-        return parseInterface(argv);
-      }
+      // Every option this program takes belongs to a command, so a command line
+      // that names none is a mistake however it was spelled: a mistyped command
+      // is a word, and a mistyped option starts with a dash but is not one of
+      // the two below.
       return error(
         first.startsWith("-") ? `unknown argument: ${first}` : `unknown command: ${first}`,
       );

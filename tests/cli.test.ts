@@ -60,7 +60,7 @@ describe("run", () => {
   it("documents changing a setting from a command line, and names the keys", async () => {
     const { out } = await invoke(["--help"]);
 
-    // The lifetimes were editable from the terminal interface and nowhere else,
+    // The lifetimes are settings a person changes from a command line,
     // which left them unreachable over ssh and from a script.
     expect(out).toContain("settings list");
     expect(out).toContain("settings set <key> <value>");

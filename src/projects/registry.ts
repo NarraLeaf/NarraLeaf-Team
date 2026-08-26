@@ -92,9 +92,8 @@ export class InvalidProjectNameError extends Error {
    *
    * Kept beside the message rather than only inside it, as every error here
    * keeps its subject, so that something showing this to a person can write its
-   * own sentence about it — which is what the web interface does in a language
-   * that is not English. It cannot be called `name`: that is what an Error
-   * calls its class.
+   * own sentence about it rather than repeat this one. It cannot be called
+   * `name`: that is what an Error calls its class.
    */
   readonly projectName: string;
 

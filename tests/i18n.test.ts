@@ -15,7 +15,6 @@ import { readDuration } from "../src/operations.js";
 import { describeDuration } from "../src/duration.js";
 import { en, everyLanguage, ja, messagesFor, zh } from "../src/i18n/index.js";
 import { FALLBACK_LOCALE, localeOfTag, negotiateLocale } from "../src/i18n/locales.js";
-import { relativeTime } from "../src/tui/format.js";
 
 import type { Messages } from "../src/i18n/messages.js";
 
@@ -199,23 +198,5 @@ describe("durations, written and read back", () => {
     expect(typeof refused).toBe("string");
     expect(refused).toBe(ja.error.notADuration({ value: "いつか" }));
     expect(readDuration("0 天", zh)).toBe(zh.error.durationTooSmall);
-  });
-});
-
-describe("relative times", () => {
-  const now = 1_700_000_000_000;
-
-  it("counts in the words of the language it is drawn in", () => {
-    expect(relativeTime(now - 5_000, now)).toBe("5s ago");
-    expect(relativeTime(now - 5_000, now, zh)).toBe("5 秒前");
-    expect(relativeTime(now - 2 * 60 * 60 * 1000, now, ja)).toBe("2時間前");
-    expect(relativeTime(now - 3 * 24 * 60 * 60 * 1000, now, zh)).toBe("3 天前");
-    expect(relativeTime(now, now, ja)).toBe("たった今");
-  });
-
-  it("says unknown in that language too, rather than leaving a gap", () => {
-    expect(relativeTime(undefined, now, zh)).toBe("未知");
-    expect(relativeTime(undefined, now, ja)).toBe("不明");
-    expect(relativeTime(undefined, now)).toBe("unknown");
   });
 });

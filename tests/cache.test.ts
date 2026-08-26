@@ -110,17 +110,6 @@ describe("who is in a position to open a store", () => {
 
     expect(offenders).toEqual([]);
   });
-
-  it("is not the terminal interface", async () => {
-    // Same rule as the one that keeps the database out of src/tui, for the
-    // same reason: the interface draws a view it is handed. A screen that
-    // fetched its own would be a second implementation of when to fetch.
-    const offenders = (await sources("src/tui"))
-      .filter(({ text }) => /koffi|lore\/|projects\/|ProjectReadings/.test(text))
-      .map(({ path }) => path);
-
-    expect(offenders).toEqual([]);
-  });
 });
 
 /**

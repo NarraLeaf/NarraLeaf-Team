@@ -2,10 +2,6 @@
  * The `settings` commands: show what this Team server keeps in its database, and change
  * one of them.
  *
- * The two token lifetimes were editable from the terminal interface and from
- * nowhere else, which made them the only settings a person could not change
- * over ssh, from a script, or on a machine with no terminal to draw on.
- *
  * What is shown is what is in effect, which is not the same as what is stored:
  * a setting nobody has chosen has no row at all and something else answers for
  * it, so the listing says which of the two each value is. Changing one reaches

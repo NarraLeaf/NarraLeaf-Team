@@ -129,8 +129,8 @@ export function discoveryDocument(source: DiscoverySource): DiscoveryDocument {
  * Answer the discovery request, and nothing else.
  *
  * Every other path is a 404 rather than a redirect or an index: this listener exists to
- * speak gRPC, and the one document it serves over HTTP/1.1 is the exception rather than
- * the start of a web interface.
+ * speak gRPC, and the few things it serves over HTTP/1.1 are named exceptions rather than
+ * the start of a site.
  */
 export function serveDiscovery(
   document: DiscoveryDocument,

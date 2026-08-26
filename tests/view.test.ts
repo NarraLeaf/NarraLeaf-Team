@@ -1,19 +1,17 @@
-// The half of the terminal interface that owns the database: what a command
-// line with no command means, what a view gathered from a real Team says, and
-// what the settings surface is allowed to write.
+// The half that owns the database: what a view gathered from a real Team says,
+// and what the settings surface is allowed to write.
 import type { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { parseArgs } from "../src/args.js";
 import { recordDecision } from "../src/identity/audit.js";
 import { identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { identityLayout } from "../src/identity/layout.js";
 import { defaultPasswordHasher } from "../src/identity/passwords.js";
 import { createUser, disableUser } from "../src/identity/users.js";
-import { readDuration } from "../src/interface.js";
 import { DEFAULT_PORTS } from "../src/loreserver/layout.js";
+import { readDuration } from "../src/operations.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
 import { gatherTeamView, settingRows, type ViewContext } from "../src/view.js";
 import { useTemporaryRoots } from "./temporary.js";
@@ -64,36 +62,6 @@ async function team(): Promise<ViewContext> {
     fingerprint: "22:3B:65:91:89:41:E6:D7",
   };
 }
-
-describe("a command line that names no command", () => {
-  it("opens the interface on a root", () => {
-    expect(parseArgs(["--root", "/srv/team"])).toEqual({
-      kind: "interface",
-      root: "/srv/team",
-      healthPort: DEFAULT_PORTS.healthPort,
-      overrides: {},
-    });
-  });
-
-  it("takes the identity settings, because the interface shows them", () => {
-    // A Team server brought up with a different data port is reached at that port
-    // whether or not the screen showing the address was told about it.
-    const invocation = parseArgs(["--root", "/srv/team", "--data-port", "41500"]);
-    expect(invocation.kind === "interface" && invocation.overrides.dataPort).toBe(41500);
-  });
-
-  it("asks for a root rather than guessing at one", () => {
-    const invocation = parseArgs(["--health-port", "41339"]);
-    expect(invocation.kind).toBe("error");
-    expect(invocation.kind === "error" && invocation.message).toContain("--root");
-  });
-
-  it("still reports an option nobody has", () => {
-    const invocation = parseArgs(["--nonsense"]);
-    expect(invocation.kind).toBe("error");
-    expect(invocation.kind === "error" && invocation.message).toContain("--nonsense");
-  });
-});
 
 describe("the view a real Team gathers", () => {
   it("says who is here, and which of them is disabled", async () => {

@@ -1,19 +1,19 @@
 /**
- * Gathering everything the terminal interface draws, once per refresh.
+ * Gathering one whole account of this server, from the database and the disk.
  *
- * This is the half of the interface that owns the database, the certificate
- * authority and the health check. It hands over a finished
- * {@link TeamView} and nothing else, which is what lets src/tui be a thing that
- * draws rather than a second implementation of the rules.
+ * This is the half that owns the database, the certificate authority and the
+ * health check. It hands over a finished {@link TeamView} and nothing else, so
+ * that whatever answers a question out of one is a thing that reads rather than
+ * a second implementation of the rules.
  *
  * Everything gathered here is read from the database or from a file, and
  * nothing here waits on the network. What a project's revision history and its
  * project file say is not in the database at all: it is inside a repository,
  * which is read by a client over the network — see src/projects/cache.ts for
  * why it must be, and src/projects/refresh.ts for how it arrives. Whatever has
- * been read is handed in and used; whatever has not is absent and drawn as
- * "unknown", which is the same thing the interface does with a project written
- * by a newer Studio.
+ * been read is handed in and used; whatever has not is absent and reported as
+ * "unknown", which is the same thing this says about a project written by a
+ * newer Studio.
  *
  * What Team cannot work out is left out, not guessed at.
  */
@@ -94,11 +94,9 @@ const STORAGE_FILE_LIMIT = 50_000;
 /**
  * How many decisions a view carries.
  *
- * Far fewer than the database keeps. The dashboard shows the last handful and
- * the log window draws every entry it is handed, one line each, so what is
- * useful here is a screenful and a good deal of scrollback — not the whole
- * bound, which would be a window two thousand lines tall and a count nobody
- * asked for.
+ * Far fewer than the database keeps. Enough to say what this server has been
+ * asked lately, which is the question a view is gathered to answer — not the
+ * whole bound, which is a different question with an answer of its own.
  */
 const AUDIT_LIMIT = 100;
 
@@ -223,9 +221,8 @@ function projectView(
  *
  * A row is editable only where Team has somewhere to put the new value. The
  * identity settings and the ports are named on the command line that started
- * `up`, so they are shown and marked read-only: an editor over a value that
- * would be thrown away is worse than no editor, because it looks like it
- * worked.
+ * `up`, so they are shown and marked read-only: offering to change a value that
+ * would be thrown away is worse than refusing, because it looks like it worked.
  */
 export function settingRows(context: ViewContext): SettingView[] {
   const lifetimes = storedTokenLifetimes(context.database);

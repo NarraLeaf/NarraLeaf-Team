@@ -102,11 +102,11 @@ export const MINIMUM_PASSWORD_LENGTH = 10;
 export const DEFAULT_ROLE = "member";
 
 /**
- * The group the first account joins, and the only one the web interface admits.
+ * The group that may administer this server.
  *
  * `nlteam init` puts the first account here because there is nobody to put it
- * there afterwards: a server whose only account could not open the operator's
- * view would need a second command to fix a situation it had just created.
+ * there afterwards: a server whose only account could not administer it would
+ * need a second command to fix a situation it had just created.
  */
 export const ADMIN_ROLE = "admin";
 
@@ -396,9 +396,9 @@ export function revokeUserTokens(database: DatabaseSync, username: string): User
  * Put an account in the admin group, or take it out.
  *
  * That group is the whole of what `admin` means on this server: it is who may
- * open the operator's view, and who may put somebody else in it. It says
- * nothing about projects — every account of this server reaches every project
- * on it, and src/projects/registry.ts is where that is written down.
+ * administer it, and who may put somebody else in the group. It says nothing
+ * about projects — every account of this server reaches every project on it,
+ * and src/projects/registry.ts is where that is written down.
  *
  * Doing it twice is doing it once. An account already in the group is left in
  * it rather than failing, because the outcome the caller asked for is the

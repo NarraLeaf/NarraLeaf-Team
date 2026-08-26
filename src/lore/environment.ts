@@ -4,9 +4,9 @@
  *
  * Both are process-wide and both are read by native code Team does not
  * control, so neither can be decided lazily by whichever code path happens to
- * reach Lore first. They are settled here, from one function, called once per
- * command that reads a repository — `up` and the terminal interface — and
- * nothing below this layer touches `process.env` again.
+ * reach Lore first. They are settled here, from one function, called once by
+ * whichever command reads a repository, and nothing below this layer touches
+ * `process.env` again.
  *
  * ## The credential store, and why Team needs one of its own
  *

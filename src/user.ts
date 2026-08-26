@@ -251,8 +251,8 @@ export async function userSetAdmin(
     const user = setAdmin(database, options.username, options.admin);
     stdout(
       options.admin
-        ? `${user.username} is an admin: the operator's view, the accounts, and making ` +
-            "another admin.\n"
+        ? `${user.username} is an admin: this server's settings, the accounts, and ` +
+            "making another admin.\n"
         : `${user.username} is no longer an admin. The account is otherwise unchanged, and ` +
             "still reaches every project on this server.\n",
     );

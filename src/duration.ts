@@ -10,8 +10,8 @@
  *
  * The arithmetic is the same in every language; only the words differ, so the
  * words come from a catalogue and the choosing of the unit stays here. English
- * unless a caller says otherwise, because everything except the web interface —
- * the commands, the terminal interface, the log — is English.
+ * unless a caller says otherwise, because everything this program says of its
+ * own accord — the commands, the log — is English.
  */
 import { en } from "./i18n/en.js";
 

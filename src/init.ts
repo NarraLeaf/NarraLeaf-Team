@@ -9,8 +9,8 @@
  * already on.
  *
  * The account joins the admin group, because it is the only account there is:
- * one that could not open the operator's view over its own server would leave
- * the operator needing a second command to undo what the first had just done.
+ * one that could not administer its own server would leave the operator needing
+ * a second command to undo what the first had just done.
  *
  * The password is read from standard input, for the reason set out in
  * ./stdin.ts. The check for emptiness and the write are one transaction, so two
@@ -95,9 +95,10 @@ export async function init(
     const user = requireUser(database, prepared.username);
     stdout(`created ${user.username} (${user.id})\n`);
     stdout(`groups: ${user.groups.join(", ")}\n`);
-    stdout(
-      `It opens the operator's view: nlteam --root ${layout.root} in a terminal.\n`,
-    );
+    // What that group is for, said once, where somebody has just been put in
+    // it. Every account reaches every project; this one may also change who
+    // else has one.
+    stdout(`It may administer this server: the accounts, the projects and the settings.\n`);
     return 0;
   } catch (error) {
     stderr(`nlteam: ${error instanceof Error ? error.message : String(error)}\n`);

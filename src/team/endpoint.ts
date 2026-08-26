@@ -1,8 +1,8 @@
 /**
  * Where a session begins: the `upgrade` half of the listener everything else is on.
  *
- * The discovery document, the Studio REST API, the operator's page and now this
- * are one port and one certificate. That is not thrift, it is the trust story:
+ * The discovery document, the Studio REST API and this are one port and one
+ * certificate. That is not thrift, it is the trust story:
  * an operator compares a fingerprint once, and every conversation a Studio
  * installation has with this server arrives over the connection whose
  * certificate was compared. A second port would be a second such conversation,

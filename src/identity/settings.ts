@@ -95,8 +95,8 @@ export type SettingChange =
  * The one thing about the repository lifetime that is not obvious from its
  * name, said in one sentence wherever it is being changed.
  *
- * Here rather than beside either surface, because both the command and the
- * terminal interface say it and two copies would drift.
+ * Here rather than beside whatever is changing it, because more than one thing
+ * says it and two copies would drift.
  */
 export const REPOSITORY_LIFETIME_CAUTION =
   "loreserver accepts this one without asking Team, so revoking access cannot cut it short.";

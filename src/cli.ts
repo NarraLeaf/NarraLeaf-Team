@@ -4,7 +4,6 @@ import { DEFAULT_IDENTITY, identityConfig } from "./identity/config.js";
 import { SERVER_NAME_KEY, SETTING_KEYS } from "./identity/settings.js";
 import { DEFAULT_ROLE } from "./identity/users.js";
 import { init } from "./init.js";
-import { terminalInterface } from "./interface.js";
 import { keyList, keyRotate } from "./key.js";
 import { DEFAULT_PORTS } from "./loreserver/layout.js";
 import { projectCreate, projectList } from "./project.js";
@@ -52,9 +51,8 @@ export const USAGE = `Usage: nlteam <command> [options]
 
 NarraLeaf Team is a self-hosted project server for teams using NarraLeaf Studio.
 
-With no command it opens the terminal interface on the server at --root. A bare
-nlteam, at a terminal, opens it on NLTEAM_ROOT or on the working directory when
-that is a server already.
+It is a service with no interface of its own: up runs it, the commands below
+administer it, and the people who use it reach it from NarraLeaf Studio.
 
 Commands:
   up                        Install and run loreserver, and serve the
@@ -68,8 +66,8 @@ Commands:
                             Refuse every token already issued to an account,
                             leaving it able to sign in again
   user grant-admin <username>
-                            Let an account open the operator's view, manage the
-                            accounts, and make another admin
+                            Let an account manage the accounts and the projects
+                            on this server, and make another admin
   user revoke-admin <username>
                             Take that away, leaving the account otherwise as it
                             was
@@ -108,8 +106,8 @@ Options for init:
 Options for user create:
       --role <name>         Group the account joins (default ${DEFAULT_ROLE}).
                             Only admin means anything to this server: it is
-                            who may open the operator's view. Every account
-                            reaches every project either way
+                            who may administer it. Every account reaches every
+                            project either way
       --display-name <name> Name shown to other people
       --email <address>
       --service-account     Mark the account as one no person signs in to
@@ -181,16 +179,6 @@ export async function run(
     case "help":
       stdout(`${USAGE}\n`);
       return 0;
-    case "interface":
-      return await terminalInterface(
-        {
-          root: invocation.root,
-          healthPort: invocation.healthPort,
-          config: identityConfig(invocation.overrides),
-        },
-        stdout,
-        stderr,
-      );
     case "up":
       return await up(
         {

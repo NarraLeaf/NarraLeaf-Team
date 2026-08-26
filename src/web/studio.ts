@@ -7,11 +7,10 @@
  * it an author has to be told a repository id by hand, which is the one thing
  * the address was supposed to replace.
  *
- * It is served on the same HTTP/1.1 listener as the discovery document, and
- * **before the switch that turns the web interface on**: the interface is a
- * page for an operator and is off by default, while this is how every Studio
- * installation finds its work. One listener also means one certificate, and
- * therefore one decision to trust — the reason set out in ./router.ts.
+ * It is served on the same HTTP/1.1 listener as the discovery document, which
+ * is how every Studio installation finds its work. One listener means one
+ * certificate, and therefore one decision to trust — the reason set out in
+ * ./router.ts.
  *
  * Authentication is the token itself, presented as a bearer, and checked by
  * exactly what the authorization service checks it with. There is no session
@@ -288,9 +287,9 @@ export interface ProjectBody {
  * tokens were last refused, what groups it is in beyond the one label below,
  * and anything else the management plane keeps.
  *
- * `operator` is that label, and it is a label. It says this account may open
- * the operator's page and administer this server. It is not a permission over
- * any project: every account of this server reaches every project on it.
+ * `operator` is that label, and it is a label. It says this account may
+ * administer this server. It is not a permission over any project: every
+ * account of this server reaches every project on it.
  */
 export interface MemberBody {
   readonly username: string;
@@ -489,14 +488,12 @@ function caller(
 /**
  * Answer a request if it is one of ours, and say whether it was.
  *
- * Returns false for everything outside this API's prefix, so the router goes on
- * to the interface and the pages without this having to know they exist.
+ * Returns false for everything outside this API's prefix, so the router can go
+ * on to whatever else it serves without this having to know what that is.
  *
  * Everything **inside** the prefix is answered here, including the addresses
- * there is nothing at. Falling through with one of those would hand it to the
- * arm that serves the operator's page, and on a server with that page switched
- * off the answer to a mistyped API address would be a sentence about a web
- * interface — which tells whoever typed it nothing about what they typed.
+ * there is nothing at, so that a mistyped API address is refused as one rather
+ * than falling through to something that knows nothing about this API.
  */
 export function serveStudioApi(
   options: StudioApiOptions,

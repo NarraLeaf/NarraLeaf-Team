@@ -130,7 +130,7 @@ export interface TeamAccount {
   readonly username: string;
   readonly displayName: string;
   readonly email?: string;
-  /** Whether this account may open the operator's page. Not a permission over any project. */
+  /** Whether this account may administer this server. Not a permission over any project. */
   readonly operator: boolean;
 }
 
