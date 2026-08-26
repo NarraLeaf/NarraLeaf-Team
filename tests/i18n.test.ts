@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { readDuration } from "../src/actions.js";
+import { readDuration } from "../src/operations.js";
 import { describeDuration } from "../src/duration.js";
 import { en, everyLanguage, ja, messagesFor, zh } from "../src/i18n/index.js";
 import { FALLBACK_LOCALE, localeOfTag, negotiateLocale } from "../src/i18n/locales.js";

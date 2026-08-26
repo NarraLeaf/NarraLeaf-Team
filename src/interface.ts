@@ -2,29 +2,90 @@
  * The command behind a bare `nlteam`: open the terminal interface on a storage
  * root.
  *
- * Everything the interface asks for is carried out by src/actions.ts, which
+ * Everything the interface asks for is carried out by src/operations.ts, which
  * calls what the command of the same name calls: `d` reaches `disableUser`,
  * `x` reaches `revokeUserTokens`, `k` reaches `KeyStore.rotate`. None of it is
  * implemented twice, and what each one answers with says the same thing the
  * command prints — including how far it reaches, which is the part an operator
- * gets wrong. The web interface is handed the same function.
+ * gets wrong.
  */
-import { perform } from "./actions.js";
 import type { WriteText } from "./cli.js";
+import { en } from "./i18n/en.js";
 import type { IdentityConfig } from "./identity/config.js";
 import { openMigratedDatabase } from "./identity/database.js";
 import { identityLayout } from "./identity/layout.js";
 import { prepareLoreEnvironment } from "./lore/environment.js";
+import {
+  createAccount,
+  createProjectWithRepository,
+  issueToken,
+  revokeTokens,
+  rotateSigningKey,
+  setSetting,
+  setUserDisabled,
+} from "./operations.js";
 import { ViewPublisher } from "./publisher.js";
 import { runInterface } from "./tui/run.js";
+import type { Action } from "./tui/state.js";
 import { readAuthority } from "./tls/authority.js";
 
+import type { ViewContext } from "./view.js";
 import type { DatabaseSync } from "node:sqlite";
 
-// Where it used to live. The tests that reach for it are testing what an
-// operator may type into the setting editor, which is a rule about this
-// interface however it is spelled.
-export { readDuration } from "./actions.js";
+// The rule about what an operator may type into the setting editor, which is a
+// rule about this interface however it is spelled.
+export { readDuration } from "./operations.js";
+
+/**
+ * Carry out one thing the interface asked for, and answer with the sentence to
+ * show for it.
+ *
+ * The interface names what it wants and knows nothing about how it is met,
+ * which is what keeps it from becoming a second implementation of the rules.
+ * The one that names a command rather than doing anything needs a process this
+ * program does not supervise; naming the command is the honest answer, and a
+ * key that pretended to do it would not be.
+ */
+async function perform(context: ViewContext, action: Action): Promise<string> {
+  switch (action.kind) {
+    case "rotate-key":
+      return (await rotateSigningKey(context)).message;
+    case "set-user-disabled":
+      return setUserDisabled(context, action.username, action.disabled).message;
+    case "revoke-tokens":
+      return revokeTokens(context, action.username).message;
+    case "set-setting":
+      return setSetting(context, action.index, action.value).message;
+    case "create-account":
+      return (
+        await createAccount(context, {
+          username: action.username,
+          password: action.password,
+          ...(action.displayName === undefined ? {} : { displayName: action.displayName }),
+          ...(action.email === undefined ? {} : { email: action.email }),
+          operator: action.operator,
+        })
+      ).message;
+    case "issue-token":
+      // The token itself has nowhere to go here: this interface is a screen of
+      // one sentence, and a credential shown on it would be a credential in
+      // whatever the terminal keeps of what it has drawn.
+      return (await issueToken(context, action.username)).message;
+    case "create-project":
+      return (
+        await createProjectWithRepository(context, {
+          name: action.name,
+          owner: action.owner,
+        })
+      ).message;
+    case "restart-loreserver":
+      return en.action.loreserverNotOurs;
+    case "quit":
+    case "refresh":
+      // Neither reaches here: the interface acts on both itself.
+      return "";
+  }
+}
 
 export interface InterfaceOptions {
   readonly root: string;
@@ -95,10 +156,7 @@ export async function terminalInterface(
           publisher.request();
           return publisher.gather();
         },
-        // The sentence, which is the whole of what this interface shows. An
-        // action that also produced a credential has nowhere to put one here:
-        // the two the operator's page uses for that are not on any key.
-        perform: async (action) => (await perform(publisher.context, action)).message,
+        perform: (action) => perform(publisher.context, action),
         subscribe: (listen) => publisher.subscribe(listen),
       });
     } finally {
