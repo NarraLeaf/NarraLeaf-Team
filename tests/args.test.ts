@@ -61,17 +61,8 @@ describe("parseArgs, up", () => {
       // never told to demand a token and Team is never asked about anybody, so
       // a command line that says nothing about it has to mean the safe one.
       identity: true,
-      // The web interface is not, and for a reason that does not apply to
-      // identity: everything else `up` starts is something another program
-      // needs, and switching a page on by default would widen what an existing
-      // deployment answers on its public port without anybody deciding to.
-      web: false,
       overrides: {},
     });
-  });
-
-  it("serves the web interface when it is asked for", () => {
-    expect(parseArgs(["up", "--root", "/srv/team", "--web"])).toMatchObject({ web: true });
   });
 
   it("switches identity off when it is deliberately given up", () => {

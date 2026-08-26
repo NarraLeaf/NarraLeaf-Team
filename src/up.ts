@@ -50,10 +50,8 @@ import { ViewPublisher } from "./publisher.js";
 import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
 import { trustCommandFor } from "./tls/trust.js";
 import { VERSION } from "./version.js";
-import { OPERATOR_ROLE, type ApiOptions } from "./web/api.js";
 import { webHandler } from "./web/router.js";
 import { studioCapabilities, type StudioApiOptions } from "./web/studio.js";
-import { SessionStore } from "./web/sessions.js";
 
 export interface UpOptions extends LoreserverPorts {
   /** The storage root; everything Team writes goes underneath it. */
@@ -73,17 +71,6 @@ export interface UpOptions extends LoreserverPorts {
    * tokens that do not.
    */
   readonly overrides?: Partial<IdentityConfig>;
-  /**
-   * True to serve the web interface on the TLS listener beside the auth
-   * endpoint.
-   *
-   * Off unless asked for. Everything else this command starts is something
-   * loreserver or a Studio installation needs; the web interface is something a
-   * person opens, and switching one on by default would widen what an existing
-   * deployment answers on its public port without anybody deciding to. The
-   * discovery document is served either way.
-   */
-  readonly web?: boolean;
   /**
    * Aborted to bring the command down. Without one, `up` runs until
    * loreserver can no longer be kept alive.
@@ -266,14 +253,10 @@ export async function up(
       stderr(`nlteam: ${lore.withoutAuthority}\n`);
     }
 
-    // The repositories are read beside both interfaces rather than in front of
-    // either, and they are read whether or not the operator's page is switched
-    // on. **That switch decides who may look at this server, not what this
-    // server knows about itself.** A Studio installation asks what a project's
-    // history says over the API below, which is served before the switch for
-    // exactly this reason — and a reader that only ran with --web would leave
-    // every one of those answers blank on the ordinary deployment, which has no
-    // page and no operator sitting in front of one.
+    // The repositories are read beside whatever is answering questions about
+    // them rather than in front of it. A Studio installation asks what a
+    // project's history says over the API below, and an answer that waited for
+    // a clone would be an answer that arrived after the person had gone.
     const views = new ViewPublisher({
       root: options.root,
       database,
@@ -282,7 +265,7 @@ export async function up(
       fingerprint: certificates.authority.fingerprint256,
       // The one place a repository Team cannot read is said out loud. It is not
       // an error and nothing waits on it: `up` goes on to start loreserver
-      // whatever this says, and every screen goes on drawing the project as
+      // whatever this says, and every answer goes on reporting the project as
       // unread. What it stops is a reader that has never once worked being
       // indistinguishable from one that has not finished its first clone.
       onReadability: (line) => stdout(`${line}\n`),
@@ -296,29 +279,11 @@ export async function up(
       },
     });
     publisher = views;
-    // Made here because both interfaces below are handed what it holds, and
-    // started further down, once loreserver is answering. Reading before then
+    // Made here because what it holds is handed to the API below, and started
+    // further down, once loreserver is answering. Reading before then
     // is a pass that fails for the one reason nobody needs telling about — the
     // server it reads through has not started yet — and the sentence it
     // produced said so about every project on every start.
-
-    // The web interface goes on that same listener rather than a port of its
-    // own, so that the certificate an operator has already been asked to trust
-    // is the one their browser is asked about. src/web/router.ts sets out what
-    // else that decides. It reads the same views the terminal interface draws
-    // and carries out the same actions, through src/publisher.ts and
-    // src/actions.ts, so there is no second account of this server anywhere.
-    let api: ApiOptions | undefined;
-    if (options.web === true) {
-      api = {
-        context: views.context,
-        sessions: new SessionStore(),
-        gather: () => views.gather(),
-        request: () => views.request(),
-        subscribe: (listen) => views.subscribe(listen),
-        log: (line) => stdout(`${line}\n`),
-      };
-    }
 
     const studio: StudioApiOptions = {
       database,
@@ -388,10 +353,7 @@ export async function up(
       anyInterface: true,
       portOption: "--auth-tls-port",
       tls: { cert: certificates.leafCertPem, key: certificates.leafKeyPem },
-      http1: webHandler(() => discoveryDocument(discovery), {
-        ...(api === undefined ? {} : { api }),
-        studio,
-      }),
+      http1: webHandler(() => discoveryDocument(discovery), { studio }),
       upgrade: (request, socket, head) => {
         if (team?.handleUpgrade(request, socket, head) === true) {
           return;
@@ -405,14 +367,6 @@ export async function up(
       `auth endpoint on port ${config.authTlsPort} of every interface, over TLS, ` +
         `reached as ${authUrl(config)}\n`,
     );
-    if (api === undefined) {
-      stdout("the web interface is off; --web serves it on that same port\n");
-    } else {
-      stdout(
-        `the web interface is on ${authUrl(config)}, for accounts in the ` +
-          `${OPERATOR_ROLE} group\n`,
-      );
-    }
     stdout(`its certificate authority is ${certificates.authority.fingerprint256}\n`);
     stdout(
       "a machine that has not trusted this server cannot connect: compare\n" +

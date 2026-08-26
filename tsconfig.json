@@ -30,9 +30,5 @@
   // `scripts` holds one TypeScript file - the socket endpoint a real client is driven
   // at - and it is checked here rather than left out. The rest of that directory is
   // JavaScript, which this configuration does not look at either way.
-  "include": ["src", "tests", "scripts", "vitest.config.ts"],
-
-  // The browser half is checked by tsconfig.web.json instead, which is the only
-  // place the DOM exists. See the note at the top of that file.
-  "exclude": ["src/web/client"]
+  "include": ["src", "tests", "scripts", "vitest.config.ts"]
 }

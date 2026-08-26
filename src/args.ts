@@ -73,8 +73,6 @@ export type Invocation =
        * the one that needs an extra word on the command line.
        */
       readonly identity: boolean;
-      /** True to serve the web interface on the TLS listener as well. */
-      readonly web: boolean;
       readonly overrides: IdentityOverrides;
     }
   /** Make the first account, on a server that has none. */
@@ -464,7 +462,7 @@ function parseUp(argv: readonly string[]): Invocation {
     // `--identity` is still taken and means what it has always meant. It now
     // asks for what happens anyway, which is what keeps an operator's existing
     // command line working rather than becoming an unknown argument.
-    ["--identity", "--no-identity", "--web"],
+    ["--identity", "--no-identity"],
     IDENTITY_LIST_OPTIONS,
   );
   if (result.kind !== "tokens") {
@@ -530,7 +528,6 @@ function parseUp(argv: readonly string[]): Invocation {
     dataPort,
     healthPort,
     identity: !tokens.flags.has("--no-identity"),
-    web: tokens.flags.has("--web"),
     overrides,
   };
 }

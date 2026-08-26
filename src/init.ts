@@ -96,8 +96,7 @@ export async function init(
     stdout(`created ${user.username} (${user.id})\n`);
     stdout(`groups: ${user.groups.join(", ")}\n`);
     stdout(
-      `It opens the operator's view: nlteam --root ${layout.root} in a terminal, and the ` +
-        "web interface wherever up --web is serving one.\n",
+      `It opens the operator's view: nlteam --root ${layout.root} in a terminal.\n`,
     );
     return 0;
   } catch (error) {
