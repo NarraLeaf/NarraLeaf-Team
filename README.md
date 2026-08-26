@@ -3,8 +3,11 @@
 A self-hosted project server for teams working in NarraLeaf Studio. One
 organisation runs one Team server on its own machine; there is no hosted service
 to sign up for. It supervises `loreserver`, hands out the identity Studio signs
-in with, holds the projects and answers for them, and shows an operator all of
-it — in a terminal, or in a browser.
+in with, holds the projects and answers for them.
+
+It is a service with no interface of its own. Authors reach it from NarraLeaf
+Studio; whoever runs it administers it with the `nlteam` commands below, over a
+terminal on the machine it is on.
 
 - **[Running a Team server](docs/operations.md)** — the ports, the certificate,
   and every command in full.
@@ -44,7 +47,7 @@ command takes it.
 **1. Start it.**
 
 ```sh
-nlteam up --root /srv/team --hostname team.example.com --web
+nlteam up --root /srv/team --hostname team.example.com
 ```
 
 `up` installs `loreserver`, configures it, starts it, serves the endpoint
@@ -57,7 +60,6 @@ Studio signs in at, and runs until it is interrupted.
 - `--hostname` is a name people will reach this server by. It goes into the
   certificate **and into the audience of every token**, so a server told none
   issues tokens that work on its own machine and nowhere else. Repeatable.
-- `--web` serves the operator's view to a browser as well. Off unless asked for.
 
 `up` runs in the foreground, so the rest of these are typed in a second
 terminal.
@@ -114,14 +116,13 @@ between programs on the server machine and are bound to the loopback.
 | Command | What it does |
 | --- | --- |
 | `nlteam up` | Install and run `loreserver`, and serve the sign-in endpoint |
-| `nlteam` | Open the terminal interface |
 | `nlteam trust` | Show this server's certificate authority, or install it |
 | `nlteam init <name>` | Make the first account, on a server with none |
 | `nlteam user create <name>` | Make an account |
 | `nlteam user list` | List the accounts |
 | `nlteam user disable\|enable <name>` | Stop an account, or let it back in |
 | `nlteam user revoke-tokens <name>` | Refuse every token it already holds |
-| `nlteam user grant-admin\|revoke-admin <name>` | Let an account open the operator's view, or stop it |
+| `nlteam user grant-admin\|revoke-admin <name>` | Let an account administer this server, or stop it |
 | `nlteam token mint <name>` | Sign a token for an account |
 | `nlteam project create <name>` | Create a repository and record it |
 | `nlteam project list` | List the projects |
@@ -130,20 +131,6 @@ between programs on the server machine and are bound to the loopback.
 
 `nlteam --help` prints the options for each.
 [operations.md](docs/operations.md) is the same ground at length.
-
-## The operator's view
-
-```sh
-nlteam --root /srv/team
-```
-
-The accounts, the projects, the decisions the server has made, and what is
-inside each project — its history, and as much of the project file as Team
-understands. A bare `nlteam` at a terminal opens the same thing on `NLTEAM_ROOT`,
-or on the working directory when that already holds a server.
-
-`up --web` serves it to a browser too, at the address the server prints when it
-starts, for accounts in the `admin` group.
 
 ## Development
 
@@ -164,15 +151,16 @@ npm link            # puts this checkout's nlteam on the path
 
 `npm test` downloads nothing and contacts nothing outside the machine; the tests
 that want a real `loreserver` are skipped unless told where they may install
-one. [internals.md](docs/internals.md) covers that, the interface driver, and
-what is written here rather than depended on.
+one. [internals.md](docs/internals.md) covers that and what is written here
+rather than depended on.
 
 ## Status
 
 Team supervises `loreserver`, issues identity, holds the projects, answers the
-permission question behind every repository access, and serves both interfaces
-plus the API Studio lists and creates projects through. Upgrading between pinned
-`loreserver` versions is not implemented yet.
+permission question behind every repository access, and serves the API Studio
+lists and creates projects through. Administering a server from Studio, rather
+than from a terminal on the machine it runs on, is not implemented yet, and
+neither is upgrading between pinned `loreserver` versions.
 
 ## License
 

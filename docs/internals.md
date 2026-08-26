@@ -5,8 +5,8 @@ Why the parts are the shape they are. None of it is needed to run a Team server 
 
 ## Reading what is inside a project
 
-The interface shows a project's revision history and what its project file says.
-Neither is in Team's database: both are inside the repository, and Team reads them
+Team answers for a project's revision history and for what its project file says.
+Neither is in its database: both are inside the repository, and Team reads them
 the same way a Studio installation on somebody else's machine does — as a client,
 over the network, against its own `loreserver`.
 
@@ -27,10 +27,10 @@ first time, 90 ms to refresh, and 5.7 KB of cache.
 in part, costs the time of the next read and nothing else. Nothing is kept there
 that is not also in the repository it came from.
 
-Reading happens beside the interface rather than in front of it. The screen is
-drawn from the database at once and each project's history and file replace the
-word unknown as they arrive, so a slow or stopped `loreserver` costs freshness
-and nothing else.
+Reading happens beside whatever answers a question rather than in front of it.
+What is in the database is answered at once, and each project's history and file
+replace the word unknown as they arrive, so a slow or stopped `loreserver` costs
+freshness and nothing else.
 
 What Team takes from a project file is its title, its stage size, how many scenes
 there are, and how many assets of each kind and how large. It reads no further:
@@ -156,7 +156,7 @@ newer one finds a capability name — `session`, `comments`, `clients`, `live`,
 literally. Nothing is ever discovered by getting a 404.
 
 **One listener, one certificate.** The same reason the discovery document and
-the operator's page are on the auth endpoint's port: an operator compares a
+the API Studio talks to are on the auth endpoint's port: an operator compares a
 fingerprint once, and everything a Studio installation says to this server
 arrives over the connection whose certificate was compared. That the `upgrade`
 event fires at all on an `http2.createSecureServer` with `allowHTTP1` is
@@ -255,48 +255,30 @@ with `overlay.put`. ⚠ **A missing head is "not read yet", never "no
 revisions"**: repositories are read on a loop, and a client that confused the two
 would mark every record stale for a minute after a restart.
 
-## The interface is a second host, not a second implementation
+## One implementation, whatever asks for it
 
-The interface carries nothing out itself. A key that changes something names
-what it wants, and that is met by calling exactly what the command of the same
-name calls: `d` reaches `disableUser`, `x` reaches `revokeUserTokens`, `k`
-reaches `KeyStore.rotate`. What each one answers with says the same thing the
-command prints, including how far it reaches — `x` says that a connection
-already open may last until its repository token expires, because "every token"
-is otherwise read as including a session somebody has open.
+Every operator's verb is a function in `src/operations.ts`, and each one calls
+exactly what the command of the same name calls: disabling an account reaches
+`disableUser`, refusing the tokens it holds reaches `revokeUserTokens`, rotating
+a key reaches `KeyStore.rotate`. What each one answers with says the same thing
+the command prints, including how far it reaches — revoking says that a
+connection already open may last until its repository token expires, because
+"every token" is otherwise read as including a session somebody has open.
 
-Three keys name a command instead of doing anything, and that is deliberate:
-`n`, `g` and `r` need a project's name or an account to grant to, which the
-terminal interface has no way to ask for. Opening a window that pretended to do
-it would not be honest.
+They are functions rather than a dispatch envelope over a request type, so that
+whatever comes to need them next calls them the way the commands do. Restarting
+`loreserver` is not among them: it belongs to the `nlteam up` that started it,
+and nothing else can honestly offer to.
 
-There are two hosts now and still one implementation. Naming what is wanted is
-an `Action`, carrying it out is `perform` in `src/actions.ts`, and both
-interfaces send the first and call the second: a button in a browser reaches
-`disableUser` by the same path `d` does, and is answered with the same sentence.
-The browser can do the three the terminal names a command for, because a page
-has somewhere to type a project's name and choose an account — the difference is
-what each interface can ask for, not what each one is allowed to do. Restarting
-`loreserver` is refused in both, in the same words, because it belongs to the
-`nlteam up` that started it.
-
-They read from one place as well. `src/publisher.ts` holds the repository
-readings, gathers a view when they land — once per short window, however many
-arrived — and hands it to whoever subscribed. A terminal redraws from it, a
-browser is sent it as a server-sent event, and neither can be looking at a
-different server from the other. `src/web/api.ts` decides nothing beyond who is
-at the door: it takes apart the body of a request into an `Action`, refuses
-anything that is not one, and passes it on.
-
-Everything drawn arrives in one read-only structure, `src/tui/teamview.ts`,
-gathered by `src/view.ts`. Nothing under `src/tui/` opens the database or a
-repository, and there are assertions that say so. What Team cannot work out
-arrives absent and is drawn as "unknown" rather than as an error or a zero — a
-project written by a newer Studio shows the parts Team understands and the word
-unknown for the rest, which is what keeps Team from having to be upgraded in step
-with Studio. Absent and zero are different facts and are drawn differently: a
-project with no revisions reads `0`, `—` and `never`, one nobody has counted
-reads `?` and `unknown`.
+What a whole server looks like is one read-only structure, `src/teamview.ts`,
+gathered by `src/view.ts` from the database, the disk and whatever the
+repositories last said. Gathering one measures a storage root, so it happens
+when something asks and not on a timer. What Team cannot work out arrives absent
+and is reported as "unknown" rather than as an error or a zero — a project
+written by a newer Studio shows the parts Team understands and the word unknown
+for the rest, which is what keeps Team from having to be upgraded in step with
+Studio. Absent and zero are different facts: a project with no revisions is
+`0` and `never`, one nobody has counted is unknown.
 
 ## The languages are a shape, not a lookup
 
@@ -305,36 +287,29 @@ field, and a message that needs a value is a function of exactly the values it
 needs:
 
 ```ts
-granted: ({ username, level, project }) =>
-  `${username} can ${level} ${project}, from their next request`,
+accountCreated: ({ username, group }) =>
+  `created ${username} in ${group}; issue a token for them to sign in with`,
 ```
 
 So a catalogue missing a message does not compile, and one that forgot a name
-inside a sentence does not compile either. The alternative — `t("action.granted",
+inside a sentence does not compile either. The alternative — `t("action.accountCreated",
 {...})` against a bag of strings — moves both of those to the moment somebody in
-Tokyo presses a button. There is no template syntax, no interpolation format and
+Tokyo reads it. There is no template syntax, no interpolation format and
 no framework; `messagesFor(locale)` hands back an object and the caller reads
 fields off it.
 
-Both halves import the catalogues. The page draws from them, and `perform`
-composes the sentence an action answers with from them, which is what makes a
-Chinese page Chinese rather than a Chinese frame around English sentences.
-`src/actions.ts` and the format helpers take a language and default to English,
-so the terminal interface passes nothing and gets exactly the words it always
-had. Only `src/i18n/errors.ts` is server-only: it translates the errors an
-operator can cause and can act on, once, at the API boundary, rather than
-threading a language through every module that can fail. Anything it does not
-know falls through to the error's own English message, which is the honest
-answer — a sentence in the wrong language beats a sentence that says nothing.
+What is in them is what an operator's verb answers with and what a duration is
+written in, and nothing else: `src/operations.ts` and `src/duration.ts` take a
+language and default to English, which is what the commands and the log get.
+A catalogue holds no sentence nothing reads — three languages of a message that
+has no caller is three translations to keep true for nobody.
 
-The catalogues are bundled, not fetched. On the server that is the only thing
-they could be, for the reason the pages themselves are inlined. In the browser
-it is a decision: three languages are a few kilobytes, and having them all is
-what makes switching one a redraw rather than a page load in the middle of
-somebody's half-typed form. Nothing is refetched on a switch, because everything
-on screen is drawn from the view the page already holds — including the two
-lifetimes, which is why `SettingView` carries the number its value was written
-from beside the value.
+The catalogues are bundled rather than read from disk, which is the only thing
+they could be: the executable carries its own version number for the same
+reason, and a language it had to find on disk would be the one thing about it
+that could go missing once it had been copied somewhere. `SettingView` carries
+the number a lifetime was written from beside the words, so that a reader
+wanting the number does not have to take words in an unknown language apart.
 
 The rule for what is *not* translated is in the tests and worth restating: what
 Team recorded stays as Team recorded it. Usernames, project names, groups, key
@@ -342,7 +317,7 @@ ids, the label a settings row is found by on the way back, and the detail a
 decision was written down with are data. `tests/i18n.test.ts` walks every
 catalogue against English, calls every sentence in it, and checks that the names
 handed in come back out — the type checker can promise a message exists and
-cannot promise it says anything.
+cannot promise it says anything. All three change together or that test fails.
 
 ## What the build produces
 
@@ -351,29 +326,14 @@ with a `#!/usr/bin/env node` line. The version number is written into the bundle
 as it is built, so the finished file does not depend on a `package.json` sitting
 beside it.
 
-It is two passes, in this order. The browser half of the web interface —
-`src/web/client` — is built first, minified because it crosses a network, and
-into memory rather than onto disk. Then the executable is built around it, with
-the script and the styles substituted into `src/web/assets.ts` as string
-literals, beside the page and the icon which are written by hand there. So
-`dist/nlteam.js` carries its own pages the way it already carries its own
-version number: there is no state in which the server is running and its
-interface is missing, half-built or left over from an older build, and the
-server never has to work out where it is on disk to answer a request — which is
-the thing that breaks once a file has been copied, symlinked or put on a `PATH`.
+It is one pass. The server never has to work out where it is on disk to answer
+for itself, which is the thing that breaks once a file has been copied,
+symlinked or put on a `PATH`. `npm run dev` is the same build, watched. A test
+run does not bundle at all, so `vitest.config.ts` substitutes the version the
+same way from the same place, or nothing that reaches `src/version.ts` could
+run.
 
-`npm run dev` watches both. A change to a page cannot be picked up by an
-incremental rebuild of the executable, since its copy of the pages is a literal,
-so that watch throws the server's build context away and makes another; a change
-to anything else is the ordinary incremental rebuild it always was.
-
-A test run builds neither, so `vitest.config.ts` substitutes a byte of each in
-place of the real ones. That is enough for the router's tests to exercise
-serving a file, an entity tag and a 304 without pretending a test run has an
-interface in it, and the router says so in a sentence — rather than serving an
-empty page — when it finds it has no interface to serve.
-
-It is no longer a self-contained file, and it cannot be one. Reading a
+It is not a self-contained file, and it cannot be one. Reading a
 repository needs `koffi`, a native addon, and `lorelib`, a 29.5 MB shared
 library that arrives as one of four platform packages — Epic publish one per
 platform, each declaring the `os` and `cpu` it is for, so installing puts
@@ -406,9 +366,9 @@ that cannot reach GitHub says so once and carries on.
 ## What is written here, and what is not
 
 
-The runtime dependencies are Ink and React for the terminal interface, and
-`koffi` with one `@lore-vcs/sdk-*` platform package for reading a repository.
-Everything else is written here. That includes the binding to `lorelib`:
+The only runtime dependency is `koffi`, with one `@lore-vcs/sdk-*` platform
+package, and both are for reading a repository. Everything else is written
+here. That includes the binding to `lorelib`:
 `src/lore/` is the slice of Epic's C ABI Team uses, a loader, an event decoder
 and a dozen verbs, none of which writes anything. It includes gRPC, which Team
 both serves and calls: `src/grpc/` is the protocol buffer codec, the framing, a
@@ -421,40 +381,15 @@ a protocol whose every message is JSON. And it includes X.509:
 `src/tls/` writes the DER of a certificate a byte at a time, and `node:crypto`
 signs it.
 
-The browser half is written here too, and carries no framework at all. What it
-draws is five lists and a form; a framework would be a hundred and forty
-kilobytes over the network and a second way of writing everything. `h` in
-`src/web/client/dom.ts` is the whole of the abstraction, and drawing is a whole
-redraw — the view arrives complete, so working out what changed would mean
-keeping a second copy of it to compare against. The one thing a redraw would
-lose is where somebody was typing, and `renderInto` carries that across by name.
-The screens share the view type and the formatters with the terminal interface,
-which is why "2h ago" means the same thing on both and neither reads a clock of
-its own. It is checked by `tsconfig.web.json`, the one place the DOM exists, and
-`npm run typecheck` runs both configurations.
-
-The three languages the web interface is written in are written here too, and
-carry no library either: `src/i18n/` is one TypeScript interface and three
-objects that fill it in, which is what makes a missing message a build failure
-rather than a blank on somebody's screen. See
+The three languages Team says anything in are written here too, and carry no
+library either: `src/i18n/` is one TypeScript interface and three objects that
+fill it in, which is what makes a missing message a build failure rather than a
+blank in front of somebody. See
 [The languages are a shape](#the-languages-are-a-shape-not-a-lookup).
 
-## Tests and the interface driver
+## Tests and the endpoint driver
 
-`scripts/tui-drive.mjs` runs the built executable's interface through a real
-pseudo-terminal and prints the grid a person would be looking at, one frame per
-key. It is a mechanical driver: it captures, it does not judge. It needs
-`node-pty` and `@xterm/headless`, which are not dependencies of this package —
-install them for a checkout with
-`npm install --no-save --no-package-lock node-pty @xterm/headless`, and it says
-so if they are missing.
-
-```sh
-node scripts/build.mjs
-node scripts/tui-drive.mjs --root /srv/team --columns 120 --rows 40 --keys 2,down,x
-```
-
-`scripts/socket-endpoint.ts` is the same kind of thing for the Team protocol. The
+`scripts/socket-endpoint.ts` is a listener to point a real client at. The
 suites here drive a session with node's own WebSocket client, which proves the
 server against an implementation nobody here wrote. What no suite in this
 repository can prove is the join — Studio's client, its certificate handling and

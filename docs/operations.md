@@ -73,7 +73,7 @@ interrupted, restarting `loreserver` if it exits, and stops it on the way out.
 | 41339 | `loreserver` health      | HTTP                    | No                                 |
 | 41400 | Team's endpoint and JWKS  | HTTP/1.1                | No                                 |
 | 41401 | Team's authorization service, in the clear | gRPC over plain HTTP/2 | **No, and it must not be** — see below |
-| 41402 | Team's auth endpoint, the discovery document, and the web interface when it is on | gRPC over TLS, with HTTP/1.1 beside it | Yes — this is where people sign in |
+| 41402 | Team's auth endpoint, the discovery document, and the API Studio talks to | gRPC over TLS, with HTTP/1.1 beside it | Yes — this is where people sign in |
 
 Only 41337 and 41402 belong on a network a collaborator can reach. The other
 three are between programs on the Team server machine, and `up` binds them to the
@@ -316,8 +316,8 @@ GET /.well-known/nlteam
 }
 ```
 
-It is served to whoever asks, and whether or not the web interface is switched
-on. Nothing in it is secret: it is what an operator would otherwise have written
+It is served to whoever asks, before anybody has signed in. Nothing in it is
+secret: it is what an operator would otherwise have written
 in a chat message, and every field of it is checkable against the token that
 arrives later.
 
@@ -357,8 +357,8 @@ nlteam init ada --root /srv/team < password.txt
 
 `init` works only while the server has no accounts at all, and refuses from the
 moment it has one. The account it makes joins the `admin` group — it is the only
-account there is, and one that could not open the operator's view over its own
-server would leave the operator needing a second command to undo the first.
+account there is, and one that could not administer its own server would leave
+the operator needing a second command to undo the first.
 `up` says this line, and nothing else about accounts, while there is nobody.
 
 Everybody after that is made by somebody who is already here:
@@ -370,7 +370,7 @@ nlteam user disable bob --root /srv/team
 ```
 
 `--role` is the group the account joins, `member` unless it says otherwise, and
-only accounts in `admin` may open the web interface. What reaches the person is
+only accounts in `admin` may administer this server. What reaches the person is
 not the account but a token minted for it — see "Tokens and taking access away"
 below, and hand them that together with this server's address.
 
@@ -459,8 +459,7 @@ bare number of seconds. `server.name` takes the name itself, which is what a
 person reads in Studio rather than an address. `list` says of each setting whether it is the default or
 something somebody chose here, because those are different facts — a Team server that
 never chose follows a later version of Team if the default moves, and one that
-chose keeps its number. A setting can be edited from the terminal interface as
-well, and both write the same row.
+chose keeps its number.
 
 Taking access away is two commands, and they are not the same one:
 
@@ -537,9 +536,8 @@ GET  /api/studio/v1/projects     what this server holds, with the remote for eac
 POST /api/studio/v1/projects     {"name": "...", "description": "...", "repositoryId": "..."}
 ```
 
-Both are served whether or not the web interface is switched on, for the reason
-the discovery document is: the interface is a page an operator opens, and this
-is how every author finds their work. A repository created any other way —
+Both are served beside the discovery document, and for the same reason: this is
+how every author finds their work. A repository created any other way —
 `lore` itself, an older Studio — is recorded when `loreserver` announces it,
 with whoever made it as its creator, so it does not become a repository nobody
 can open.
@@ -552,10 +550,10 @@ machine and they are publishing it: Team records the row under that id and asks
 author pushes. It is thirty-two hexadecimal characters, and one that is already
 a project here is refused with `409` rather than taken over.
 
-## Who may open the operator's view
+## Who may administer this server
 
-The `admin` group, and it means nothing else. It is who may sign in to the web
-interface, manage the accounts, and put somebody else in the group.
+The `admin` group, and it means nothing else. It is who may manage the accounts,
+the projects and the settings, and put somebody else in the group.
 
 ```sh
 nlteam user grant-admin bob --root /srv/team
@@ -564,182 +562,3 @@ nlteam user revoke-admin bob --root /srv/team
 
 `nlteam init` puts the first account in it. The last account in it cannot be
 taken out: a server with no admin has nobody who could put one back.
-
-## The terminal interface
-
-```sh
-nlteam --root /srv/team
-```
-
-A bare `nlteam` at a terminal opens the same thing on `NLTEAM_ROOT`, or on the
-working directory when that already holds a Team server. Piped or redirected it prints
-the usage instead: `nlteam > notes` is asking for text, and an interface would
-give it a screenful of escape sequences. It draws on the alternate screen, so
-leaving it gives back the scrollback that was there before.
-
-Four surfaces, reached with `1` to `4` or `tab`:
-
-- **Dashboard.** Whether `loreserver` is up, whether its health check answers,
-  what the store holds, and the two addresses and the fingerprint a new machine
-  has to be told. Then the counts, the quick actions, and the last few
-  decisions.
-- **Users.** Every account with its role, its state and what it can reach.
-  `⏎` opens one, `d` disables or enables it, `x` refuses the tokens it already
-  holds, `i` makes an invitation and prints the code once.
-- **Projects.** Every project with its owner, who may reach it and how far, how
-  many revisions it has and how big it is. `⏎` opens one, which adds what its
-  project file says.
-- **Settings.** Four groups: the two token lifetimes, the identity settings,
-  `loreserver`'s, and the authority. A row Team has nowhere to write is marked
-  with `·` and pressing `⏎` on it does nothing — an editor over a value that
-  would be thrown away is worse than no editor, because it looks like it
-  worked.
-
-The log is not a fifth surface. `l` opens it over whatever is on screen,
-because it is read while something else is being looked at. `c` shows the
-connection details, `?` shows every key, `esc` closes the window on top, and
-`q` leaves.
-
-A detail panel changes shape with the width, and nothing is dropped as it
-narrows: from 150 columns it sits beside its list, between 100 and 149 it is a
-window over the middle, and below 100 it takes the body.
-
-Every key that changes something calls exactly what the command of the same name
-calls — see
-[The interface is a second host](internals.md#the-interface-is-a-second-host-not-a-second-implementation).
-
-## The web interface
-
-```sh
-nlteam up --root /srv/team --web
-```
-
-The same operator's view, in a browser, at the address the server printed when
-it started — `https://team.example.lan:41402/`. It is off unless it is asked
-for. Everything else `up` starts is something `loreserver` or a Studio
-installation needs; a page is something a person opens, and switching one on by
-default would widen what an existing deployment answers on its public port
-without anybody deciding to.
-
-It is served on the listener the auth endpoint already uses, rather than on a
-port of its own. One listener means one certificate, and therefore one decision
-to trust: a machine that has run `nlteam trust --install` opens the interface
-with nothing further to approve, and a machine that has not gets its browser's
-warning about the same authority whose fingerprint the server prints at
-startup — the one to compare, over something other than the connection in
-front of you. A second port would have been a second such conversation, and a
-page served over plain HTTP beside it would be a password typed into an
-unauthenticated connection.
-
-**Only accounts in the `admin` group may sign in.** This is the operator's view:
-it shows every account, every project and every decision the server has made,
-with no notion of looking at one's own row. A member who signed in would either
-see all of that or see a second, narrower interface that would have to be
-designed, tested and kept true. A wrong password and an account that does not
-exist are answered with one sentence, as `nlteam token mint` is, so nobody
-learns which accounts exist; a member whose password was right is told plainly
-that the interface is for the `admin` group, because there is nothing left to
-hide from somebody who has just proved who they are. The account `nlteam init`
-makes on a server with none is in that group; anybody else is put in it with
-`nlteam user grant-admin`, or made in it from the page.
-
-Five surfaces — Overview, Projects, Members, Decisions and Settings — drawn from
-the same view the terminal interface draws, and kept current by a stream the
-server pushes each new view down rather than by the page asking again every few
-seconds. What Team could not work out reads "unknown" here for the same reason
-it does there.
-
-What the terminal interface names a command for, this can do: a browser has
-somewhere to type into, so creating a project, disabling an account, refusing
-the tokens one holds and changing a setting are carried out on the page.
-
-Two of them are what an operator otherwise had to be at the server for. **New
-account** on the Members screen makes one the way `nlteam user create` does —
-a username, a display name, an address, a password, and whether it joins the
-`admin` group — and **Issue token** beside each account mints the token
-`nlteam token mint` prints. That token is shown once, on the screen that asked
-for it, and is in no log and no file: this server keeps no copy, so one nobody
-copied is one to ask for again.
-
-Restarting `loreserver` is still not among them — it belongs to the `nlteam up`
-that started it.
-
-### Being signed in
-
-What the browser holds is 32 random bytes that mean something to this one
-running server and to nothing else. It is deliberately not a minted token: a
-stolen cookie is then a cookie, not a working credential at the data endpoint.
-Only a hash of it is kept, and it is kept in memory, so **restarting Team signs
-everybody out** — the operators of a server are a handful of people, and the
-alternative is a table of sessions that outlives every process that could have
-explained them.
-
-A session lasts as long as the sign-in token lifetime on the settings surface,
-read at each sign-in rather than fixed at start, so shortening that setting has
-shortened this too. Taking access away reaches the browser on the next request
-it makes, not when its cookie expires:
-
-- `nlteam user disable ada` — the page stops answering and returns to the
-  sign-in form.
-- `nlteam user revoke-tokens ada` — the same, because the session records the
-  account's token epoch when it opened and is refused from a lower one, exactly
-  as a token from a lower epoch is.
-- Taking an account out of the `admin` group — checked on every request, not
-  only at the door.
-
-The cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and `Path=/`. There are no
-CORS headers on any route and no forms that post anywhere, and every request
-that changes something must arrive as `application/json` with an `origin` that
-matches the host it was asked for. Between them, that is the whole of the
-cross-site story.
-
-The page loads nothing from anywhere. Its content security policy is
-`default-src 'none'` with the script, the styles and the one icon named as
-`'self'`, so there is no font, no analytics script and no image that could be
-fetched from outside — a self-hosted server on a private network is exactly
-where a page that reached outward would be reporting on the deployment. All four
-files are carried inside `dist/nlteam.js` itself; nothing is read from disk to
-answer a request. See
-[What the build produces](internals.md#what-the-build-produces).
-
-A server started without `--web` answers the interface's addresses with 503 and
-the flag to start it with, rather than a 404: the page is switched off, not
-absent, and an operator reading that in a browser needs the flag and not a
-puzzle. The document at `/.well-known/nlteam` is served either way — see
-[The address a server is found at](#the-address-a-server-is-found-at).
-
-### The language it is read in
-
-English, 简体中文 and 日本語. The list is at the foot of the rail, and on the
-sign-in page as well — somebody who cannot read the form is the one person who
-most needs to change it, and the rail they would otherwise change it from is
-behind the form. Each language is written in itself, because a person looking
-for their own is looking for a word they can read.
-
-Which one a page opens in, in this order: the choice this browser made before,
-the browser's own `Accept-Language`, and English. A choice beats a setting —
-somebody reading a Japanese page on a machine that came set to English chose
-that, and reopening the tab must not undo it. The choice is kept in the
-browser's local storage and never leaves it; it is not part of the session, so
-two tabs may be open in two languages and signing out does not forget it.
-
-**The sentences come from the server in the language the page asked for.** That
-is the point of the exercise: the answer to an action — which key is signing
-from now on, what revoking somebody's tokens does and does not reach, why
-loreserver refused a project — is the part worth reading, and a Chinese page
-with English sentences in the middle of it would have translated only the
-frame. Each request names its language in an `x-nlteam-language` header, and
-`Accept-Language` is the fallback for the few answers that come before a page is
-running, such as the 404 and the note that the interface is switched off.
-
-What is **not** translated is what Team recorded. A username, a project's name,
-a group like `admin`, a signing key's `kid`, a settings row's identity, and the
-`detail` a decision was written down with all appear exactly as the database
-holds them. A page that said 成员 where an invitation says `member` would be
-describing an account that does not exist, and a translated audit trail would
-not match the log beside it. Dates stay `2026-07-02` for the same reason: it is
-the one thing on screen somebody holds up against a filename.
-
-The terminal interface, the commands and everything in the log stay English.
-There is one place a language is chosen, and it is a browser saying which one it
-wants.
