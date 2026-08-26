@@ -27,7 +27,12 @@ import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
 import { mintToken } from "../src/identity/tokens.js";
 import { createUser, disableUser, requireUser } from "../src/identity/users.js";
-import { createProject, forgetProject, newProjectId } from "../src/projects/registry.js";
+import {
+  createProject,
+  forgetProject,
+  listProjects,
+  newProjectId,
+} from "../src/projects/registry.js";
 import { createTeamSocket, type TeamSocket } from "../src/team/endpoint.js";
 import {
   TEAM_METHODS,
@@ -551,6 +556,129 @@ describe("a project's history over the socket", () => {
     expect((await client.call(TEAM_METHODS.projectsHistory, { project: "nope" })).code).toBe(
       "not-found",
     );
+  });
+});
+
+describe("making a project over the socket", () => {
+  it("adopts a repository the author already has, and tells whoever holds the list", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    const repositoryId = newProjectId();
+
+    // Somebody else watching the list, on a connection that did not make the
+    // write - the one thing a request-and-response API could never show.
+    const watcher = await team.connect(team.tokenFor("ada"));
+    await watcher.send("subscribe", { topic: TOPIC_PROJECTS });
+
+    const maker = await team.connect(team.tokenFor("ada"));
+    const answer = await maker.value(TEAM_METHODS.projectsCreate, {
+      name: "driftwood",
+      description: "eight months of it",
+      repositoryId,
+    });
+    // Adopting asks loreserver for nothing - nothing listens on the data port in
+    // these tests, so an answer at all is the assertion that none was asked for.
+    const project = answer["project"] as { id: string; name: string };
+    expect(project).toMatchObject({ id: repositoryId, name: "driftwood" });
+
+    await watcher.until(() => watcher.events.length > 0);
+    const event = watcher.events[0]?.payload as { kind: string; project: string };
+    expect(event.kind).toBe("project-created");
+    expect(event.project).toBe(repositoryId);
+  });
+
+  it("hands a repeated create back the same project, and announces nothing again", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    const repositoryId = newProjectId();
+
+    const watcher = await team.connect(team.tokenFor("ada"));
+    await watcher.send("subscribe", { topic: TOPIC_PROJECTS });
+
+    const maker = await team.connect(team.tokenFor("ada"));
+    const first = await maker.value(TEAM_METHODS.projectsCreate, {
+      name: "driftwood",
+      repositoryId,
+      clientId: "make-once",
+    });
+    await watcher.until(() => watcher.events.length >= 1);
+
+    // The same client id, replayed as after a dropped socket: the row it already
+    // made, not a second project and not a name-taken refusal.
+    const second = await maker.value(TEAM_METHODS.projectsCreate, {
+      name: "driftwood",
+      repositoryId,
+      clientId: "make-once",
+    });
+    expect((second["project"] as { id: string }).id).toBe(
+      (first["project"] as { id: string }).id,
+    );
+    expect(listProjects(team.database)).toHaveLength(1);
+    // The event went out when the write really happened; a repeat announces
+    // nothing, or every other client would redraw a list that did not move.
+    expect(watcher.events).toHaveLength(1);
+  });
+
+  it("refuses a repository this server already holds as a conflict", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const repositoryId = newProjectId();
+    createProject(team.database, {
+      id: repositoryId,
+      name: "driftwood",
+      description: "",
+      createdBy: ada,
+    });
+    const maker = await team.connect(team.tokenFor("ada"));
+
+    const answer = await maker.call(TEAM_METHODS.projectsCreate, {
+      name: "driftwood-again",
+      repositoryId,
+    });
+    expect(answer.code).toBe("conflict");
+  });
+
+  it("refuses something that is not a repository id as bad-params", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    const maker = await team.connect(team.tokenFor("ada"));
+
+    const answer = await maker.call(TEAM_METHODS.projectsCreate, {
+      name: "driftwood",
+      repositoryId: "not-a-repository-id",
+    });
+    expect(answer.code).toBe("bad-params");
+  });
+
+  it("refuses a name that is already taken as a conflict", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    createProject(team.database, {
+      id: newProjectId(),
+      name: "driftwood",
+      description: "",
+      createdBy: ada,
+    });
+    const maker = await team.connect(team.tokenFor("ada"));
+
+    const answer = await maker.call(TEAM_METHODS.projectsCreate, {
+      name: "driftwood",
+      repositoryId: newProjectId(),
+    });
+    expect(answer.code).toBe("conflict");
+  });
+
+  it("rolls the row back when loreserver will not make the repository", async () => {
+    // No repository id, so this is a create from nothing: it asks loreserver,
+    // which nothing answers on the data port in these tests. The row must not
+    // survive a create that could not be finished.
+    const team = await harness();
+    await account(team.database, "ada");
+    const maker = await team.connect(team.tokenFor("ada"));
+
+    const answer = await maker.call(TEAM_METHODS.projectsCreate, { name: "driftwood" });
+    expect(answer.code).toBe("unavailable");
+    expect(listProjects(team.database)).toEqual([]);
   });
 });
 

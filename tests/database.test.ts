@@ -26,6 +26,14 @@ function tableNames(database: DatabaseSync): string[] {
     .map((row) => textColumn(row, "name"));
 }
 
+/** The names of every column of one table. */
+function columnNames(database: DatabaseSync, table: string): string[] {
+  return database
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .map((row) => textColumn(row, "name"));
+}
+
 describe("migrate", () => {
   it("takes a file that does not exist yet to the current version", async () => {
     const root = await temporaryRoot();
@@ -65,22 +73,26 @@ describe("migrate", () => {
         .run("9a1c0e2e", "ada", "Ada Lovelace", "scrypt$N=16384,r=8,p=1$c2FsdA==$aGFzaA==", 1);
 
       // Put the file back to the version before the newest migration. That one
-      // adds the table attached data lives in, so undoing it means dropping it.
+      // adds the column a repeatable create is recognised by, so undoing it means
+      // dropping the index over that column and then the column itself.
       // ⚠ These lines track whichever migration is last: a new one appended to
       // the list is a new thing to undo here, and the failure when it is
       // forgotten is this test rather than a server in the field.
-      database.exec("DROP TABLE overlay");
+      database.exec("DROP INDEX projects_by_client");
+      database.exec("ALTER TABLE projects DROP COLUMN client_id");
       database.prepare("DELETE FROM schema_version WHERE version = ?").run(SCHEMA_VERSION);
       expect(schemaVersion(database)).toBe(SCHEMA_VERSION - 1);
 
       expect(migrate(database, path)).toBe(SCHEMA_VERSION);
 
-      expect(tableNames(database)).toContain("overlay");
-      // Still there, from the migration before that one, which is what says
+      // The column is back, which is the newest migration having replayed.
+      expect(columnNames(database, "projects")).toContain("client_id");
+      // Still there, from the migrations before that one, which is what says
       // this replayed the last one alone rather than the whole list.
+      expect(tableNames(database)).toContain("overlay");
       expect(tableNames(database)).toContain("threads");
       expect(tableNames(database)).toContain("comments");
-      // Still gone, from the migration before that one. A migration list that
+      // Still gone, from a migration further back. A migration list that
       // replayed from the start would put it back.
       expect(tableNames(database)).not.toContain("project_grants");
       // The account is still there. A migration that took the file back to

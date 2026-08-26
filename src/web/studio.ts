@@ -87,14 +87,16 @@ import {
   createProject,
   findProject,
   findProjectById,
+  findProjectByClientId,
   forgetProject,
+  InvalidProjectNameError,
   isRepositoryId,
   listProjects,
   newProjectId,
   type ProjectRecord,
 } from "../projects/registry.js";
 import { loreserverUrl, repositoryCreate } from "../projects/repository.js";
-import type { TeamCapability, TeamProjectsEvent } from "../team/protocol.js";
+import { TEAM_METHODS, type TeamCapability, type TeamProjectsEvent } from "../team/protocol.js";
 import { NOT_READ_YET } from "../teamview.js";
 import type { ProjectFileView, RevisionView } from "../teamview.js";
 import { originIsOurs, remoteAddressOf } from "./origin.js";
@@ -1009,47 +1011,178 @@ async function answerProjectCreate(
     refuse(response, 400, "a project needs a name");
     return;
   }
-  const description = text(body, "description") ?? "";
+  const description = text(body, "description");
+  const repositoryId = text(body, "repositoryId");
 
+  // The whole of what it is to make or adopt a project is behind this call, and
+  // it is the same call the socket's projects.create makes. What is left here is
+  // how a Studio installation over HTTP is answered: a status and a sentence.
+  const result = await makeOrAdoptProject(options, user, {
+    name,
+    ...(description === undefined ? {} : { description }),
+    ...(repositoryId === undefined ? {} : { repositoryId }),
+  });
+
+  switch (result.kind) {
+    case "invalid-repository-id":
+      refuse(response, 400, "a repository id is thirty-two hexadecimal characters");
+      return;
+    case "repository-taken":
+      refuse(
+        response,
+        409,
+        `the repository ${result.repositoryId} is already a project on this server.`,
+      );
+      return;
+    case "invalid-name":
+    case "name-taken":
+      // Both are the create refusing a name, which this route has always answered
+      // as a conflict, message and all.
+      refuse(response, 409, result.message);
+      return;
+    case "repository-refused":
+      options.log?.(`studio: ${user.username} could not create ${name}: ${result.message}`);
+      // 502 rather than 500: Team did its part, and the thing that refused is the
+      // other server. A client that says so is one whose operator looks in the
+      // right log.
+      refuse(response, 502, result.message);
+      return;
+    case "repeat":
+      // A create that already happened, handed back the project it made. This
+      // route hands out no client id, so it never reaches here; a client of the
+      // socket that retries a dropped create does.
+      sendJson(response, 201, { project: projectBody(options, result.project) });
+      return;
+    case "made": {
+      options.log?.(
+        `studio: ${user.username} ${result.adopted ? "registered" : "created"} ` +
+          `${result.project.name} (${result.project.id})`,
+      );
+      options.announce?.({ kind: "project-created", project: result.project.id });
+      // No history on it, and that is right: absent says the reader has not been
+      // round; a nought would say somebody had already emptied it.
+      sendJson(response, 201, { project: projectBody(options, result.project) });
+      return;
+    }
+  }
+}
+
+/**
+ * The outcome of trying to make a project, apart from how the answer is carried.
+ *
+ * The core of the create route and of `projects.create` over the socket, in one
+ * place so the two cannot come to make a project differently. What differs
+ * between the callers — an HTTP status against a protocol error code, a body
+ * against a return value, the topic each announces the new project on — is
+ * theirs; how a project comes to exist is here.
+ */
+export type ProjectCreation =
+  | { readonly kind: "made"; readonly project: ProjectRecord; readonly adopted: boolean }
+  /** A create that already happened, so this is the project it made, not a new one. */
+  | { readonly kind: "repeat"; readonly project: ProjectRecord }
+  | { readonly kind: "invalid-repository-id" }
+  | { readonly kind: "repository-taken"; readonly repositoryId: string }
+  /** The name is not one a project may carry. */
+  | { readonly kind: "invalid-name"; readonly message: string }
+  /** The name is already in use on this server. */
+  | { readonly kind: "name-taken"; readonly message: string }
+  /** loreserver would not make the repository; the row was rolled back. */
+  | { readonly kind: "repository-refused"; readonly message: string };
+
+/** What a create is asked for. */
+export interface ProjectCreationRequest {
+  readonly name: string;
+  readonly description?: string;
+  /** A repository the author already has, to adopt rather than create anew. */
+  readonly repositoryId?: string;
+  /** What the client called this write, so a repeat of it is not a second project. */
+  readonly clientId?: string;
+}
+
+/**
+ * The create key a repeatable create is scoped by.
+ *
+ * By method as well as the client's id, per the `(account, method, clientId)`
+ * rule, so that one client id a caller reused across two different writes cannot
+ * be handed the wrong row.
+ */
+function projectCreateKey(clientId: string): string {
+  return `${TEAM_METHODS.projectsCreate}:${clientId}`;
+}
+
+/**
+ * Make a project from nothing, or adopt one that already exists.
+ *
+ * Every ordering the create route depends on is kept here, because both callers
+ * rely on it: the row is written before loreserver is asked and removed again if
+ * it refuses, so that loreserver announcing the new repository back to Team —
+ * while the create call is still open — finds the row already there. A create
+ * carrying a repository id asks loreserver for nothing: the repository exists on
+ * the author's disk under that id, and what is missing is only the row.
+ */
+export async function makeOrAdoptProject(
+  options: StudioApiOptions,
+  user: UserRecord,
+  request: ProjectCreationRequest,
+): Promise<ProjectCreation> {
   // Folded, because hex is hex either way and everything downstream compares
   // this character by character: it becomes the primary key, and the second
   // half of the resource id loreserver asks permission questions about.
-  const claimed = text(body, "repositoryId")?.toLowerCase();
+  const claimed = request.repositoryId?.toLowerCase();
   if (claimed !== undefined && !isRepositoryId(claimed)) {
-    refuse(response, 400, "a repository id is thirty-two hexadecimal characters");
-    return;
+    return { kind: "invalid-repository-id" };
   }
+
+  // A create that already happened returns the row it made, before anything else
+  // is decided: a client that never saw the answer is retrying, not colliding,
+  // and a name or repository "already taken" by its own first attempt would be
+  // the wrong thing to tell it.
+  if (request.clientId !== undefined) {
+    const already = findProjectByClientId(
+      options.database,
+      user.id,
+      projectCreateKey(request.clientId),
+    );
+    if (already !== undefined) {
+      return { kind: "repeat", project: already };
+    }
+  }
+
+  // A repository id already registered is a collision rather than a silent
+  // adoption: the author is publishing what they believe is a new project, and
+  // the server already holding it means somebody has, which they have to know
+  // before they push into it.
   if (claimed !== undefined && findProjectById(options.database, claimed) !== undefined) {
-    refuse(response, 409, `the repository ${claimed} is already a project on this server.`);
-    return;
+    return { kind: "repository-taken", repositoryId: claimed };
   }
 
   // The row is written before loreserver is asked, and removed again if it
-  // refuses. That order matters: loreserver announces the new repository back
-  // to Team while the create call is still open, and a server that had not
-  // recorded the project yet would have nothing to say about it.
+  // refuses. See the note above on why that order matters.
   let project: ProjectRecord;
   try {
     project = createProject(options.database, {
       id: claimed ?? newProjectId(),
-      name,
-      description,
+      name: request.name,
+      description: request.description ?? "",
       createdBy: user.id,
+      ...(request.clientId === undefined
+        ? {}
+        : { clientId: projectCreateKey(request.clientId) }),
     });
   } catch (error) {
-    refuse(response, 409, error instanceof Error ? error.message : String(error));
-    return;
+    if (error instanceof InvalidProjectNameError) {
+      return { kind: "invalid-name", message: error.message };
+    }
+    return {
+      kind: "name-taken",
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
 
   if (claimed !== undefined) {
-    options.log?.(`studio: ${user.username} registered ${project.name} (${project.id})`);
-    options.announce?.({ kind: "project-created", project: project.id });
-    // No history, and for a different reason from the one below: this
-    // repository may have years of it, and none of it has arrived yet. Absent
-    // is what says the reader has not been round; a nought would say the
-    // author had published an empty project.
-    sendJson(response, 201, { project: projectBody(options, project) });
-    return;
+    // Adopted. This repository may have years of history, none of it read yet,
+    // and loreserver is the wrong place to ask for one that already exists.
+    return { kind: "made", project, adopted: true };
   }
 
   const config = mintingConfig(options);
@@ -1064,21 +1197,10 @@ async function answerProjectCreate(
     });
   } catch (error) {
     forgetProject(options.database, project.id);
-    options.log?.(
-      `studio: ${user.username} could not create ${name}: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
-    );
-    // 502 rather than 500: Team did its part, and the thing that refused is the
-    // other server. A client that says so is one whose operator looks in the
-    // right log.
-    refuse(response, 502, error instanceof Error ? error.message : String(error));
-    return;
+    return {
+      kind: "repository-refused",
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
-
-  options.log?.(`studio: ${user.username} created ${project.name} (${project.id})`);
-  options.announce?.({ kind: "project-created", project: project.id });
-  // No history on it, and that is right: the repository was made a moment ago
-  // and nothing has been read out of it. Absent says so; nought would say
-  // somebody had already emptied it.
-  sendJson(response, 201, { project: projectBody(options, project) });
+  return { kind: "made", project, adopted: false };
 }

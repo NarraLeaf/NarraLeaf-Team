@@ -414,6 +414,26 @@ const MIGRATIONS: readonly Migration[] = [
          WHERE client_id IS NOT NULL`,
     ],
   },
+  {
+    version: 10,
+    description: "a project create names itself, so a repeat is not a second project",
+    statements: [
+      // `client_id` is what the client called a create, and it is how a request
+      // that was sent twice over a session that dropped between asking and
+      // hearing back becomes one project rather than two. Null on every row
+      // written any other way — the command line, an adoption of a repository
+      // that already exists, loreserver — which is why the index below is
+      // partial. The stored value carries the method it was scoped by, for the
+      // reason the threads table's does: one client id used for two different
+      // writes must not be handed the wrong row.
+      "ALTER TABLE projects ADD COLUMN client_id TEXT",
+      // Partial, because most rows have no client id and NULLs are not equal to
+      // one another in SQLite — a plain unique index would let one client repeat
+      // itself as often as it liked.
+      `CREATE UNIQUE INDEX projects_by_client ON projects (created_by, client_id)
+         WHERE client_id IS NOT NULL`,
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

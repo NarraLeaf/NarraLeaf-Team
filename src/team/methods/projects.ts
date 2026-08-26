@@ -19,6 +19,7 @@ import { listUsers } from "../../identity/users.js";
 import { NOT_READ_YET } from "../../teamview.js";
 import {
   DEFAULT_HISTORY_LIMIT,
+  makeOrAdoptProject,
   MAXIMUM_HISTORY_LIMIT,
   memberBody,
   projectBody,
@@ -32,10 +33,40 @@ import {
   type MethodContext,
   type TeamMethod,
 } from "../methods.js";
-import { TEAM_METHODS } from "../protocol.js";
+import {
+  projectTopic,
+  TEAM_METHODS,
+  TOPIC_PROJECTS,
+  type TeamProjectsEvent,
+} from "../protocol.js";
 
 /** The most an id may be, which is more than any id this server issues. */
 const ID_LIMIT = 128;
+
+/** The most a project name may be. The name pattern caps it tighter; this is the gross bound. */
+const NAME_LIMIT = 128;
+
+/** The most a project description may be: a line about the project, not a document. */
+const DESCRIPTION_LIMIT = 4 * 1024;
+
+/** The most a client id may be. Long enough for a UUID and a word, short of a payload. */
+const CLIENT_ID_LIMIT = 128;
+
+/**
+ * Say a project appeared or went, the way the server's own REST announce does.
+ *
+ * The list moves for whoever holds the `projects` topic; a project going is said
+ * on its own topic too, because anybody watching it is watching something that is
+ * not there any more, and telling them beats a screen that just goes quiet. This
+ * mirrors the announce wired to the HTTP routes, so a project made or forgotten
+ * over a session reaches every open session exactly as one made over HTTP does.
+ */
+function announceProjects(context: MethodContext, event: TeamProjectsEvent): void {
+  context.publish(TOPIC_PROJECTS, event);
+  if (event.kind === "project-forgotten") {
+    context.publish(projectTopic(event.project), event);
+  }
+}
 
 export function projectMethods(): TeamMethod[] {
   return [
@@ -114,6 +145,60 @@ export function projectMethods(): TeamMethod[] {
           // positions from.
           ...(page.more && last !== undefined ? { cursor: last.id } : {}),
         };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsCreate,
+      capability: "session",
+      handle: async (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const name = requiredText(read, "name", NAME_LIMIT);
+        const description = optionalText(read, "description", DESCRIPTION_LIMIT);
+        const repositoryId = optionalText(read, "repositoryId", ID_LIMIT);
+        const clientId = optionalText(read, "clientId", CLIENT_ID_LIMIT);
+
+        // The one call that makes or adopts a project, shared with the REST route
+        // so the two cannot come to make one differently: it writes the row
+        // before it asks loreserver and rolls the row back if loreserver refuses,
+        // adopts rather than creates when a repository id is given, and hands back
+        // the row a repeat already made rather than a second one.
+        const result = await makeOrAdoptProject(context.options, context.user, {
+          name,
+          ...(description === undefined ? {} : { description }),
+          ...(repositoryId === undefined ? {} : { repositoryId }),
+          ...(clientId === undefined ? {} : { clientId }),
+        });
+
+        switch (result.kind) {
+          case "invalid-repository-id":
+            throw new MethodError(
+              "bad-params",
+              "a repository id is thirty-two hexadecimal characters",
+            );
+          case "invalid-name":
+            throw new MethodError("bad-params", result.message);
+          case "repository-taken":
+            throw new MethodError(
+              "conflict",
+              `the repository ${result.repositoryId} is already a project on this server`,
+            );
+          case "name-taken":
+            throw new MethodError("conflict", result.message);
+          case "repository-refused":
+            // loreserver would not make the repository, and the row was rolled
+            // back. The other server is what refused, so its sentence is carried
+            // through for the operator's log rather than swallowed as a fault of
+            // this one.
+            throw new MethodError("unavailable", result.message);
+          case "repeat":
+            // The create already happened; this is the project it made. Nothing
+            // changed, so - like every idempotent write here - nothing is
+            // announced.
+            return { project: projectBody(context.options, result.project) };
+          case "made":
+            announceProjects(context, { kind: "project-created", project: result.project.id });
+            return { project: projectBody(context.options, result.project) };
+        }
       },
     },
     {

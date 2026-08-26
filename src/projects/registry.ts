@@ -170,6 +170,17 @@ export interface NewProject {
   readonly description?: string;
   /** The account that made it. */
   readonly createdBy: string;
+  /**
+   * The key a repeatable create is scoped by, stored verbatim, or absent.
+   *
+   * How a create sent twice over a dropped session becomes one project rather
+   * than two: the caller looks this up first with {@link findProjectByClientId}
+   * and, finding the row it already made, hands it back. Absent on every row
+   * written any other way. The caller scopes it — by method, per the
+   * `(account, method, clientId)` rule — so this column holds whatever it
+   * composed rather than a raw client id.
+   */
+  readonly clientId?: string;
 }
 
 /**
@@ -189,10 +200,10 @@ export function createProject(database: DatabaseSync, input: NewProject): Projec
   try {
     database
       .prepare(
-        `INSERT INTO projects (id, name, description, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO projects (id, name, description, created_by, created_at, client_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(input.id, input.name, input.description ?? "", input.createdBy, now);
+      .run(input.id, input.name, input.description ?? "", input.createdBy, now, input.clientId ?? null);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
@@ -246,6 +257,25 @@ export function findProjectById(
   projectId: string,
 ): ProjectRecord | undefined {
   const row = database.prepare(`${SELECT_PROJECT} WHERE id = ?`).get(projectId);
+  return row === undefined ? undefined : toProject(row);
+}
+
+/**
+ * The project one account made under a given create key, or undefined.
+ *
+ * How a repeated create is recognised: the caller composes the key it scoped
+ * the write by — by account and method — and asks whether a project already
+ * carries it. Scoped to the maker as well as the key, so that two accounts that
+ * happened to choose the same client id are never handed each other's project.
+ */
+export function findProjectByClientId(
+  database: DatabaseSync,
+  createdBy: string,
+  clientId: string,
+): ProjectRecord | undefined {
+  const row = database
+    .prepare(`${SELECT_PROJECT} WHERE created_by = ? AND client_id = ?`)
+    .get(createdBy, clientId);
   return row === undefined ? undefined : toProject(row);
 }
 
