@@ -1,13 +1,15 @@
-// What the terminal interface is allowed to know.
+// One read-only account of a whole server: what it is running, who has an
+// account on it, what projects it holds, what it has been asked and what it has
+// been told to remember.
 //
-// Everything the interface draws comes through this one read-only structure,
-// gathered once per refresh by the code that owns the database and the
-// supervisor. The interface itself opens nothing and writes nothing: it is
-// handed a view and it draws it. That is what keeps the terminal interface and
-// the commands from drifting into two implementations of the same rules.
+// Shapes and nothing else. They are gathered by src/view.ts, which owns the
+// database, the certificate authority and the health check, and they are handed
+// to whoever has to answer a question out of them. Keeping the shape apart from
+// the gathering is what stops a second reader of this server growing a second
+// account of it.
 //
-// Every field that Team server might fail to work out is optional, and an absent field
-// is drawn as "unknown" rather than as an error. This is the whole of the
+// Every field Team might fail to work out is optional, and an absent field is
+// reported as unknown rather than as an error. This is the whole of the
 // degradation rule: a project written by a newer Studio must show up with the
 // parts Team understands and the word unknown for the rest.
 

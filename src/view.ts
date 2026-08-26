@@ -45,7 +45,7 @@ import { checkHealth } from "./loreserver/health.js";
 import { instanceLayout } from "./loreserver/layout.js";
 import { LORESERVER_VERSION, resolveArtifact } from "./loreserver/pin.js";
 import { listProjects } from "./projects/registry.js";
-import { NOT_READ_YET } from "./tui/teamview.js";
+import { NOT_READ_YET } from "./teamview.js";
 import type {
   TeamView,
   ProjectFileView,
@@ -53,7 +53,7 @@ import type {
   RevisionView,
   SettingView,
   UserView,
-} from "./tui/teamview.js";
+} from "./teamview.js";
 import { VERSION } from "./version.js";
 
 import type { DatabaseSync } from "node:sqlite";

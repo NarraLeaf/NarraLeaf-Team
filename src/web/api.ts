@@ -53,7 +53,7 @@ import {
 } from "../identity/signin.js";
 import { authenticate, isOperator } from "../identity/users.js";
 import type { Action } from "../tui/state.js";
-import type { TeamView } from "../tui/teamview.js";
+import type { TeamView } from "../teamview.js";
 import type { ViewContext } from "../view.js";
 import { originIsOurs, remoteAddressOf } from "./origin.js";
 import {

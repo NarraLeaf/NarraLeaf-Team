@@ -36,7 +36,7 @@ import type {
   SettingView,
   TeamView,
   UserView,
-} from "../../tui/teamview.js";
+} from "../../teamview.js";
 import type { Draft, Operator, Screen, Secret } from "./api.js";
 import { group, h, icon, type Child } from "./dom.js";
 

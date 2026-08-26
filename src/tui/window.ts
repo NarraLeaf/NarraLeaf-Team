@@ -12,7 +12,7 @@
  * the middle.
  */
 import { ellipsis, plural, relativeTime, wrapText } from "./format.js";
-import type { TeamView } from "./teamview.js";
+import type { TeamView } from "../teamview.js";
 import { centred, overBody, SPLIT_FROM, WIDE_RAIL_FROM, type Rect } from "./layout.js";
 import { field, projectDetailLines, userDetailLines } from "./panels.js";
 import { choicesOf } from "./state.js";

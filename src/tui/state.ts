@@ -9,7 +9,7 @@
  */
 import { clamp as clampChoice } from "./choices.js";
 import type { Choice } from "./choices.js";
-import type { TeamView } from "./teamview.js";
+import type { TeamView } from "../teamview.js";
 
 /** The size of the terminal, in cells. */
 export interface TuiSize {

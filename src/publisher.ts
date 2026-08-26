@@ -16,7 +16,7 @@
  */
 import { identityLayout } from "./identity/layout.js";
 import { ProjectReadings } from "./projects/refresh.js";
-import type { TeamView } from "./tui/teamview.js";
+import type { TeamView } from "./teamview.js";
 import { gatherTeamView, type ViewContext } from "./view.js";
 
 import type { IdentityConfig } from "./identity/config.js";

@@ -50,7 +50,7 @@ import {
   newProjectId,
   resourceIdOf,
 } from "../src/projects/registry.js";
-import type { ProjectFileView, RevisionView } from "../src/tui/teamview.js";
+import type { ProjectFileView, RevisionView } from "../src/teamview.js";
 import { webHandler } from "../src/web/router.js";
 import {
   studioCapabilities,

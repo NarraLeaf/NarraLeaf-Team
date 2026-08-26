@@ -14,7 +14,7 @@
  */
 import { messagesFor } from "../../i18n/index.js";
 import { LANGUAGE_HEADER, type Locale } from "../../i18n/locales.js";
-import type { TeamView } from "../../tui/teamview.js";
+import type { TeamView } from "../../teamview.js";
 import type { Action } from "../../tui/state.js";
 import { openingLocale } from "./language.js";
 

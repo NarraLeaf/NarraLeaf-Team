@@ -21,7 +21,7 @@ import {
   withoutScheme,
   wrapText,
 } from "./format.js";
-import type { TeamView, ProjectView, UserView } from "./teamview.js";
+import type { TeamView, ProjectView, UserView } from "../teamview.js";
 import type { Surface, TuiState } from "./state.js";
 import { SURFACES, SURFACE_NAMES } from "./state.js";
 import { BLANK, span, type Line, type Span } from "./text.js";

@@ -3,7 +3,7 @@
 // Fixed timestamps, and a fixed `now` to measure them against, so that what
 // the interface draws is a function of this file and the terminal size and
 // nothing else.
-import type { TeamView } from "../../src/tui/teamview.js";
+import type { TeamView } from "../../src/teamview.js";
 
 const NOW = Date.parse("2026-08-12T14:03:00Z");
 const MINUTE = 60_000;

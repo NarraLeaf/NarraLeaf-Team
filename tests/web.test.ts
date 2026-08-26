@@ -30,7 +30,7 @@ import {
   revokeUserTokens,
   setAdmin,
 } from "../src/identity/users.js";
-import type { TeamView } from "../src/tui/teamview.js";
+import type { TeamView } from "../src/teamview.js";
 import type { ViewContext } from "../src/view.js";
 import { readAction, type ApiOptions } from "../src/web/api.js";
 import { webHandler } from "../src/web/router.js";

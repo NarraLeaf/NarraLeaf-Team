@@ -11,7 +11,7 @@ import { Box, Text } from "ink";
 import type { ReactNode } from "react";
 
 import { ellipsis } from "./format.js";
-import type { TeamView } from "./teamview.js";
+import type { TeamView } from "../teamview.js";
 import { frameOf, RAIL_WIDTH, type Frame } from "./layout.js";
 import {
   dashboardLines,

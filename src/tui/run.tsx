@@ -9,7 +9,7 @@ import { render, useApp, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useState } from "react";
 
 import { Interface } from "./app.js";
-import type { TeamView } from "./teamview.js";
+import type { TeamView } from "../teamview.js";
 import { INITIAL_STATE, reduce, type Action, type KeyPress, type Session, type TuiSize } from "./state.js";
 
 /**

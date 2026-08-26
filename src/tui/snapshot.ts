@@ -10,7 +10,7 @@ import { renderToString } from "ink";
 import { createElement } from "react";
 
 import { Interface } from "./app.js";
-import type { TeamView } from "./teamview.js";
+import type { TeamView } from "../teamview.js";
 import { topOverlay, type Overlay, type TuiSize, type TuiState } from "./state.js";
 import { overlayWindow } from "./window.js";
 

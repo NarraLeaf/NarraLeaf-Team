@@ -38,7 +38,7 @@ import {
 import { readProjectFile, revisionSizes, type RevisionFile, type RevisionSource } from "./content.js";
 
 import type { LoreGlobals } from "../lore/call.js";
-import type { ProjectFileView, RevisionView } from "../tui/teamview.js";
+import type { ProjectFileView, RevisionView } from "../teamview.js";
 
 /** What one read of a project produced. */
 export interface ProjectReading {

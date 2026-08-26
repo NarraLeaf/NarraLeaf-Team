@@ -24,7 +24,7 @@
  */
 import { decodeMsgpack, MsgpackError } from "./msgpack.js";
 
-import type { ProjectFileView } from "../tui/teamview.js";
+import type { ProjectFileView } from "../teamview.js";
 
 /** One file in a revision, as the directory tree reports it. */
 export interface RevisionFile {
