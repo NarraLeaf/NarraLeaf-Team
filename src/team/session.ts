@@ -26,7 +26,7 @@
  */
 import { describeRefusal, identifyToken } from "../identity/bearer.js";
 import { isOperator, type UserRecord } from "../identity/users.js";
-import type { StudioApiOptions } from "../web/studio.js";
+import type { TeamService } from "./service.js";
 import type { TeamHub, HubSession } from "./hub.js";
 import { MethodError, type MethodContext, type TeamMethod } from "./methods.js";
 import type { TeamPresence } from "./presence.js";
@@ -58,7 +58,7 @@ const IN_FLIGHT_LIMIT = 64;
 export interface SessionOptions {
   readonly connection: WebSocketConnection;
   readonly hub: TeamHub;
-  readonly service: StudioApiOptions;
+  readonly service: TeamService;
   readonly methods: ReadonlyMap<string, TeamMethod>;
   /**
    * Who is connected and which live sessions are open.

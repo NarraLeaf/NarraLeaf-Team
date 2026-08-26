@@ -52,7 +52,7 @@ import {
   TOPIC_PROJECTS,
   type TeamHelloFrame,
 } from "../src/team/protocol.js";
-import type { StudioApiOptions } from "../src/web/studio.js";
+import type { TeamService } from "../src/team/service.js";
 import { useTemporaryRoots } from "./temporary.js";
 
 const temporaryRoot = useTemporaryRoots("nlteam-session-");
@@ -85,7 +85,7 @@ interface Harness {
   readonly database: DatabaseSync;
   readonly keys: KeyStore;
   readonly config: IdentityConfig;
-  readonly service: StudioApiOptions;
+  readonly service: TeamService;
   readonly socket: TeamSocket;
   readonly tokenFor: (username: string) => string;
   readonly connect: (token: string) => Promise<Client>;
@@ -99,12 +99,12 @@ interface Harness {
  * from outside would be reading a different server's repositories.
  */
 type ServiceFor =
-  | Partial<StudioApiOptions>
+  | Partial<TeamService>
   | ((of: {
       root: string;
       database: DatabaseSync;
       config: IdentityConfig;
-    }) => Partial<StudioApiOptions>);
+    }) => Partial<TeamService>);
 
 async function harness(extra: ServiceFor = {}): Promise<Harness> {
   const root = await temporaryRoot();
@@ -114,7 +114,7 @@ async function harness(extra: ServiceFor = {}): Promise<Harness> {
   const keys = await KeyStore.open(layout.keysDir);
   const config = identityConfig({});
 
-  const service: StudioApiOptions = {
+  const service: TeamService = {
     database,
     keys,
     config,
@@ -604,7 +604,7 @@ describe("a project's history over the socket", () => {
   /** A reader that has whole histories for some projects and none for others. */
   function pagedReader(
     pages: Record<string, { id: string; at?: number }[]>,
-  ): Partial<StudioApiOptions> {
+  ): Partial<TeamService> {
     return {
       readings: {
         get: () => undefined,
@@ -1395,7 +1395,7 @@ describe("what an answer with nothing to report carries", () => {
  * the one refusal that matters - a call about a machine, from a session that
  * never said which machine it is.
  */
-async function withTwo(extra: Partial<StudioApiOptions> = {}): Promise<{
+async function withTwo(extra: Partial<TeamService> = {}): Promise<{
   team: Harness;
   project: string;
   ada: Client;

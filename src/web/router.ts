@@ -23,13 +23,14 @@
  * is a browser.
  */
 import { serveDiscovery, type DiscoveryDocument } from "../identity/discovery.js";
-import { serveStudioApi, type StudioApiOptions } from "./studio.js";
+import type { TeamService } from "../team/service.js";
+import { serveStudioApi } from "./studio.js";
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export interface WebOptions {
   /** What a Studio installation talks to. Absent only where nothing serves it. */
-  readonly studio?: StudioApiOptions;
+  readonly studio?: TeamService;
 }
 
 /**

@@ -44,7 +44,7 @@ import {
   serverCapabilities,
 } from "../src/team/methods.js";
 import { teamMethods } from "../src/team/endpoint.js";
-import type { StudioApiOptions } from "../src/web/studio.js";
+import type { TeamService } from "../src/team/service.js";
 
 interface Contract {
   protocol: number;
@@ -92,7 +92,7 @@ describe("the protocol contract", () => {
     // of it advertises exactly the contract's vocabulary and no more.
     const everything = {
       readings: { get: () => undefined, revisions: async () => undefined },
-    } as unknown as StudioApiOptions;
+    } as unknown as TeamService;
     expect(serverCapabilities(methodTable(teamMethods()), everything).sort()).toEqual(
       [...contract.capabilities].sort(),
     );

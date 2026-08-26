@@ -50,8 +50,8 @@ import { refuseUpgrade } from "./team/websocket.js";
 import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
 import { trustCommandFor } from "./tls/trust.js";
 import { VERSION } from "./version.js";
+import type { TeamService } from "./team/service.js";
 import { webHandler } from "./web/router.js";
-import type { StudioApiOptions } from "./web/studio.js";
 
 export interface UpOptions extends LoreserverPorts {
   /** The storage root; everything Team writes goes underneath it. */
@@ -290,7 +290,7 @@ export async function up(
     });
     readings = projects;
 
-    const studio: StudioApiOptions = {
+    const studio: TeamService = {
       database,
       keys,
       config,

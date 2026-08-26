@@ -33,7 +33,7 @@ import { createUser } from "../src/identity/users.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
 import { createTeamSocket } from "../src/team/endpoint.js";
 import { refuseUpgrade } from "../src/team/websocket.js";
-import type { StudioApiOptions } from "../src/web/studio.js";
+import type { TeamService } from "../src/team/service.js";
 
 async function main(): Promise<void> {
   const [, , certPath, keyPath] = process.argv;
@@ -65,7 +65,7 @@ async function main(): Promise<void> {
     createdBy: ada.id,
   });
 
-  const service: StudioApiOptions = { database, keys, config, dataPort: config.dataPort };
+  const service: TeamService = { database, keys, config, dataPort: config.dataPort };
   const socket = createTeamSocket({ service, version: "0.0.0-e2e", host: "127.0.0.1" });
 
   const server = createSecureServer({

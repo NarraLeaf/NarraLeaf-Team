@@ -1,84 +1,42 @@
 /**
- * The one thing a Studio installation asks for over HTTP, and what composes it.
+ * The one thing a Studio installation asks this server for over HTTP.
  *
  * Studio is handed one address and nothing else. The discovery document turns
- * the address into a server; this turns a username and a password into the
- * token everything after it needs. Everything after it is the session — every
- * project a person reads, makes or forgets travels on the WebSocket, because a
- * read and the event that invalidates it have to arrive down one connection in
- * order.
+ * the address into a server; this turns a username and a password into the token
+ * everything after it needs. Everything after it is the session — every project a
+ * person reads, makes or forgets travels on the WebSocket, because a read and the
+ * event that invalidates it have to arrive down one connection in order.
  *
  * So there is exactly one route:
  *
  *     POST   /api/studio/v1/sign-in   a password, for a token
  *
- * It takes no bearer, because it is where a bearer comes from, and it is the
- * only thing here that has to work before a session exists. It is a second door
- * onto what `nlteam token mint` does at the server, for the same accounts and
- * with the same refusals: an operator who would otherwise mint a token and send
- * it through a chat window can hand over a username and a password instead.
- * What it mints is the same token, claim for claim — see {@link answerSignIn}.
+ * It takes no bearer, because it is where a bearer comes from, and it is the only
+ * thing here that has to work before a session exists. It is a second door onto
+ * what `nlteam token mint` does at the server, for the same accounts and with the
+ * same refusals: an operator who would otherwise mint a token and send it through
+ * a chat window can hand over a username and a password instead. What it mints is
+ * the same token, claim for claim — see {@link answerSignIn}.
+ *
+ * Every other address under the prefix is answered here too, as a 404, so that a
+ * mistyped API address is refused as one rather than falling through to something
+ * that knows nothing about this API.
  *
  * It is served on the same HTTP/1.1 listener as the discovery document and the
  * socket upgrade. One listener means one certificate, and therefore one decision
  * to trust — the reason set out in ./router.ts.
- *
- * What else is here
- * -----------------
- * The rest of this file is what a project and an account look like in an answer,
- * and what it is to make a project. They are here rather than beside the methods
- * that call them because they are the shared implementations: one builder for a
- * project body means a field cannot come to exist on one path and not another,
- * and one create means two callers cannot come to make a project differently.
- *
- * What is absent and what is nought
- * ---------------------------------
- * Everything that comes out of a repository is optional, and a field Team has
- * not read is left out rather than sent as zero. A project cloned for the first
- * time may be minutes away from having a history to report, and a row saying
- * nought revisions is a row saying nobody has ever worked on it. Absent is the
- * only honest answer while the read is still running, and it is the same answer
- * a project written by a newer Studio gets — which is what keeps this server
- * from having to be upgraded in step with the one it serves.
- *
- * Nothing here starts a repository read or waits on one. Whatever the reader
- * has landed so far is what is served.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { DatabaseSync } from "node:sqlite";
 
-import { audienceHosts, dataRemoteUrl, type IdentityConfig } from "../identity/config.js";
-import type { KeyStore } from "../identity/keys.js";
 import { defaultPasswordHasher } from "../identity/passwords.js";
-import { storedTokenLifetimes, type TokenLifetimes } from "../identity/settings.js";
 import {
   holdRefusedSignIn,
   sharedSignInLimiter,
   verifyingPassword,
-  type SignInLimiter,
 } from "../identity/signin.js";
 import { mintToken } from "../identity/tokens.js";
-import type { UserRecord } from "../identity/users.js";
-import {
-  authenticate,
-  findUserById,
-  isOperator,
-  SIGN_IN_REFUSED_MESSAGE,
-} from "../identity/users.js";
-import type { RevisionPage } from "../projects/read.js";
-import {
-  createProject,
-  findProjectById,
-  findProjectByClientId,
-  forgetProject,
-  InvalidProjectNameError,
-  isRepositoryId,
-  newProjectId,
-  type ProjectRecord,
-} from "../projects/registry.js";
-import { loreserverUrl, repositoryCreate } from "../projects/repository.js";
-import { TEAM_METHODS, type TeamCapability } from "../team/protocol.js";
-import type { ProjectFileView, RevisionView } from "../teamview.js";
+import { authenticate, SIGN_IN_REFUSED_MESSAGE } from "../identity/users.js";
+import { mintingConfig, type TeamService } from "../team/service.js";
 import { originIsOurs, remoteAddressOf } from "./origin.js";
 
 /** Where the route lives. Versioned, because a client older than the server is ordinary. */
@@ -89,181 +47,6 @@ const SIGN_IN = `${PREFIX}/sign-in`;
 
 /** How much of a request body is read before it is refused as nonsense. */
 const MAXIMUM_BODY_BYTES = 4 * 1024;
-
-/**
- * What Team has read out of the repositories, and a way to read one page more.
- *
- * Deliberately optional, and deliberately only a lookup. Answering a request
- * must not start a repository read, wait for one, or be able to: a clone is the
- * slowest thing this server does, and a list of projects that stopped on a
- * loreserver which was not answering would be a list nobody could open Studio
- * without. Whatever has landed is served; the rest is absent.
- */
-export interface StudioReadings {
-  /** What Team last read about one project, or undefined if it has not. */
-  get(projectId: string): { readonly history: RevisionView; readonly file: ProjectFileView } | undefined;
-  /**
-   * One page of a project's revisions, read on demand.
-   *
-   * Optional because it is what decides whether this build says it serves a
-   * history at all — see {@link serviceCapabilities}. Undefined from the call
-   * means Team has no checkout of that project to read yet.
-   */
-  readonly revisions?: (
-    projectId: string,
-    page: { readonly limit: number; readonly before?: string },
-  ) => Promise<RevisionPage | undefined>;
-  /**
-   * Drop what was read about one project, because it is no longer one.
-   *
-   * Called when a project is taken off this server, so that the reading does
-   * not outlive the row. Optional for the same reason {@link revisions} is: a
-   * build serving no reader has nothing to drop, and a stand-in for one in a
-   * test need not grow a method to be handed to a route that has no reading to
-   * forget anyway.
-   */
-  readonly forget?: (projectId: string) => void;
-}
-
-/** Everything this API needs that is not in the request. */
-export interface StudioApiOptions {
-  readonly database: DatabaseSync;
-  readonly keys: KeyStore;
-  readonly config: IdentityConfig;
-  /**
-   * Token lifetimes named on the command line this server was started with.
-   *
-   * Absent is the ordinary case, and then the stored settings decide. What an
-   * operator typed has to outrank them, or `up --token-lifetime` would stop
-   * doing anything the moment somebody stored the setting it names — the same
-   * rule the authorization service is written to, so that a token minted here
-   * and one minted there last the same time.
-   */
-  readonly namedLifetimes?: Partial<TokenLifetimes>;
-  /** The port loreserver serves gRPC on, for creating a repository. */
-  readonly dataPort: number;
-  /**
-   * The fingerprint of this server's authority, absent until one exists.
-   *
-   * Written into a token handed out by the sign-in route, because that token
-   * leaves this machine — the same reason `nlteam token mint` writes it. A
-   * server with no certificates yet still signs in; its tokens simply carry no
-   * fingerprint, and Studio falls back to asking a person for one.
-   */
-  readonly fingerprint?: string;
-  /**
-   * How often a password may be guessed at here.
-   *
-   * Absent means the one every door of this server shares, which is what a
-   * running server wants: the rate somebody may guess at a password should not
-   * depend on which door they knock on. A caller passes its own when it wants
-   * one that no other caller has already spent.
-   */
-  readonly signIns?: SignInLimiter;
-  /** What the repositories last said. Absent on a server that reads none. */
-  readonly readings?: StudioReadings;
-  /** Somewhere to say what happened, in the same place `up` says everything else. */
-  readonly log?: (line: string) => void;
-}
-
-/**
- * The capabilities that depend on what this build was handed.
- *
- * The other half of the vocabulary is derived from the method table, which says
- * what a session can be asked for — see src/team/methods.ts. These two are the
- * ones that table cannot say, because neither of them turns on whether a method
- * is registered:
- *
- * `password-sign-in` names the sign-in route, which is answered before a session
- * exists and so has no method to be derived from. It is unconditional: the route
- * needs nothing beyond the database and the keys, both of which every caller here
- * already has.
- *
- * `project-history` is about the reader rather than the method. `projects.history`
- * is always registered, but a build with no reader has no revisions to page and
- * answers an empty one — which a client cannot tell from a project nobody has ever
- * committed to. So the capability is present only where there is a reader that can
- * page a history, and a client that wants to offer a person a list of versions
- * checks it rather than inferring one from an empty page.
- *
- * Worked out from what this build was given rather than written down, so that the
- * discovery document cannot come to say something this server does not do.
- */
-export function serviceCapabilities(options: StudioApiOptions): TeamCapability[] {
-  const capabilities: TeamCapability[] = ["password-sign-in"];
-  if (options.readings?.revisions !== undefined) {
-    capabilities.push("project-history");
-  }
-  return capabilities;
-}
-
-/** One project, as a Studio installation reads it. */
-export interface ProjectBody {
-  readonly id: string;
-  readonly name: string;
-  readonly description: string;
-  /** Who made it, by username; absent for an account that has been deleted. */
-  readonly createdBy?: string;
-  readonly createdAt: number;
-  /**
-   * The remote to clone, which is the address Studio would otherwise be told.
-   *
-   * **The project's name is on the end, and it has to be.** A client is given
-   * `lore://host:port/<name>` and refuses one without the name — measured: the
-   * clone page marks an origin-only address invalid and will not go on. What
-   * the client stores afterwards is only the origin, which is why it is easy to
-   * think the name is decoration.
-   */
-  readonly remote: string;
-  /**
-   * What the repository says about itself, absent until Team has read it.
-   *
-   * Absent rather than empty, and never zeroed. The first read of a project is
-   * a clone and the slowest thing this server does, and a project that has been
-   * worked on for months must not read as one nobody has touched while that
-   * clone is still running.
-   */
-  readonly history?: RevisionView;
-}
-
-/**
- * One account, as a name beside a piece of work rather than as an account.
- *
- * What is here is what somebody needs in order to know whose revision they are
- * looking at. What is not here is an operator's business: when an account's
- * tokens were last refused, what groups it is in beyond the one label below,
- * and anything else the management plane keeps.
- *
- * `operator` is that label, and it is a label. It says this account may
- * administer this server. It is not a permission over any project: every
- * account of this server reaches every project on it.
- */
-export interface MemberBody {
-  readonly username: string;
-  readonly displayName: string;
-  /**
-   * The address, where the account has one.
-   *
-   * Included on purpose. It is already on every revision this person authored,
-   * so within this server it is not a secret, and a member list that could not
-   * be matched against a history would not be much of a member list. What is
-   * done with it is Studio's decision, which is to show it to nobody by
-   * default.
-   */
-  readonly email?: string;
-  readonly operator: boolean;
-  /**
-   * Whether the account may still sign in.
-   *
-   * A disabled account is listed rather than dropped. Somebody who wrote half
-   * of a project's history and then left is still the person that history
-   * names, and a list they had fallen out of would leave those revisions signed
-   * by a stranger.
-   */
-  readonly disabled: boolean;
-  readonly serviceAccount: boolean;
-  readonly createdAt: number;
-}
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);
@@ -315,7 +98,7 @@ function holdOff(response: ServerResponse, seconds: number): void {
  * in front of the operator's interface, for the same reason.
  */
 function answering(
-  options: StudioApiOptions,
+  options: TeamService,
   response: ServerResponse,
   work: Promise<void>,
 ): void {
@@ -329,40 +112,6 @@ function answering(
     }
     refuse(response, 500, "something went wrong answering that");
   });
-}
-
-export function projectBody(options: StudioApiOptions, project: ProjectRecord): ProjectBody {
-  const { database, config } = options;
-  const maker = findUserById(database, project.createdBy);
-  // Whatever the reader has landed, and nothing is asked of it here. A project
-  // it has not reached has no history, which is left out rather than filled in.
-  const history = options.readings?.get(project.id)?.history;
-  return {
-    id: project.id,
-    name: project.name,
-    description: project.description,
-    ...(maker === undefined ? {} : { createdBy: maker.username }),
-    createdAt: project.createdAt,
-    // Built from what this server was started with rather than stored, for the
-    // same reason the discovery document is: the address a project is reached
-    // at is a fact about the deployment, not about the project.
-    remote: `${dataRemoteUrl(audienceHosts(config)[0] ?? "127.0.0.1", config.dataPort)}/${project.name}`,
-    ...(history === undefined ? {} : { history }),
-  };
-}
-
-export function memberBody(user: UserRecord): MemberBody {
-  return {
-    username: user.username,
-    displayName: user.displayName,
-    ...(user.email === undefined ? {} : { email: user.email }),
-    // The one group question this API asks, asked where the interface asks it,
-    // so that the label and the door cannot come to disagree.
-    operator: isOperator(user.groups),
-    disabled: user.disabledAt !== undefined,
-    serviceAccount: user.isServiceAccount,
-    createdAt: user.createdAt,
-  };
 }
 
 /** Read a JSON body, or say what was wrong with it. */
@@ -397,24 +146,6 @@ function text(body: Record<string, unknown>, name: string): string | undefined {
 }
 
 /**
- * The settings to mint a token with, as they stand now.
- *
- * The base is what this server was brought up as. The stored lifetimes are read
- * on every mint, so shortening one reaches a running server without a restart;
- * what an operator named on the command line outranks a stored lifetime, or
- * `up --token-lifetime` would stop doing anything the moment somebody stored the
- * setting it names. This is the same order the authorization service mints by,
- * so a token handed out here and one handed out there last the same time.
- */
-function mintingConfig(options: StudioApiOptions): IdentityConfig {
-  return {
-    ...options.config,
-    ...storedTokenLifetimes(options.database),
-    ...options.namedLifetimes,
-  };
-}
-
-/**
  * Answer a request if it is one of ours, and say whether it was.
  *
  * Returns false for everything outside this API's prefix, so the router can go
@@ -428,7 +159,7 @@ function mintingConfig(options: StudioApiOptions): IdentityConfig {
  * sign-in route is one nothing has ever served.
  */
 export function serveStudioApi(
-  options: StudioApiOptions,
+  options: TeamService,
   request: IncomingMessage,
   response: ServerResponse,
   path: string,
@@ -493,7 +224,7 @@ function onlyMethods(response: ServerResponse, allow: string, spoken: string): v
  * is answered without its password being looked at.
  */
 async function answerSignIn(
-  options: StudioApiOptions,
+  options: TeamService,
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
@@ -573,139 +304,3 @@ async function answerSignIn(
   });
 }
 
-/**
- * The outcome of trying to make a project, apart from how the answer is carried.
- *
- * Every way a create can end, said once and separately from how it is reported,
- * so that how a project comes to exist is one piece of code rather than one per
- * caller. What a caller does with each outcome — which error code it raises,
- * what it announces and on which topic — is the caller's.
- */
-export type ProjectCreation =
-  | { readonly kind: "made"; readonly project: ProjectRecord; readonly adopted: boolean }
-  /** A create that already happened, so this is the project it made, not a new one. */
-  | { readonly kind: "repeat"; readonly project: ProjectRecord }
-  | { readonly kind: "invalid-repository-id" }
-  | { readonly kind: "repository-taken"; readonly repositoryId: string }
-  /** The name is not one a project may carry. */
-  | { readonly kind: "invalid-name"; readonly message: string }
-  /** The name is already in use on this server. */
-  | { readonly kind: "name-taken"; readonly message: string }
-  /** loreserver would not make the repository; the row was rolled back. */
-  | { readonly kind: "repository-refused"; readonly message: string };
-
-/** What a create is asked for. */
-export interface ProjectCreationRequest {
-  readonly name: string;
-  readonly description?: string;
-  /** A repository the author already has, to adopt rather than create anew. */
-  readonly repositoryId?: string;
-  /** What the client called this write, so a repeat of it is not a second project. */
-  readonly clientId?: string;
-}
-
-/**
- * The create key a repeatable create is scoped by.
- *
- * By method as well as the client's id, per the `(account, method, clientId)`
- * rule, so that one client id a caller reused across two different writes cannot
- * be handed the wrong row.
- */
-function projectCreateKey(clientId: string): string {
-  return `${TEAM_METHODS.projectsCreate}:${clientId}`;
-}
-
-/**
- * Make a project from nothing, or adopt one that already exists.
- *
- * The ordering here is what makes publishing work at all: the row is written
- * before loreserver is asked and removed again if it refuses, so that loreserver
- * announcing the new repository back to Team — while the create call is still
- * open — finds the row already there. A create carrying a repository id asks
- * loreserver for nothing: the repository exists on the author's disk under that
- * id, and what is missing is only the row.
- */
-export async function makeOrAdoptProject(
-  options: StudioApiOptions,
-  user: UserRecord,
-  request: ProjectCreationRequest,
-): Promise<ProjectCreation> {
-  // Folded, because hex is hex either way and everything downstream compares
-  // this character by character: it becomes the primary key, and the second
-  // half of the resource id loreserver asks permission questions about.
-  const claimed = request.repositoryId?.toLowerCase();
-  if (claimed !== undefined && !isRepositoryId(claimed)) {
-    return { kind: "invalid-repository-id" };
-  }
-
-  // A create that already happened returns the row it made, before anything else
-  // is decided: a client that never saw the answer is retrying, not colliding,
-  // and a name or repository "already taken" by its own first attempt would be
-  // the wrong thing to tell it.
-  if (request.clientId !== undefined) {
-    const already = findProjectByClientId(
-      options.database,
-      user.id,
-      projectCreateKey(request.clientId),
-    );
-    if (already !== undefined) {
-      return { kind: "repeat", project: already };
-    }
-  }
-
-  // A repository id already registered is a collision rather than a silent
-  // adoption: the author is publishing what they believe is a new project, and
-  // the server already holding it means somebody has, which they have to know
-  // before they push into it.
-  if (claimed !== undefined && findProjectById(options.database, claimed) !== undefined) {
-    return { kind: "repository-taken", repositoryId: claimed };
-  }
-
-  // The row is written before loreserver is asked, and removed again if it
-  // refuses. See the note above on why that order matters.
-  let project: ProjectRecord;
-  try {
-    project = createProject(options.database, {
-      id: claimed ?? newProjectId(),
-      name: request.name,
-      description: request.description ?? "",
-      createdBy: user.id,
-      ...(request.clientId === undefined
-        ? {}
-        : { clientId: projectCreateKey(request.clientId) }),
-    });
-  } catch (error) {
-    if (error instanceof InvalidProjectNameError) {
-      return { kind: "invalid-name", message: error.message };
-    }
-    return {
-      kind: "name-taken",
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-
-  if (claimed !== undefined) {
-    // Adopted. This repository may have years of history, none of it read yet,
-    // and loreserver is the wrong place to ask for one that already exists.
-    return { kind: "made", project, adopted: true };
-  }
-
-  const config = mintingConfig(options);
-  const minted = mintToken(user, options.keys.signingKey, config, { purpose: "repository" });
-  try {
-    await repositoryCreate({
-      url: loreserverUrl(options.dataPort),
-      token: minted.token,
-      id: project.id,
-      name: project.name,
-      description: project.description,
-    });
-  } catch (error) {
-    forgetProject(options.database, project.id);
-    return {
-      kind: "repository-refused",
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-  return { kind: "made", project, adopted: false };
-}

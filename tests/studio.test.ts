@@ -42,9 +42,9 @@ import { ProjectReadings } from "../src/projects/refresh.js";
 import { webHandler } from "../src/web/router.js";
 import {
   serviceCapabilities,
-  type StudioApiOptions,
-  type StudioReadings,
-} from "../src/web/studio.js";
+  type RepositoryReadings,
+  type TeamService,
+} from "../src/team/service.js";
 import { methodTable, serverCapabilities } from "../src/team/methods.js";
 import { teamMethods } from "../src/team/endpoint.js";
 import { useTemporaryRoots } from "./temporary.js";
@@ -104,8 +104,8 @@ interface Harness {
  * wrapper afterwards would hide exactly the mistake one test below is about.
  */
 type ReadingsFor =
-  | StudioReadings
-  | ((of: { root: string; database: DatabaseSync; config: IdentityConfig }) => StudioReadings);
+  | RepositoryReadings
+  | ((of: { root: string; database: DatabaseSync; config: IdentityConfig }) => RepositoryReadings);
 
 async function harness(
   readings?: ReadingsFor,
@@ -195,7 +195,7 @@ async function fetchPath(
  * anything. It can page a history — which is what decides whether this build
  * says it serves one — and has yet to find a revision to put in a page.
  */
-const READ_NOTHING: StudioReadings = {
+const READ_NOTHING: RepositoryReadings = {
   get: () => undefined,
   revisions: () => Promise.resolve(undefined),
 };
@@ -207,7 +207,7 @@ const READ_NOTHING: StudioReadings = {
  * tests below need something to hand it — and everything that decides one is
  * added on top of this rather than being in it.
  */
-async function anyOptions(): Promise<StudioApiOptions> {
+async function anyOptions(): Promise<TeamService> {
   const root = await temporaryRoot();
   const layout = identityLayout(root);
   const database = await openMigratedDatabase(layout.databasePath);

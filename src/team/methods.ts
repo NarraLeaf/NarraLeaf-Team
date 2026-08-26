@@ -15,7 +15,7 @@
  * capability is for.
  */
 import type { UserRecord } from "../identity/users.js";
-import { serviceCapabilities, type StudioApiOptions } from "../web/studio.js";
+import { serviceCapabilities, type TeamService } from "./service.js";
 import type { TeamPresence } from "./presence.js";
 import { CONTRACT, TEAM_METHODS } from "./protocol.js";
 import type { TeamAccount, TeamCapability, TeamClientInstance, TeamErrorCode } from "./protocol.js";
@@ -41,7 +41,7 @@ export class MethodError extends Error {
 /** Everything a handler is given. */
 export interface MethodContext {
   /** The service this session belongs to: the database, the keys, the reader. */
-  readonly options: StudioApiOptions;
+  readonly options: TeamService;
   /** Who is calling, freshly identified for this call rather than at sign-in. */
   readonly user: UserRecord;
   /** The same person, in the shape the protocol carries. */
@@ -142,7 +142,7 @@ export function capabilitiesOf(table: ReadonlyMap<string, TeamMethod>): TeamCapa
  */
 export function serverCapabilities(
   table: ReadonlyMap<string, TeamMethod>,
-  service: StudioApiOptions,
+  service: TeamService,
 ): TeamCapability[] {
   const capabilities = new Set<TeamCapability>(capabilitiesOf(table));
   for (const capability of serviceCapabilities(service)) {

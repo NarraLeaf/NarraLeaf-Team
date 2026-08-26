@@ -24,7 +24,7 @@ import type { Duplex } from "node:stream";
 
 import { bearerToken, describeRefusal, identifyToken } from "../identity/bearer.js";
 import { storedServerName } from "../identity/settings.js";
-import type { StudioApiOptions } from "../web/studio.js";
+import type { TeamService } from "./service.js";
 import { TeamHub } from "./hub.js";
 import {
   assertProtocolConsistency,
@@ -57,7 +57,7 @@ const MAXIMUM_MESSAGE_BYTES = 128 * 1024;
 
 export interface TeamSocketOptions {
   /** The same service the REST API answers from: one database, one reader, one log. */
-  readonly service: StudioApiOptions;
+  readonly service: TeamService;
   /** This build's version, for the opening frame. */
   readonly version: string;
   /** What this server is called until somebody names it. */

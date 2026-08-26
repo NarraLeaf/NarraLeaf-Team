@@ -15,7 +15,8 @@
 import { findProject, forgetProject, listProjects } from "../../projects/registry.js";
 import { listUsers } from "../../identity/users.js";
 import { NOT_READ_YET } from "../../teamview.js";
-import { makeOrAdoptProject, memberBody, projectBody } from "../../web/studio.js";
+import { memberBody, projectBody } from "../../projects/answers.js";
+import { makeOrAdoptProject } from "../../projects/create.js";
 import {
   boundedCount,
   MethodError,
