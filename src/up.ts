@@ -23,7 +23,7 @@ import { discoveryDocument, type DiscoverySource } from "./identity/discovery.js
 import { IdentityEndpoint } from "./identity/endpoint.js";
 import { KeyStore } from "./identity/keys.js";
 import { identityLayout } from "./identity/layout.js";
-import { namedTokenLifetimes } from "./identity/settings.js";
+import { namedTokenLifetimes, persistIdentity } from "./identity/settings.js";
 import { countUsers } from "./identity/users.js";
 import { prepareLoreEnvironment } from "./lore/environment.js";
 import {
@@ -190,6 +190,12 @@ export async function up(
     // Identity comes up first: it is quick, and a port already taken is worth
     // discovering before a download rather than after one.
     database = await openMigratedDatabase(identity.databasePath);
+    // What this server is being brought up as, written down before anything can
+    // mint against it. A token's audience depends on the ports and the host
+    // names, and a `nlteam token mint` run in another terminal has no command
+    // line telling it either — so it reads this. Refreshed on every start, so
+    // that `up --hostname newname` is what moves the deployment's identity.
+    persistIdentity(database, config);
     const keys = await KeyStore.open(identity.keysDir);
     endpoint = await IdentityEndpoint.start({
       port: config.teamPort,

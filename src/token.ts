@@ -25,7 +25,7 @@ import { openMigratedDatabase } from "./identity/database.js";
 import { KeyStore } from "./identity/keys.js";
 import { identityLayout } from "./identity/layout.js";
 import { defaultPasswordHasher } from "./identity/passwords.js";
-import { storedTokenLifetimes } from "./identity/settings.js";
+import { storedIdentity, storedTokenLifetimes } from "./identity/settings.js";
 import { mintToken } from "./identity/tokens.js";
 import { authenticate, SIGN_IN_REFUSED_MESSAGE } from "./identity/users.js";
 import { readPassword } from "./stdin.js";
@@ -55,10 +55,16 @@ export async function tokenMint(
 
   const database = await openMigratedDatabase(layout.databasePath);
   try {
-    // Defaults, then what this Team server has stored, then what the command line
-    // named. That order is what makes --token-lifetime an override for the run
-    // rather than a value a stored setting could quietly beat.
-    const config = identityConfig({ ...storedTokenLifetimes(database), ...options.overrides });
+    // Defaults, then what this server was brought up as and has stored, then
+    // what the command line or the environment named. That order is what makes a
+    // token minted here name the same audience the running server does — the
+    // stored identity is where the host names and the ports come from — while a
+    // flag still overrides it for the run.
+    const config = identityConfig({
+      ...storedIdentity(database),
+      ...storedTokenLifetimes(database),
+      ...options.overrides,
+    });
     const result = await authenticate(
       database,
       defaultPasswordHasher(),

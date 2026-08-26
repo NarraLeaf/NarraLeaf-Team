@@ -1,18 +1,21 @@
 /**
  * The settings a Team server keeps in its database rather than in its source.
  *
- * There are three: the two token lifetimes, and the name this deployment calls
- * itself. Every one of them is read where it is used — as a token is minted, as
- * the discovery document is answered — rather than held from the moment the
- * process started. A Team server that read them once would go on issuing
- * month-long tokens after somebody shortened the setting, and would go on
- * calling itself by its host after somebody named it, and the only way to
- * discover either would be to restart it and watch.
+ * There are the two token lifetimes, the name this deployment calls itself, and
+ * the identity a token's audience is built from — the issuer, the audience, the
+ * auth origin, the host names and the ports. The first two are changed with
+ * `settings set` and are read where they are used, as a token is minted or as
+ * the discovery document is answered, so a change reaches a running server. The
+ * identity is different in who owns it: `up` writes it from the configuration it
+ * was started with, and the commands that mint a token in another process read
+ * it — see {@link storedIdentity}, which is why a token minted by hand names the
+ * same audience the running server does rather than whatever bare command line
+ * asked for it.
  *
  * A setting nobody has chosen has no row here, and something else answers for
- * it: the defaults in ./config.ts for the lifetimes, and the server's own host
- * for the name. The comment on migration 3 in ./database.ts says why nothing
- * writes those defaults in.
+ * it: the defaults in ./config.ts for the lifetimes and the identity, and the
+ * server's own host for the name. The comment on migration 3 in ./database.ts
+ * says why nothing writes those defaults in.
  */
 import type { DatabaseSync } from "node:sqlite";
 
@@ -341,4 +344,196 @@ export function namedTokenLifetimes(overrides: Partial<IdentityConfig>): Partial
       ? {}
       : { repositoryTokenLifetimeSeconds: overrides.repositoryTokenLifetimeSeconds }),
   };
+}
+
+/**
+ * The identity a token's audience depends on, stored so that a command run in a
+ * different process than `up` mints the same token `up` would.
+ *
+ * These describe where this deployment is reached and what its tokens say: the
+ * issuer and audience, the auth origin and the host names, and the four ports. A
+ * token's audience is built from them, and a token whose audience names an
+ * address nothing answers on is one that signs in and then fails every
+ * repository operation — so `nlteam token mint` in one terminal must not derive
+ * them from its own bare command line while `up` in another was brought up as
+ * something else. `up` writes them here from its resolved configuration; the
+ * mint commands read them as their default, under anything named again.
+ *
+ * They live in the same `settings` table the lifetimes and the server name do —
+ * key to value, one row each — which is why nothing new had to be added to the
+ * schema for them. The two token lifetimes have their own keys above and are
+ * not repeated here; the server name is a label rather than part of an audience,
+ * and is its own thing too.
+ */
+const IDENTITY_ISSUER_KEY = "identity.issuer";
+const IDENTITY_AUDIENCE_KEY = "identity.audience";
+const IDENTITY_AUTH_ORIGIN_KEY = "identity.auth_origin";
+const IDENTITY_ENV_KEY = "identity.env";
+const IDENTITY_IDP_KEY = "identity.idp";
+const IDENTITY_TEAM_PORT_KEY = "identity.team_port";
+const IDENTITY_AUTH_PORT_KEY = "identity.auth_port";
+const IDENTITY_AUTH_TLS_PORT_KEY = "identity.auth_tls_port";
+const IDENTITY_DATA_PORT_KEY = "identity.data_port";
+const IDENTITY_HOSTNAMES_KEY = "identity.hostnames";
+
+/** The lowest and highest a stored port may be; the range a listener accepts. */
+const MINIMUM_PORT = 1;
+const MAXIMUM_PORT = 65_535;
+
+/** Raised when a stored identity value is not one Team could have written. */
+export class InvalidStoredIdentityError extends Error {
+  constructor(
+    readonly key: string,
+    readonly value: string,
+  ) {
+    super(
+      `team.db holds ${key} = "${value}", which is not a value Team writes. The file was ` +
+        "written by something other than this version of Team.",
+    );
+    this.name = "InvalidStoredIdentityError";
+  }
+}
+
+/** A stored string setting, or undefined where there is no row or it is blank. */
+function storedString(database: DatabaseSync, key: string): string | undefined {
+  const stored = readSetting(database, key);
+  return stored === undefined || stored.trim() === "" ? undefined : stored;
+}
+
+/**
+ * A stored port, or undefined where there is no row.
+ *
+ * Checked as it is read, for the reason {@link lifetimeOf} is: whoever has the
+ * storage root has the SQLite file, and a port that came back as NaN or out of
+ * range would reach a token's audience and name an address no client matches —
+ * the very silent failure this whole thing exists to prevent. A value that will
+ * not read back is refused with a sentence rather than defaulted around.
+ */
+function storedPort(database: DatabaseSync, key: string): number | undefined {
+  const stored = readSetting(database, key);
+  if (stored === undefined) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(stored)) {
+    throw new InvalidStoredIdentityError(key, stored);
+  }
+  const port = Number(stored);
+  if (port < MINIMUM_PORT || port > MAXIMUM_PORT) {
+    throw new InvalidStoredIdentityError(key, stored);
+  }
+  return port;
+}
+
+/**
+ * The stored host names, or undefined where there is no row.
+ *
+ * One comma-separated string, written by {@link persistIdentity} from the list
+ * `up` resolved. A row that is present but empty is an operator who named no
+ * host beyond the auth origin's, which is a real answer — an empty list — rather
+ * than an absent one, so it comes back as `[]` and not as undefined.
+ */
+function storedHostnames(database: DatabaseSync, key: string): readonly string[] | undefined {
+  const stored = readSetting(database, key);
+  if (stored === undefined) {
+    return undefined;
+  }
+  return stored
+    .split(",")
+    .map((host) => host.trim())
+    .filter((host) => host !== "");
+}
+
+/**
+ * The identity this server was brought up as, as far as it is stored.
+ *
+ * Only the settings that have a row are named; everything else is left for the
+ * default in ./config.ts to answer, exactly as the lifetimes are. On a server
+ * that has never been brought up this is empty, and a token minted from it
+ * carries the defaults — which is right, because there is no deployment identity
+ * to speak of until `up` has written one.
+ */
+export function storedIdentity(database: DatabaseSync): Partial<IdentityConfig> {
+  const identity: {
+    issuer?: string;
+    audience?: string;
+    authOrigin?: string;
+    env?: string;
+    idp?: string;
+    teamPort?: number;
+    authPort?: number;
+    authTlsPort?: number;
+    dataPort?: number;
+    hostnames?: readonly string[];
+  } = {};
+
+  const issuer = storedString(database, IDENTITY_ISSUER_KEY);
+  if (issuer !== undefined) {
+    identity.issuer = issuer;
+  }
+  const audience = storedString(database, IDENTITY_AUDIENCE_KEY);
+  if (audience !== undefined) {
+    identity.audience = audience;
+  }
+  const authOrigin = storedString(database, IDENTITY_AUTH_ORIGIN_KEY);
+  if (authOrigin !== undefined) {
+    identity.authOrigin = authOrigin;
+  }
+  const env = storedString(database, IDENTITY_ENV_KEY);
+  if (env !== undefined) {
+    identity.env = env;
+  }
+  const idp = storedString(database, IDENTITY_IDP_KEY);
+  if (idp !== undefined) {
+    identity.idp = idp;
+  }
+  const teamPort = storedPort(database, IDENTITY_TEAM_PORT_KEY);
+  if (teamPort !== undefined) {
+    identity.teamPort = teamPort;
+  }
+  const authPort = storedPort(database, IDENTITY_AUTH_PORT_KEY);
+  if (authPort !== undefined) {
+    identity.authPort = authPort;
+  }
+  const authTlsPort = storedPort(database, IDENTITY_AUTH_TLS_PORT_KEY);
+  if (authTlsPort !== undefined) {
+    identity.authTlsPort = authTlsPort;
+  }
+  const dataPort = storedPort(database, IDENTITY_DATA_PORT_KEY);
+  if (dataPort !== undefined) {
+    identity.dataPort = dataPort;
+  }
+  const hostnames = storedHostnames(database, IDENTITY_HOSTNAMES_KEY);
+  if (hostnames !== undefined) {
+    identity.hostnames = hostnames;
+  }
+
+  return identity;
+}
+
+/**
+ * Write the deployment's identity, over whatever was there.
+ *
+ * Called by `up` from its own resolved configuration, on every start rather than
+ * only the first: an operator moving the server to a new host runs
+ * `up --hostname newname`, and this is where that becomes the default every
+ * other command mints by. It is `up` that owns this identity and refreshes it;
+ * the mint commands only read it.
+ */
+export function persistIdentity(database: DatabaseSync, config: IdentityConfig): void {
+  const now = Date.now();
+  const writes: readonly (readonly [string, string])[] = [
+    [IDENTITY_ISSUER_KEY, config.issuer],
+    [IDENTITY_AUDIENCE_KEY, config.audience],
+    [IDENTITY_AUTH_ORIGIN_KEY, config.authOrigin],
+    [IDENTITY_ENV_KEY, config.env],
+    [IDENTITY_IDP_KEY, config.idp],
+    [IDENTITY_TEAM_PORT_KEY, String(config.teamPort)],
+    [IDENTITY_AUTH_PORT_KEY, String(config.authPort)],
+    [IDENTITY_AUTH_TLS_PORT_KEY, String(config.authTlsPort)],
+    [IDENTITY_DATA_PORT_KEY, String(config.dataPort)],
+    [IDENTITY_HOSTNAMES_KEY, config.hostnames.join(",")],
+  ];
+  for (const [key, value] of writes) {
+    writeSetting(database, key, value, now);
+  }
 }

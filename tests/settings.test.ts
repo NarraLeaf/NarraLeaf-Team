@@ -3,22 +3,25 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { WriteText } from "../src/cli.js";
-import { DEFAULT_IDENTITY } from "../src/identity/config.js";
+import { DEFAULT_IDENTITY, identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { identityLayout } from "../src/identity/layout.js";
 import {
   InvalidServerNameError,
   InvalidSettingError,
+  InvalidStoredIdentityError,
   isSettingStored,
   MAXIMUM_SERVER_NAME_LENGTH,
   MAXIMUM_TOKEN_LIFETIME_SECONDS,
   MINIMUM_TOKEN_LIFETIME_SECONDS,
   namedTokenLifetimes,
+  persistIdentity,
   REPOSITORY_LIFETIME_KEY,
   SERVER_NAME_KEY,
   setServerName,
   setTokenLifetimes,
   SIGN_IN_LIFETIME_KEY,
+  storedIdentity,
   storedServerName,
   storedTokenLifetimes,
 } from "../src/identity/settings.js";
@@ -287,6 +290,90 @@ describe("nlteam settings set", () => {
     } finally {
       connection.close();
     }
+  });
+});
+
+describe("the deployment identity a token's audience depends on", () => {
+  it("is empty on a server that has never been brought up", async () => {
+    const connection = await database();
+
+    // Nothing stored, so nothing is named and the defaults answer for all of
+    // it. A token minted from this carries the loopback, which is right for a
+    // machine nobody else reaches.
+    expect(storedIdentity(connection)).toEqual({});
+  });
+
+  it("reads back what was persisted, and only that", async () => {
+    const connection = await database();
+
+    persistIdentity(
+      connection,
+      identityConfig({
+        issuer: "team.example.com",
+        audience: "lore",
+        authOrigin: "team.example.com:41402",
+        env: "staging",
+        idp: "example",
+        teamPort: 41500,
+        authPort: 41501,
+        authTlsPort: 41502,
+        dataPort: 41337,
+        hostnames: ["team.example.com", "team.internal"],
+      }),
+    );
+
+    expect(storedIdentity(connection)).toEqual({
+      issuer: "team.example.com",
+      audience: "lore",
+      authOrigin: "team.example.com:41402",
+      env: "staging",
+      idp: "example",
+      teamPort: 41500,
+      authPort: 41501,
+      authTlsPort: 41502,
+      dataPort: 41337,
+      hostnames: ["team.example.com", "team.internal"],
+    });
+  });
+
+  it("refreshes rather than adding a second row for the same setting", async () => {
+    const connection = await database();
+
+    persistIdentity(connection, identityConfig({ hostnames: ["old.example.com"] }));
+    persistIdentity(connection, identityConfig({ hostnames: ["new.example.com"] }));
+
+    expect(storedIdentity(connection).hostnames).toEqual(["new.example.com"]);
+    // Ten settings, one row each, however many times they are written.
+    expect(connection.prepare("SELECT COUNT(*) AS count FROM settings").get()).toEqual({
+      count: 10,
+    });
+  });
+
+  it("reads an empty host list back as an empty list, not as unset", async () => {
+    const connection = await database();
+
+    persistIdentity(connection, identityConfig({}));
+
+    // The auth origin's own host is the only one, so no host was named beyond
+    // it: that is an answer, and it round-trips as one rather than reverting to
+    // whatever a default might be.
+    expect(storedIdentity(connection).hostnames).toEqual([]);
+  });
+
+  it("refuses stored port text that is not a port, rather than naming a wrong address", async () => {
+    const connection = await database();
+    // Nothing Team writes could put this here; whoever has the storage root has
+    // the file. A port read back as nonsense would reach a token's audience.
+    store(connection, "identity.data_port", "not a port");
+
+    expect(() => storedIdentity(connection)).toThrow(InvalidStoredIdentityError);
+  });
+
+  it("refuses a stored port outside the range a listener accepts", async () => {
+    const connection = await database();
+    store(connection, "identity.data_port", "70000");
+
+    expect(() => storedIdentity(connection)).toThrow(InvalidStoredIdentityError);
   });
 });
 

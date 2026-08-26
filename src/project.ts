@@ -13,7 +13,7 @@ import { identityConfig, type IdentityConfig } from "./identity/config.js";
 import { openMigratedDatabase } from "./identity/database.js";
 import { KeyStore } from "./identity/keys.js";
 import { identityLayout } from "./identity/layout.js";
-import { storedTokenLifetimes } from "./identity/settings.js";
+import { storedIdentity, storedTokenLifetimes } from "./identity/settings.js";
 import { mintToken } from "./identity/tokens.js";
 import { countUsers, listUsers, requireUser, type UserRecord } from "./identity/users.js";
 import { loreserverUrl, repositoryCreate } from "./projects/repository.js";
@@ -86,10 +86,16 @@ export async function projectCreate(
   const database = await openMigratedDatabase(layout.databasePath);
 
   try {
-    // Defaults, then what this Team server has stored, then what the command line
-    // named. That order is what makes --token-lifetime an override for the run
-    // rather than a value a stored setting could quietly beat.
-    const config = identityConfig({ ...storedTokenLifetimes(database), ...options.overrides });
+    // Defaults, then what this server was brought up as and has stored, then
+    // what the command line or the environment named. The stored identity is
+    // where the data port and the host names come from, so the token this hands
+    // to loreserver names the same audience the running server mints — while a
+    // flag still overrides it for the run.
+    const config = identityConfig({
+      ...storedIdentity(database),
+      ...storedTokenLifetimes(database),
+      ...options.overrides,
+    });
     const owner = resolveOperator(database, options.as);
     const keys = await KeyStore.open(layout.keysDir);
     // Minted without a password, unlike `token mint`. Whoever runs this already
