@@ -682,6 +682,89 @@ describe("making a project over the socket", () => {
   });
 });
 
+describe("forgetting a project over the socket", () => {
+  it("takes it off the list, and tells whoever is watching", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+
+    const watcher = await team.connect(team.tokenFor("ada"));
+    await watcher.send("subscribe", { topic: TOPIC_PROJECTS });
+
+    const forgetter = await team.connect(team.tokenFor("ada"));
+    // An object, not null: a method with nothing to report answers with {}.
+    expect(await forgetter.value(TEAM_METHODS.projectsForget, { project: project.id })).toEqual({});
+    // The row is gone, and a fresh read of the list over the socket no longer
+    // shows it.
+    expect(listProjects(team.database)).toEqual([]);
+    const listed = (await forgetter.value(TEAM_METHODS.projectsList))["projects"] as unknown[];
+    expect(listed).toEqual([]);
+
+    await watcher.until(() => watcher.events.length > 0);
+    const event = watcher.events[0]?.payload as { kind: string; project: string };
+    expect(event.kind).toBe("project-forgotten");
+    expect(event.project).toBe(project.id);
+  });
+
+  it("drops what the reader held about it, so a re-registration starts clean", async () => {
+    const held: Record<string, boolean> = {};
+    let project = { id: "" };
+    const team = await harness({
+      readings: {
+        get: () => undefined,
+        forget: (projectId: string) => {
+          held[projectId] = true;
+        },
+      },
+    });
+    const ada = await account(team.database, "ada");
+    project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    await client.value(TEAM_METHODS.projectsForget, { project: project.id });
+    // The reading was told to forget the project too, keyed by the repository id
+    // a re-registration would keep.
+    expect(held[project.id]).toBe(true);
+  });
+
+  it("forgets by name as readily as by id", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    expect(await client.value(TEAM_METHODS.projectsForget, { project: "lighthouse" })).toEqual({});
+    expect(listProjects(team.database)).toEqual([]);
+  });
+
+  it("is idempotent: forgetting one that is already gone is an answer, not a refusal", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    const client = await team.connect(team.tokenFor("ada"));
+
+    // Nothing by that name was ever here. The state the caller wanted is the
+    // state there is, so this is {} rather than not-found.
+    const answer = await client.call(TEAM_METHODS.projectsForget, { project: "never-here" });
+    expect(answer.code).toBeUndefined();
+    expect(answer.value).toEqual({});
+  });
+});
+
 describe("subscribing", () => {
   it("says where a topic stands, and refuses one nobody publishes", async () => {
     const team = await harness();

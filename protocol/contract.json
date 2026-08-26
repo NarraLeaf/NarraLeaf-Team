@@ -26,6 +26,7 @@
     "projects.get",
     "projects.history",
     "projects.create",
+    "projects.forget",
     "members.list",
     "threads.list",
     "threads.get",

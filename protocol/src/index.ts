@@ -691,6 +691,8 @@ export const TEAM_METHODS = {
   projectsHistory: "projects.history",
   /** Make a project, or register a repository the author already has. */
   projectsCreate: "projects.create",
+  /** Take a project off this server's list, leaving its repository untouched. */
+  projectsForget: "projects.forget",
   /** Every account, as a name beside a piece of work. */
   membersList: "members.list",
   /** The threads anchored in one project, newest activity first. */

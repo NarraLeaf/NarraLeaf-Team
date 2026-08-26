@@ -14,7 +14,7 @@
  * there is no window where Studio has asked over HTTP, been told the answer, and
  * missed the event that came in between.
  */
-import { findProject, listProjects } from "../../projects/registry.js";
+import { findProject, forgetProject, listProjects } from "../../projects/registry.js";
 import { listUsers } from "../../identity/users.js";
 import { NOT_READ_YET } from "../../teamview.js";
 import {
@@ -199,6 +199,39 @@ export function projectMethods(): TeamMethod[] {
             announceProjects(context, { kind: "project-created", project: result.project.id });
             return { project: projectBody(context.options, result.project) };
         }
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsForget,
+      capability: "session",
+      handle: (params: unknown, context: MethodContext) => {
+        // By id or by name, as the REST twin resolves it: a client holding a
+        // stray row has both, and neither is more correct than the other.
+        const reference = requiredText(paramsObject(params), "project", ID_LIMIT);
+        const project = findProject(context.options.database, reference);
+        if (project === undefined) {
+          // Idempotent, and this is the whole of it: a project that is already
+          // gone is the state the caller asked for, so a second forget - or one
+          // after somebody else's - is an empty object rather than a refusal.
+          // Any account may forget any project, which is why nothing here is a
+          // role check: the standing rule is that every account reaches every
+          // project on this server.
+          return {};
+        }
+        // The row goes; the repository does not. loreserver keeps the store and
+        // every revision in it, exactly as they were - forgetting is this
+        // server's list forgetting a project, not a way of destroying one.
+        forgetProject(context.options.database, project.id);
+        // The reading is dropped too, so a re-registration of that repository id
+        // does not inherit a history read while the stray row sat on the list.
+        context.options.readings?.forget?.(project.id);
+        // The known gap this closes: the gRPC delete path does not publish this,
+        // so a project forgotten another way left connected clients on a stale
+        // list. Said on the list's topic and the project's own, the second
+        // because anybody holding it is watching something that is not there.
+        announceProjects(context, { kind: "project-forgotten", project: project.id });
+        // An object rather than null: a method with nothing to report says {}.
+        return {};
       },
     },
     {
