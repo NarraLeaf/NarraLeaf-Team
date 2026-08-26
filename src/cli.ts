@@ -1,6 +1,6 @@
 import { parseArgs } from "./args.js";
 import { describeDuration } from "./duration.js";
-import { DEFAULT_IDENTITY, identityConfig } from "./identity/config.js";
+import { DEFAULT_IDENTITY } from "./identity/config.js";
 import { SERVER_NAME_KEY, SETTING_KEYS } from "./identity/settings.js";
 import { DEFAULT_ROLE } from "./identity/users.js";
 import { init } from "./init.js";
