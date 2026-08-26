@@ -44,11 +44,10 @@ export interface ProjectReadingsOptions {
   readonly database: DatabaseSync;
   readonly config: IdentityConfig;
   /**
-   * Called each time a project's reading changes what is on screen, naming it.
+   * Called each time a project's reading changed, naming the project.
    *
-   * The id is there because two things listen now. A terminal or a browser
-   * redraws whatever it is holding and does not care which project moved; a
-   * session publishes on that project's own topic, and a topic needs the id.
+   * The id is there because what listens is a session publishing on that
+   * project's own topic, and a topic needs to be named.
    */
   readonly onChange?: (projectId: string) => void;
   /**
@@ -58,9 +57,8 @@ export interface ProjectReadingsOptions {
    * unreadable for a week is one sentence, not ten thousand. See
    * {@link ProjectReadings.announce}.
    *
-   * Optional because only `up` has anywhere to put a line. The terminal
-   * interface owns the alternate screen and a browser is holding a view; both
-   * read the same failure off the project itself.
+   * Optional because only `up` has anywhere to put a line. Everything else
+   * reads the same failure off the project itself.
    */
   readonly onReadability?: (line: string) => void;
   readonly intervalMs?: number;

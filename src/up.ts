@@ -42,11 +42,11 @@ import {
 } from "./loreserver/layout.js";
 import { LORESERVER_VERSION, resolveArtifact } from "./loreserver/pin.js";
 import { Supervisor, describeExit } from "./loreserver/supervisor.js";
+import { ProjectReadings } from "./projects/refresh.js";
 import { startAuthorizationService } from "./projects/service.js";
 import { createTeamSocket, type TeamSocket } from "./team/endpoint.js";
 import { projectTopic, TOPIC_PROJECTS } from "./team/protocol.js";
 import { refuseUpgrade } from "./team/websocket.js";
-import { ViewPublisher } from "./publisher.js";
 import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
 import { trustCommandFor } from "./tls/trust.js";
 import { VERSION } from "./version.js";
@@ -166,7 +166,7 @@ export async function up(
   let authorization: GrpcServer | undefined;
   let authorizationTls: GrpcServer | undefined;
   let database: DatabaseSync | undefined;
-  let publisher: ViewPublisher | undefined;
+  let readings: ProjectReadings | undefined;
   /**
    * The sessions, once there are any.
    *
@@ -257,12 +257,16 @@ export async function up(
     // them rather than in front of it. A Studio installation asks what a
     // project's history says over the API below, and an answer that waited for
     // a clone would be an answer that arrived after the person had gone.
-    const views = new ViewPublisher({
-      root: options.root,
+    //
+    // Made here because what it holds is handed to the API below, and started
+    // further down, once loreserver is answering. Reading before then is a pass
+    // that fails for the one reason nobody needs telling about — the server it
+    // reads through has not started yet — and the sentence it produced said so
+    // about every project on every start.
+    const projects = new ProjectReadings({
+      root: identity.root,
       database,
       config,
-      healthPort: ports.healthPort,
-      fingerprint: certificates.authority.fingerprint256,
       // The one place a repository Team cannot read is said out loud. It is not
       // an error and nothing waits on it: `up` goes on to start loreserver
       // whatever this says, and every answer goes on reporting the project as
@@ -274,16 +278,11 @@ export async function up(
       // to whoever holds the list would have every open Studio re-read the
       // whole thing once a minute for nothing. The list moves when somebody
       // makes a project or takes one off, which is what the API announces.
-      onProjectRead: (projectId) => {
+      onChange: (projectId) => {
         team?.hub.publish(projectTopic(projectId), { kind: "project-read", project: projectId });
       },
     });
-    publisher = views;
-    // Made here because what it holds is handed to the API below, and started
-    // further down, once loreserver is answering. Reading before then
-    // is a pass that fails for the one reason nobody needs telling about — the
-    // server it reads through has not started yet — and the sentence it
-    // produced said so about every project on every start.
+    readings = projects;
 
     const studio: StudioApiOptions = {
       database,
@@ -294,7 +293,7 @@ export async function up(
       // that may not yet trust this server — the same claim `nlteam token mint`
       // writes, for the same reason.
       fingerprint: certificates.authority.fingerprint256,
-      readings: views.readings,
+      readings: projects,
       log: (line) => {
         stdout(`${line}\n`);
       },
@@ -496,7 +495,7 @@ export async function up(
     // this moment become able to answer. Nothing waits on this — the API and
     // the interface have been served for several steps already, and a project
     // nobody has read yet is drawn as one nobody has read yet.
-    views.start();
+    projects.start();
 
     // Last, so that it is the thing left on the screen rather than something
     // scrolled away by a download.
@@ -545,7 +544,7 @@ export async function up(
     // stopped answering is one whose client reconnects into a machine that is
     // going down, and then does it again a second later.
     team?.hub.closeAll("this server is shutting down");
-    publisher?.stop();
+    readings?.stop();
     database?.close();
   }
 }
