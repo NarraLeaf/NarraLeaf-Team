@@ -16,6 +16,12 @@ function messageFor(argv: readonly string[]): string {
   return result.kind === "error" ? result.message : "";
 }
 
+/** The error message out of an already-parsed result, for the env-var cases. */
+function messageFor2(result: ReturnType<typeof parseArgs>): string {
+  expect(result.kind).toBe("error");
+  return result.kind === "error" ? result.message : "";
+}
+
 describe("parseArgs", () => {
   it("recognises the long and short spellings of --version", () => {
     expect(parseArgs(["--version"])).toEqual({ kind: "version" });
@@ -220,6 +226,95 @@ describe("parseArgs, the root from the environment", () => {
     const result = parseArgs(["up"], {});
     expect(result.kind).toBe("error");
     expect(result.kind === "error" && result.message).toContain("NLTEAM_ROOT");
+  });
+});
+
+describe("parseArgs, the ports and identity from the environment", () => {
+  it("fills the identity overrides from the environment on up", () => {
+    expect(
+      parseArgs(["up", "--root", "/srv/team"], {
+        NLTEAM_ISSUER: "team.example.com",
+        NLTEAM_AUDIENCE: "lore",
+        NLTEAM_AUTH_ORIGIN: "team.example.com:41402",
+        NLTEAM_ENV: "staging",
+        NLTEAM_IDP: "example",
+        NLTEAM_TOKEN_LIFETIME: "5m",
+        NLTEAM_TEAM_PORT: "41500",
+        NLTEAM_AUTH_PORT: "41501",
+        NLTEAM_AUTH_TLS_PORT: "41502",
+        NLTEAM_DATA_PORT: "41337",
+        NLTEAM_HEALTH_PORT: "41339",
+        NLTEAM_HOSTNAME: "team.example.com, team.internal",
+      }),
+    ).toMatchObject({
+      kind: "up",
+      dataPort: 41337,
+      healthPort: 41339,
+      overrides: {
+        issuer: "team.example.com",
+        audience: "lore",
+        authOrigin: "team.example.com:41402",
+        env: "staging",
+        idp: "example",
+        signInTokenLifetimeSeconds: 300,
+        teamPort: 41500,
+        authPort: 41501,
+        authTlsPort: 41502,
+        dataPort: 41337,
+        hostnames: ["team.example.com", "team.internal"],
+      },
+    });
+  });
+
+  it("fills the identity overrides from the environment on token mint too", () => {
+    expect(
+      parseArgs(["token", "mint", "ada", "--root", "/srv/team"], {
+        NLTEAM_ISSUER: "team.example.com",
+        NLTEAM_DATA_PORT: "41500",
+      }),
+    ).toMatchObject({
+      kind: "token-mint",
+      overrides: { issuer: "team.example.com", dataPort: 41500 },
+    });
+  });
+
+  it("lets a flag on the line beat its variable", () => {
+    expect(
+      parseArgs(["up", "--root", "/srv/team", "--data-port", "42000"], {
+        NLTEAM_DATA_PORT: "41500",
+      }),
+    ).toMatchObject({ dataPort: 42000, overrides: { dataPort: 42000 } });
+  });
+
+  it("lets --hostname on the line replace the whole variable, rather than adding to it", () => {
+    // The flag describes the set of hosts. A command line that names any is the
+    // whole of the list, so the variable does not smuggle another in beside it.
+    expect(
+      parseArgs(["up", "--root", "/srv/team", "--hostname", "only.example.com"], {
+        NLTEAM_HOSTNAME: "ignored.example.com",
+      }),
+    ).toMatchObject({ overrides: { hostnames: ["only.example.com"] } });
+  });
+
+  it("refuses a port from the environment exactly as it refuses one on the line", () => {
+    expect(
+      messageFor2(parseArgs(["up", "--root", "/srv/team"], { NLTEAM_DATA_PORT: "70000" })),
+    ).toContain("between 1");
+    expect(
+      messageFor2(parseArgs(["up", "--root", "/srv/team"], { NLTEAM_TEAM_PORT: "http" })),
+    ).toContain("needs a port number");
+  });
+
+  it("reads a duration from NLTEAM_TOKEN_LIFETIME the way the flag does", () => {
+    expect(
+      parseArgs(["token", "mint", "ada", "--root", "/srv/team"], { NLTEAM_TOKEN_LIFETIME: "48h" }),
+    ).toMatchObject({ overrides: { signInTokenLifetimeSeconds: 48 * 60 * 60 } });
+  });
+
+  it("drops the blank entries a doubled or trailing comma leaves behind", () => {
+    expect(
+      parseArgs(["up", "--root", "/srv/team"], { NLTEAM_HOSTNAME: "a.example.com,,b.example.com," }),
+    ).toMatchObject({ overrides: { hostnames: ["a.example.com", "b.example.com"] } });
   });
 });
 

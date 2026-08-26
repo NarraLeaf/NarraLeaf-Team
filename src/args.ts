@@ -17,8 +17,9 @@ import { DEFAULT_ROLE } from "./identity/users.js";
 import { DEFAULT_PORTS } from "./loreserver/layout.js";
 
 /**
- * Identity settings named on a command line. Anything absent keeps the default
- * from src/identity/config.ts.
+ * Identity settings named on a command line or in the environment. Anything
+ * absent keeps what this server has stored, and then the default from
+ * src/identity/config.ts.
  *
  * The same options are accepted by every command that mints a token or writes
  * loreserver's configuration, because both sides of the comparison loreserver
@@ -177,6 +178,20 @@ function missingRoot(command: string): Invocation {
  */
 const ENVIRONMENT: Readonly<Record<string, string>> = {
   "--root": "NLTEAM_ROOT",
+  "--issuer": "NLTEAM_ISSUER",
+  "--audience": "NLTEAM_AUDIENCE",
+  "--auth-origin": "NLTEAM_AUTH_ORIGIN",
+  "--env": "NLTEAM_ENV",
+  "--idp": "NLTEAM_IDP",
+  "--token-lifetime": "NLTEAM_TOKEN_LIFETIME",
+  "--team-port": "NLTEAM_TEAM_PORT",
+  "--auth-port": "NLTEAM_AUTH_PORT",
+  "--auth-tls-port": "NLTEAM_AUTH_TLS_PORT",
+  "--data-port": "NLTEAM_DATA_PORT",
+  "--health-port": "NLTEAM_HEALTH_PORT",
+  // Repeatable on the line and comma-separated in the variable; the split is in
+  // {@link hostnamesFrom}, because one host per entry is what the rest expects.
+  "--hostname": "NLTEAM_HOSTNAME",
 };
 
 /**
@@ -210,6 +225,32 @@ function optionValue(tokens: Tokens, env: NodeJS.ProcessEnv, option: string): st
 /** The storage root a command was given, on the line or in the environment. */
 function rootOf(tokens: Tokens, env: NodeJS.ProcessEnv): string | undefined {
   return optionValue(tokens, env, "--root");
+}
+
+/**
+ * The host names a command was given, on the line or in the environment.
+ *
+ * The flag is repeatable and wins as a whole: a command line naming any host at
+ * all describes the set of them, and the variable does not add to it. In the
+ * variable the hosts are comma-separated, because a variable cannot be repeated
+ * the way a flag can. Undefined means neither named any, which is not the same
+ * as an empty list — see the validation in {@link readIdentityOverrides}.
+ */
+function hostnamesFrom(tokens: Tokens, env: NodeJS.ProcessEnv): readonly string[] | undefined {
+  const named = tokens.lists.get("--hostname");
+  if (named !== undefined) {
+    return named;
+  }
+  const fromEnv = envValue(env, "--hostname");
+  if (fromEnv === undefined) {
+    return undefined;
+  }
+  // Blank entries around a comma are dropped rather than kept as empty hosts, so
+  // that a trailing comma or a doubled one is a typo without a consequence.
+  return fromEnv
+    .split(",")
+    .map((host) => host.trim())
+    .filter((host) => host !== "");
 }
 
 /**
@@ -383,11 +424,17 @@ const IDENTITY_OPTIONS = [
 const IDENTITY_LIST_OPTIONS = ["--hostname"] as const;
 
 /**
- * Collect the identity options out of a parsed command line.
+ * Collect the identity options out of a command line and the environment.
+ *
+ * Every option is read through {@link optionValue}, so a flag beats its
+ * variable and the variable answers for a flag that was not given. What each
+ * value has to be is checked the same way whether it came from the line or the
+ * environment: a port out of range in a variable is refused exactly as one out
+ * of range in a flag, rather than silently coerced.
  *
  * Returns a sentence instead when one of them was unusable.
  */
-function readIdentityOverrides(tokens: Tokens): IdentityOverrides | string {
+function readIdentityOverrides(tokens: Tokens, env: NodeJS.ProcessEnv): IdentityOverrides | string {
   const overrides: {
     issuer?: string;
     audience?: string;
@@ -402,15 +449,15 @@ function readIdentityOverrides(tokens: Tokens): IdentityOverrides | string {
     hostnames?: readonly string[];
   } = {};
 
-  const issuer = tokens.values.get("--issuer");
+  const issuer = optionValue(tokens, env, "--issuer");
   if (issuer !== undefined) {
     overrides.issuer = issuer;
   }
-  const audience = tokens.values.get("--audience");
+  const audience = optionValue(tokens, env, "--audience");
   if (audience !== undefined) {
     overrides.audience = audience;
   }
-  const authOrigin = tokens.values.get("--auth-origin");
+  const authOrigin = optionValue(tokens, env, "--auth-origin");
   if (authOrigin !== undefined) {
     // A scheme here would end up written twice, as https://https://host.
     if (authOrigin.includes("://")) {
@@ -418,15 +465,15 @@ function readIdentityOverrides(tokens: Tokens): IdentityOverrides | string {
     }
     overrides.authOrigin = authOrigin;
   }
-  const env = tokens.values.get("--env");
-  if (env !== undefined) {
-    overrides.env = env;
+  const environment = optionValue(tokens, env, "--env");
+  if (environment !== undefined) {
+    overrides.env = environment;
   }
-  const idp = tokens.values.get("--idp");
+  const idp = optionValue(tokens, env, "--idp");
   if (idp !== undefined) {
     overrides.idp = idp;
   }
-  const lifetime = tokens.values.get("--token-lifetime");
+  const lifetime = optionValue(tokens, env, "--token-lifetime");
   if (lifetime !== undefined) {
     const milliseconds = parseDuration("--token-lifetime", lifetime);
     if (typeof milliseconds === "string") {
@@ -438,7 +485,7 @@ function readIdentityOverrides(tokens: Tokens): IdentityOverrides | string {
     // to be the only bound on a token is not one to lengthen for a single run.
     overrides.signInTokenLifetimeSeconds = Math.floor(milliseconds / 1000);
   }
-  const teamPort = tokens.values.get("--team-port");
+  const teamPort = optionValue(tokens, env, "--team-port");
   if (teamPort !== undefined) {
     const port = parsePort("--team-port", teamPort);
     if (typeof port === "string") {
@@ -446,7 +493,7 @@ function readIdentityOverrides(tokens: Tokens): IdentityOverrides | string {
     }
     overrides.teamPort = port;
   }
-  const authPort = tokens.values.get("--auth-port");
+  const authPort = optionValue(tokens, env, "--auth-port");
   if (authPort !== undefined) {
     const port = parsePort("--auth-port", authPort);
     if (typeof port === "string") {
@@ -454,7 +501,7 @@ function readIdentityOverrides(tokens: Tokens): IdentityOverrides | string {
     }
     overrides.authPort = port;
   }
-  const authTlsPort = tokens.values.get("--auth-tls-port");
+  const authTlsPort = optionValue(tokens, env, "--auth-tls-port");
   if (authTlsPort !== undefined) {
     const port = parsePort("--auth-tls-port", authTlsPort);
     if (typeof port === "string") {
@@ -462,7 +509,7 @@ function readIdentityOverrides(tokens: Tokens): IdentityOverrides | string {
     }
     overrides.authTlsPort = port;
   }
-  const dataPort = tokens.values.get("--data-port");
+  const dataPort = optionValue(tokens, env, "--data-port");
   if (dataPort !== undefined) {
     const port = parsePort("--data-port", dataPort);
     if (typeof port === "string") {
@@ -471,7 +518,7 @@ function readIdentityOverrides(tokens: Tokens): IdentityOverrides | string {
     overrides.dataPort = port;
   }
 
-  const hostnames = tokens.lists.get("--hostname");
+  const hostnames = hostnamesFrom(tokens, env);
   if (hostnames !== undefined) {
     for (const name of hostnames) {
       // A scheme, a path or a port here would go into a certificate as a name
@@ -521,7 +568,7 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   }
 
   let healthPort = DEFAULT_PORTS.healthPort;
-  const healthPortText = tokens.values.get("--health-port");
+  const healthPortText = optionValue(tokens, env, "--health-port");
   if (healthPortText !== undefined) {
     const port = parsePort("--health-port", healthPortText);
     if (typeof port === "string") {
@@ -530,7 +577,7 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
     healthPort = port;
   }
 
-  const overrides = readIdentityOverrides(tokens);
+  const overrides = readIdentityOverrides(tokens, env);
   if (typeof overrides === "string") {
     return error(overrides);
   }
@@ -728,7 +775,7 @@ function parseToken(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation
   if (root === undefined) {
     return missingRoot("token mint");
   }
-  const overrides = readIdentityOverrides(tokens);
+  const overrides = readIdentityOverrides(tokens, env);
   if (typeof overrides === "string") {
     return error(overrides);
   }
@@ -770,7 +817,7 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
       return missingRoot("project create");
     }
 
-    const overrides = readIdentityOverrides(tokens);
+    const overrides = readIdentityOverrides(tokens, env);
     if (typeof overrides === "string") {
       return error(overrides);
     }

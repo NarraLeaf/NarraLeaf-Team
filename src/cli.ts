@@ -86,6 +86,13 @@ Commands:
 Every command takes --root <path>, the directory Team keeps its files in, or
 reads it from NLTEAM_ROOT when the flag is not given.
 
+Every option below has an environment variable that stands in for it, named for
+the option: --root is NLTEAM_ROOT, --data-port is NLTEAM_DATA_PORT, --hostname
+is NLTEAM_HOSTNAME (comma-separated), and so on. A flag on the line beats its
+variable, the variable beats what this server has stored, and that beats the
+built-in default. It is what lets a container be configured without composing a
+command line.
+
 Options for up:
       --health-port <port>  loreserver's HTTP health check port (default ${DEFAULT_PORTS.healthPort})
       --no-identity         Configure loreserver to demand nothing, so that
