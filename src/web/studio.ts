@@ -66,7 +66,7 @@ import { audienceHosts, dataRemoteUrl, type IdentityConfig } from "../identity/c
 import { bearerToken, describeRefusal, identifyToken } from "../identity/bearer.js";
 import type { KeyStore } from "../identity/keys.js";
 import { defaultPasswordHasher } from "../identity/passwords.js";
-import { storedTokenLifetimes } from "../identity/settings.js";
+import { storedTokenLifetimes, type TokenLifetimes } from "../identity/settings.js";
 import {
   holdRefusedSignIn,
   sharedSignInLimiter,
@@ -169,6 +169,16 @@ export interface StudioApiOptions {
   readonly database: DatabaseSync;
   readonly keys: KeyStore;
   readonly config: IdentityConfig;
+  /**
+   * Token lifetimes named on the command line this server was started with.
+   *
+   * Absent is the ordinary case, and then the stored settings decide. What an
+   * operator typed has to outrank them, or `up --token-lifetime` would stop
+   * doing anything the moment somebody stored the setting it names — the same
+   * rule the authorization service is written to, so that a token minted here
+   * and one minted there last the same time.
+   */
+  readonly namedLifetimes?: Partial<TokenLifetimes>;
   /** The port loreserver serves gRPC on, for creating a repository. */
   readonly dataPort: number;
   /**
@@ -483,6 +493,24 @@ function caller(
     return undefined;
   }
   return identified.user;
+}
+
+/**
+ * The settings to mint a token with, as they stand now.
+ *
+ * The base is what this server was brought up as. The stored lifetimes are read
+ * on every mint, so shortening one reaches a running server without a restart;
+ * what an operator named on the command line outranks a stored lifetime, or
+ * `up --token-lifetime` would stop doing anything the moment somebody stored the
+ * setting it names. This is the same order the authorization service mints by,
+ * so a token handed out here and one handed out there last the same time.
+ */
+function mintingConfig(options: StudioApiOptions): IdentityConfig {
+  return {
+    ...options.config,
+    ...storedTokenLifetimes(options.database),
+    ...options.namedLifetimes,
+  };
 }
 
 /**
@@ -826,7 +854,7 @@ async function answerSignIn(
   }
   limiter.accepted(username, address);
 
-  const config = { ...options.config, ...storedTokenLifetimes(options.database) };
+  const config = mintingConfig(options);
   const minted = mintToken(result.user, options.keys.signingKey, config, {
     purpose: "sign-in",
     ...(options.fingerprint === undefined ? {} : { authorityFingerprint: options.fingerprint }),
@@ -1036,7 +1064,7 @@ async function answerProjectCreate(
     return;
   }
 
-  const config = { ...options.config, ...storedTokenLifetimes(options.database) };
+  const config = mintingConfig(options);
   const minted = mintToken(user, options.keys.signingKey, config, { purpose: "repository" });
   try {
     await repositoryCreate({

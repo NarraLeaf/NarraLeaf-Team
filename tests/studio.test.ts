@@ -29,7 +29,7 @@ import { identityConfig, type IdentityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { KeyStore } from "../src/identity/keys.js";
 import { identityLayout } from "../src/identity/layout.js";
-import { setTokenLifetimes } from "../src/identity/settings.js";
+import { setTokenLifetimes, type TokenLifetimes } from "../src/identity/settings.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
 import { SignInLimiter } from "../src/identity/signin.js";
 import { decodeToken, mintToken, type TokenClaims } from "../src/identity/tokens.js";
@@ -122,6 +122,7 @@ type ReadingsFor =
 async function harness(
   readings?: ReadingsFor,
   log?: (line: string) => void,
+  namedLifetimes?: Partial<TokenLifetimes>,
 ): Promise<Harness> {
   const root = await temporaryRoot();
   const layout = identityLayout(root);
@@ -136,6 +137,7 @@ async function harness(
     database,
     keys,
     config,
+    ...(namedLifetimes === undefined ? {} : { namedLifetimes }),
     dataPort: config.dataPort,
     fingerprint: FINGERPRINT,
     // One per harness. The limiter a running server uses is shared by every
@@ -1278,6 +1280,22 @@ describe("signing in with a password", () => {
     const claims = decodeToken(answer.body["token"] as string).claims as TokenClaims;
 
     expect(claims.exp - claims.iat).toBe(3600);
+  });
+
+  it("lets a lifetime the server was started with outrank one that is stored", async () => {
+    // `up --token-lifetime` is written for the run, and a stored setting must
+    // not beat it — or the option would stop doing anything the moment somebody
+    // stored the setting it names. This is the sign-in a Studio installation
+    // takes, so it is the one that has to agree with the exchange the same
+    // command line configures.
+    const team = await harness(undefined, undefined, { signInTokenLifetimeSeconds: 1800 });
+    await account(team.database, "ada");
+    setTokenLifetimes(team.database, { signInTokenLifetimeSeconds: 3600 });
+
+    const answer = await signIn(team.origin, { username: "ada", password: PASSWORD });
+    const claims = decodeToken(answer.body["token"] as string).claims as TokenClaims;
+
+    expect(claims.exp - claims.iat).toBe(1800);
   });
 
   it("says one thing however it was refused", async () => {
