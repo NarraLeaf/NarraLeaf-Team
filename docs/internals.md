@@ -133,17 +133,18 @@ else, but every repository access goes on to ask Team.
 
 ## The Team protocol is a session, not a request
 
-Everything a Studio installation could ask this server, it asked one request at
-a time: seven routes under `/api/studio/v1`, a bearer token on each, and an
-answer. That is enough for a list of projects and it is not enough for anything
-an author does together with somebody else. Two things are missing from it and
-neither can be added to a request: **this server cannot say anything nobody
-asked for**, and **there is nowhere below a project to put anything**.
+Everything a Studio installation could ask this server, it once asked one request
+at a time: routes under `/api/studio/v1`, a bearer token on each, and an answer.
+That is enough for a list of projects and it is not enough for anything an author
+does together with somebody else. Two things are missing from it and neither can
+be added to a request: **this server cannot say anything nobody asked for**, and
+**there is nowhere below a project to put anything**.
 
-So there is a second thing on the same listener. `GET /api/team/v1/socket`, with
-the same bearer, becomes a WebSocket, and over it either side speaks. Studio
+So the work moved onto the same listener's socket. `GET /api/team/v1/socket`,
+with the same bearer, becomes a WebSocket, and over it either side speaks. Studio
 makes calls and subscribes to topics; this server answers calls and pushes
-events. The frames, the method names and the shapes they carry are all in
+events. What is left under `/api/studio/v1` is the sign-in route, which has to
+answer before a session can exist. The frames, the method names and the shapes they carry are all in
 `src/team/protocol.ts`, which is the one file to read before changing any of it,
 and whose twin lives in Studio.
 
@@ -153,11 +154,11 @@ follows from.
 **It is additive, and the discovery document's `protocol` does not move.** A
 Studio that has never heard of the socket never opens one and loses nothing; a
 newer one finds a capability name — `session`, `comments`, `clients`, `live`,
-`overlay` — in the same list the existing five arrive in and matches it
-literally. Nothing is ever discovered by getting a 404.
+`overlay` — in the same list `password-sign-in` and `project-history` arrive in,
+and matches it literally. Nothing is ever discovered by getting a 404.
 
 **One listener, one certificate.** The same reason the discovery document and
-the API Studio talks to are on the auth endpoint's port: an operator compares a
+the sign-in route are on the auth endpoint's port: an operator compares a
 fingerprint once, and everything a Studio installation says to this server
 arrives over the connection whose certificate was compared. That the `upgrade`
 event fires at all on an `http2.createSecureServer` with `allowHTTP1` is

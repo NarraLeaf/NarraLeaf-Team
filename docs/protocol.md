@@ -82,10 +82,14 @@ require.
 POST /api/studio/v1/sign-in
 ```
 
-The one route that takes no token, because it is where a token comes from. It
-takes a username and a password and mints the same token the server's own
-tooling would, claim for claim, so that an operator can hand a person a username
-and a password instead of a token through a chat window.
+The only route this server serves, and the one that takes no token, because it is
+where a token comes from. It takes a username and a password and mints the same
+token the server's own tooling would, claim for claim, so that an operator can
+hand a person a username and a password instead of a token through a chat window.
+
+Everything else an author does is a method on the session below. Any other
+address under `/api/studio/v1` is a `404`, and a client must never discover what
+a server can do by trying one — the capability list is what that is for.
 
 The request is a JSON object, `{ "username": …, "password": … }`, at most four
 kilobytes. On success it answers `200` with the token and the account it belongs
@@ -288,7 +292,7 @@ announced by a server that cannot answer it.
 | `live` | Live sessions: rooms on a project, for finding installations and broadcasting to them. |
 | `overlay` | Data attached to a project at a revision, which never enters the repository. |
 | `password-sign-in` | A username and a password may be exchanged for a token, before any session. This names the sign-in route above. |
-| `project-history` | A project's revisions may be read a page at a time, over HTTP. Present only where the server has a reader that can page one. |
+| `project-history` | A project's revisions may be read a page at a time, through `projects.history`. Present only where the server has a reader that can page one — a build without one answers an empty page, which is not the same as a project with no revisions. |
 
 A client decides what a server can do from `capabilities` or from `hello.methods`,
 never by probing for a `404`.
@@ -296,9 +300,7 @@ never by probing for a `404`.
 ## Methods
 
 The whole surface, and every name a client may call. All are gated by `session`
-unless a capability is named; the project and member reads share the builders the
-HTTP routes use, so a client reading a project over the socket and one reading it
-over HTTP see the same document.
+unless a capability is named.
 
 | Method | Capability | What it does |
 |---|---|---|

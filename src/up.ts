@@ -45,7 +45,7 @@ import { Supervisor, describeExit } from "./loreserver/supervisor.js";
 import { ProjectReadings } from "./projects/refresh.js";
 import { startAuthorizationService } from "./projects/service.js";
 import { createTeamSocket, type TeamSocket } from "./team/endpoint.js";
-import { projectTopic, TOPIC_PROJECTS } from "./team/protocol.js";
+import { projectTopic } from "./team/protocol.js";
 import { refuseUpgrade } from "./team/websocket.js";
 import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
 import { trustCommandFor } from "./tls/trust.js";
@@ -170,11 +170,10 @@ export async function up(
   /**
    * The sessions, once there are any.
    *
-   * Declared out here because three things reach it and they are made at
-   * different moments: the reader announces what it has read, the Studio API
-   * announces a project appearing or going, and stopping this process ends every
-   * session. Each of those is written before or after the socket exists, so all
-   * three go through this and check.
+   * Declared out here because two things reach it and they are made at
+   * different moments: the reader announces what it has read, and stopping this
+   * process ends every session. Both are written before or after the socket
+   * exists, so each goes through this and checks.
    */
   let team: TeamSocket | undefined;
 
@@ -283,7 +282,8 @@ export async function up(
       // over the repositories touches every project, so announcing each of them
       // to whoever holds the list would have every open Studio re-read the
       // whole thing once a minute for nothing. The list moves when somebody
-      // makes a project or takes one off, which is what the API announces.
+      // makes a project or takes one off, which the method that did it says on
+      // the list's topic itself.
       onChange: (projectId) => {
         team?.hub.publish(projectTopic(projectId), { kind: "project-read", project: projectId });
       },
@@ -307,16 +307,6 @@ export async function up(
       readings: projects,
       log: (line) => {
         stdout(`${line}\n`);
-      },
-      announce: (event) => {
-        team?.hub.publish(TOPIC_PROJECTS, event);
-        if (event.kind === "project-forgotten") {
-          // Said on the project's own topic as well. Anybody holding it is
-          // watching something that is not there any more, and the alternative
-          // to telling them is a screen that goes quiet and looks exactly like
-          // a screen with nothing happening on it.
-          team?.hub.publish(projectTopic(event.project), event);
-        }
       },
     };
 

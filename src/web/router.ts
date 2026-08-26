@@ -13,8 +13,10 @@
  *
  *   - `/.well-known/nlteam`, which is served to whoever asks. It is what turns
  *     one address into a server, so nothing may get in its way.
- *   - `/api/studio/…`, which src/web/studio.ts answers. It is how every Studio
- *     installation finds its work.
+ *   - `/api/studio/…`, which src/web/studio.ts answers. That is the sign-in
+ *     route and nothing else: everything an author does afterwards travels on
+ *     the WebSocket this listener also upgrades, which is not HTTP/1.1 by the
+ *     time it carries anything and so is not routed here.
  *
  * Anything else is a 404. There are no pages on this port: this server is
  * administered from Studio and from the `nlteam` commands, and neither of them

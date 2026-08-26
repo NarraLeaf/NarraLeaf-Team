@@ -26,7 +26,14 @@ import { KeyStore } from "../src/identity/keys.js";
 import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
 import { mintToken } from "../src/identity/tokens.js";
-import { createUser, disableUser, requireUser } from "../src/identity/users.js";
+import {
+  ADMIN_ROLE,
+  createUser,
+  disableUser,
+  requireUser,
+  revokeUserTokens,
+} from "../src/identity/users.js";
+import { ProjectReadings } from "../src/projects/refresh.js";
 import {
   createProject,
   forgetProject,
@@ -84,7 +91,22 @@ interface Harness {
   readonly connect: (token: string) => Promise<Client>;
 }
 
-async function harness(extra: Partial<StudioApiOptions> = {}): Promise<Harness> {
+/**
+ * What a harness is given beyond the identity it makes for itself.
+ *
+ * A function where the reader has to be the real one: `ProjectReadings` needs the
+ * database and the storage root this harness makes, and a test that handed one in
+ * from outside would be reading a different server's repositories.
+ */
+type ServiceFor =
+  | Partial<StudioApiOptions>
+  | ((of: {
+      root: string;
+      database: DatabaseSync;
+      config: IdentityConfig;
+    }) => Partial<StudioApiOptions>);
+
+async function harness(extra: ServiceFor = {}): Promise<Harness> {
   const root = await temporaryRoot();
   const layout = identityLayout(root);
   const database = await openMigratedDatabase(layout.databasePath);
@@ -100,7 +122,7 @@ async function harness(extra: Partial<StudioApiOptions> = {}): Promise<Harness> 
     // Whatever a test wants this server to have read out of a repository. Most
     // want none, which is a server that has not got round to one yet - a state
     // the overlay methods have to answer honestly rather than as "empty".
-    ...extra,
+    ...(typeof extra === "function" ? extra({ root, database, config }) : extra),
   };
   const socket = createTeamSocket({ service, version: "0.0.0-test", host: "127.0.0.1" });
 
@@ -138,11 +160,21 @@ async function harness(extra: Partial<StudioApiOptions> = {}): Promise<Harness> 
   };
 }
 
-async function account(database: DatabaseSync, username: string): Promise<string> {
+async function account(
+  database: DatabaseSync,
+  username: string,
+  extra: {
+    displayName?: string;
+    email?: string;
+    groups?: readonly string[];
+    isServiceAccount?: boolean;
+  } = {},
+): Promise<string> {
   const user = await createUser(database, hasher, {
     username,
     password: "a password nobody guesses",
     displayName: username,
+    ...extra,
   });
   return user.id;
 }
@@ -343,7 +375,7 @@ describe("opening a session", () => {
 });
 
 describe("calling", () => {
-  it("answers the same projects the REST route lists", async () => {
+  it("lists every project on this server, each with the remote to clone it from", async () => {
     const team = await harness();
     const ada = await account(team.database, "ada");
     createProject(team.database, {
@@ -378,7 +410,7 @@ describe("calling", () => {
     );
   });
 
-  it("hands one project the file the REST twin does, by id or by name", async () => {
+  it("hands one project what is in it, found by id or by name", async () => {
     let project = { id: "", name: "" };
     const team = await harness({
       // Standing in for the reader, which needs a running loreserver to say
@@ -412,8 +444,8 @@ describe("calling", () => {
 
     const byId = await client.value(TEAM_METHODS.projectsGet, { project: project.id });
     expect((byId["project"] as { name: string }).name).toBe("lighthouse");
-    // The whole file the route answers with, matched field for field rather than
-    // in part: this is the shape a client reads over either transport.
+    // The whole file, matched field for field rather than in part: this is the
+    // shape a client draws a project's front page from.
     expect(byId["file"]).toEqual({
       readable: true,
       title: "Lighthouse",
@@ -441,10 +473,130 @@ describe("calling", () => {
     const client = await team.connect(team.tokenFor("ada"));
 
     const answer = await client.value(TEAM_METHODS.projectsGet, { project: project.id });
-    // Absent-reading is `readable: false` with a sentence, exactly as the route's
-    // NOT_READ_YET is, rather than an error the caller can do nothing about.
+    // Absent-reading is `readable: false` with a sentence, rather than an error
+    // the caller can do nothing about.
     expect((answer["file"] as { readable: boolean }).readable).toBe(false);
     expect((answer["file"] as { reason?: string }).reason).toBeTypeOf("string");
+  });
+});
+
+describe("what a project row says about its repository", () => {
+  /** What a repository that has been read says about itself. */
+  const READ_HARBOUR = {
+    revisions: 41,
+    branch: "main",
+    bytes: 8_388_608,
+    lastAt: 1_700_000_000_000,
+    lastBy: "ada",
+    lastMessage: "the harbour scene, lit",
+  };
+
+  it("says nothing at all about one nobody has read yet", async () => {
+    // The whole of the discipline in one assertion. A project cloned minutes ago
+    // has no history to report, and a zeroed one would say nobody had ever
+    // worked on it.
+    const team = await harness({ readings: { get: () => undefined } });
+    const ada = await account(team.database, "ada");
+    createProject(team.database, {
+      id: newProjectId(),
+      name: "harbour",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.projectsList);
+    const [project] = answer["projects"] as Record<string, unknown>[];
+
+    expect(project).toBeDefined();
+    expect(project).not.toHaveProperty("history");
+  });
+
+  it("carries what the repository last said, once it has been read", async () => {
+    const id = newProjectId();
+    const team = await harness({
+      readings: {
+        get: (projectId: string) =>
+          projectId === id
+            ? { history: READ_HARBOUR, file: { readable: true, title: "Harbour" } }
+            : undefined,
+      },
+    });
+    const ada = await account(team.database, "ada");
+    createProject(team.database, { id, name: "harbour", description: "", createdBy: ada });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.projectsList);
+
+    expect(answer["projects"]).toMatchObject([{ name: "harbour", history: READ_HARBOUR }]);
+  });
+});
+
+describe("the people on this server", () => {
+  it("is every account, with the address a revision is signed with", async () => {
+    const team = await harness();
+    await account(team.database, "ada", {
+      displayName: "Ada Lovelace",
+      email: "ada@example.lan",
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.membersList);
+
+    // The address is on every revision this person authored, so within this
+    // server it is not a secret - and a member list that could not be matched
+    // against a history would not be much of a member list.
+    expect(answer["members"]).toEqual([
+      {
+        username: "ada",
+        displayName: "Ada Lovelace",
+        email: "ada@example.lan",
+        operator: false,
+        disabled: false,
+        serviceAccount: false,
+        createdAt: expect.any(Number) as unknown as number,
+      },
+    ]);
+  });
+
+  it("lists somebody who has left, so their revisions still have a name on them", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    await account(team.database, "grace");
+    disableUser(team.database, "grace");
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.membersList);
+    const members = answer["members"] as { username: string; disabled: boolean }[];
+
+    // Listed rather than dropped. Somebody who wrote half of a project's history
+    // and then left is still the person that history names, and a list they had
+    // fallen out of would leave those revisions signed by a stranger.
+    expect(members.map((member) => member.username)).toEqual(["ada", "grace"]);
+    expect(members[1]).toMatchObject({ username: "grace", disabled: true });
+  });
+
+  it("keeps an operator's business out of it", async () => {
+    const team = await harness();
+    await account(team.database, "ada", { groups: [ADMIN_ROLE] });
+    await account(team.database, "bob");
+    revokeUserTokens(team.database, "bob");
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.membersList);
+    const members = answer["members"] as Record<string, unknown>[];
+
+    // `operator` is a label saying this account may administer the server, and it
+    // is not a permission over any project. What the management plane keeps about
+    // an account - when its tokens were last refused, what else it is in - is not
+    // a name beside a piece of work.
+    expect(members[0]?.["operator"]).toBe(true);
+    expect(members[1]?.["operator"]).toBe(false);
+    for (const member of members) {
+      expect(member).not.toHaveProperty("tokensInvalidatedAt");
+      expect(member).not.toHaveProperty("role");
+      expect(member).not.toHaveProperty("id");
+    }
   });
 });
 
@@ -809,6 +961,25 @@ describe("forgetting a project over the socket", () => {
     const answer = await client.call(TEAM_METHODS.projectsForget, { project: "never-here" });
     expect(answer.code).toBeUndefined();
     expect(answer.value).toEqual({});
+  });
+
+  it("drops the reading through the reader this server actually runs", async () => {
+    // Every other stand-in here is an object literal, whose `forget` is a
+    // function that never wanted a `this`. The reader a running server is handed
+    // is a class keeping two maps, so a handler that lifted the method off it and
+    // called the copy would fail on every deployment while this file stayed
+    // green. Nothing is cloned: what is asserted is that the call goes through
+    // the real object and the row goes with it.
+    const id = newProjectId();
+    const team = await harness((of) => ({ readings: new ProjectReadings(of) }));
+    const ada = await account(team.database, "ada");
+    createProject(team.database, { id, name: "harbour", description: "", createdBy: ada });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.call(TEAM_METHODS.projectsForget, { project: id });
+
+    expect(answer.code).toBeUndefined();
+    expect(listProjects(team.database)).toEqual([]);
   });
 });
 

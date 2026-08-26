@@ -558,27 +558,27 @@ lock on it, and a second process opening the same directory does not fail, it
 waits for ever. What Team reads instead is a checkout of its own — see
 [Reading what is inside a project](internals.md#reading-what-is-inside-a-project).
 
-A Studio installation does not run these commands. It asks over HTTPS, on the
-same port it signs in at, carrying the token it was given:
+A Studio installation does not run these commands. It asks over the session it
+opened with the token it was given, on the same port it signed in at:
 
 ```
-GET  /api/studio/v1/projects     what this server holds, with the remote for each
-POST /api/studio/v1/projects     {"name": "...", "description": "...", "repositoryId": "..."}
+projects.list     what this server holds, with the remote for each
+projects.create   {"name": "...", "description": "...", "repositoryId": "..."}
 ```
 
-Both are served beside the discovery document, and for the same reason: this is
-how every author finds their work. A repository created any other way —
+The socket is carried beside the discovery document, and for the same reason:
+this is how every author finds their work. A repository created any other way —
 `lore` itself, an older Studio — is recorded when `loreserver` announces it,
 with whoever made it as its creator, so it does not become a repository nobody
 can open.
 
-`repositoryId` is optional and says which of two things the request is. Left
-out, Team generates an id and asks `loreserver` for the repository, exactly as
+`repositoryId` is optional and says which of two things the call is. Left out,
+Team generates an id and asks `loreserver` for the repository, exactly as
 `project create` does. Given, the repository already exists on the author's own
 machine and they are publishing it: Team records the row under that id and asks
 `loreserver` for nothing, because the copy that will fill it is the one the
 author pushes. It is thirty-two hexadecimal characters, and one that is already
-a project here is refused with `409` rather than taken over.
+a project here is refused as a conflict rather than taken over.
 
 ## Who may administer this server
 

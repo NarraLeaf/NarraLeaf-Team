@@ -1,50 +1,35 @@
 /**
- * The API a Studio installation talks to.
+ * The one thing a Studio installation asks for over HTTP, and what composes it.
  *
- * Studio is handed one address and a token, and everything else has to be
- * behind them. The discovery document turns the address into a server; this
- * turns the token into a list of projects and a way to make another. Without
- * it an author has to be told a repository id by hand, which is the one thing
- * the address was supposed to replace.
+ * Studio is handed one address and nothing else. The discovery document turns
+ * the address into a server; this turns a username and a password into the
+ * token everything after it needs. Everything after it is the session — every
+ * project a person reads, makes or forgets travels on the WebSocket, because a
+ * read and the event that invalidates it have to arrive down one connection in
+ * order.
  *
- * It is served on the same HTTP/1.1 listener as the discovery document, which
- * is how every Studio installation finds its work. One listener means one
- * certificate, and therefore one decision to trust — the reason set out in
- * ./router.ts.
+ * So there is exactly one route:
  *
- * Authentication is the token itself, presented as a bearer, and checked by
- * exactly what the authorization service checks it with. There is no session
- * and nothing to sign out of: the token is what a person was handed, and its
- * lifetime is the whole of how long this works. The one route that takes no
- * bearer is the one that hands a token out, and it takes a password instead.
+ *     POST   /api/studio/v1/sign-in   a password, for a token
  *
- * What it does not do is decide who may reach what. Every account of this
- * server reaches every project on it, so the list is the same list for
- * everybody — see src/projects/registry.ts. That is the whole of the
- * authorization here: none of the reads below filters, ranks or hides anything
- * by who asked.
+ * It takes no bearer, because it is where a bearer comes from, and it is the
+ * only thing here that has to work before a session exists. It is a second door
+ * onto what `nlteam token mint` does at the server, for the same accounts and
+ * with the same refusals: an operator who would otherwise mint a token and send
+ * it through a chat window can hand over a username and a password instead.
+ * What it mints is the same token, claim for claim — see {@link answerSignIn}.
  *
- * The routes
- * ----------
+ * It is served on the same HTTP/1.1 listener as the discovery document and the
+ * socket upgrade. One listener means one certificate, and therefore one decision
+ * to trust — the reason set out in ./router.ts.
  *
- *     POST   /api/studio/v1/sign-in               a password, for a token
- *     GET    /api/studio/v1/projects              every project on this server
- *     POST   /api/studio/v1/projects              make another, or register one
- *     GET    /api/studio/v1/projects/:id          one of them, and what is in it
- *     DELETE /api/studio/v1/projects/:id          take it off this server's list
- *     GET    /api/studio/v1/projects/:id/history  a page of its revisions
- *     GET    /api/studio/v1/members               every account, as a name
- *
- * The first of those is the one route that takes no token, because it is where
- * a token comes from. It is a second door onto what `nlteam token mint` does at
- * the server, for the same accounts and with the same refusals: an operator who
- * would otherwise mint a token and send it through a chat window can hand over
- * a username and a password instead. What it mints is the same token, claim for
- * claim — see {@link answerSignIn}.
- *
- * The DELETE is the narrowest of them, and its wording is load-bearing: it takes
- * a project off this server's list and does not touch what the repository
- * holds. See {@link answerProjectForget}.
+ * What else is here
+ * -----------------
+ * The rest of this file is what a project and an account look like in an answer,
+ * and what it is to make a project. They are here rather than beside the methods
+ * that call them because they are the shared implementations: one builder for a
+ * project body means a field cannot come to exist on one path and not another,
+ * and one create means two callers cannot come to make a project differently.
  *
  * What is absent and what is nought
  * ---------------------------------
@@ -63,7 +48,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
 
 import { audienceHosts, dataRemoteUrl, type IdentityConfig } from "../identity/config.js";
-import { bearerToken, describeRefusal, identifyToken } from "../identity/bearer.js";
 import type { KeyStore } from "../identity/keys.js";
 import { defaultPasswordHasher } from "../identity/passwords.js";
 import { storedTokenLifetimes, type TokenLifetimes } from "../identity/settings.js";
@@ -79,64 +63,32 @@ import {
   authenticate,
   findUserById,
   isOperator,
-  listUsers,
   SIGN_IN_REFUSED_MESSAGE,
 } from "../identity/users.js";
 import type { RevisionPage } from "../projects/read.js";
 import {
   createProject,
-  findProject,
   findProjectById,
   findProjectByClientId,
   forgetProject,
   InvalidProjectNameError,
   isRepositoryId,
-  listProjects,
   newProjectId,
   type ProjectRecord,
 } from "../projects/registry.js";
 import { loreserverUrl, repositoryCreate } from "../projects/repository.js";
-import { TEAM_METHODS, type TeamCapability, type TeamProjectsEvent } from "../team/protocol.js";
-import { NOT_READ_YET } from "../teamview.js";
+import { TEAM_METHODS, type TeamCapability } from "../team/protocol.js";
 import type { ProjectFileView, RevisionView } from "../teamview.js";
 import { originIsOurs, remoteAddressOf } from "./origin.js";
 
-/** Where the routes live. Versioned, because a client older than the server is ordinary. */
+/** Where the route lives. Versioned, because a client older than the server is ordinary. */
 const PREFIX = "/api/studio/v1";
-
-/** The one collection there is. */
-const PROJECTS = `${PREFIX}/projects`;
-
-/** Every account of this server, as names rather than as accounts. */
-const MEMBERS = `${PREFIX}/members`;
 
 /** Where a username and a password become a token. */
 const SIGN_IN = `${PREFIX}/sign-in`;
 
-/** What hangs off one project. */
-const HISTORY = "history";
-
 /** How much of a request body is read before it is refused as nonsense. */
 const MAXIMUM_BODY_BYTES = 4 * 1024;
-
-/**
- * How many revisions a page of history holds when it is not asked for a number.
- *
- * Exported so the socket's `projects.history` pages the same way this route does:
- * the numbers are the contract's, not one transport's, and two copies would be
- * two contracts.
- */
-export const DEFAULT_HISTORY_LIMIT = 20;
-
-/**
- * The most revisions one page may hold.
- *
- * Each one costs a read of its metadata, so a page is a bounded amount of work
- * rather than however much a client asked for. Somebody wanting the whole of a
- * long history pages through it, which is what the cursor is for. Exported for
- * the same reason {@link DEFAULT_HISTORY_LIMIT} is.
- */
-export const MAXIMUM_HISTORY_LIMIT = 100;
 
 /**
  * What Team has read out of the repositories, and a way to read one page more.
@@ -154,7 +106,7 @@ export interface StudioReadings {
    * One page of a project's revisions, read on demand.
    *
    * Optional because it is what decides whether this build says it serves a
-   * history at all — see {@link restCapabilities}. Undefined from the call
+   * history at all — see {@link serviceCapabilities}. Undefined from the call
    * means Team has no checkout of that project to read yet.
    */
   readonly revisions?: (
@@ -212,37 +164,32 @@ export interface StudioApiOptions {
   readonly readings?: StudioReadings;
   /** Somewhere to say what happened, in the same place `up` says everything else. */
   readonly log?: (line: string) => void;
-  /**
-   * Tell every open session that the list of projects moved.
-   *
-   * Absent on a build with no socket, and on every test that does not care.
-   * Called from the two routes that change what the list holds, rather than
-   * from the registry, because the registry is also written by the CLI and by
-   * loreserver adopting a repository - and an announcement is about a decision
-   * somebody made, not about a row.
-   */
-  readonly announce?: (event: TeamProjectsEvent) => void;
 }
 
 /**
- * What the HTTP routes contribute to the capability vocabulary.
+ * The capabilities that depend on what this build was handed.
  *
- * These are the capabilities that name something answered over HTTP before a
- * session exists, and so have no socket method to be derived from: a password is
- * exchanged for a token here, and a project's history is paged here. Everything
- * else a Studio installation reads over HTTP - the project list, one project, the
- * members - is also a method on the socket gated by `session`, so it is not named
- * again as a capability of its own.
+ * The other half of the vocabulary is derived from the method table, which says
+ * what a session can be asked for — see src/team/methods.ts. These two are the
+ * ones that table cannot say, because neither of them turns on whether a method
+ * is registered:
+ *
+ * `password-sign-in` names the sign-in route, which is answered before a session
+ * exists and so has no method to be derived from. It is unconditional: the route
+ * needs nothing beyond the database and the keys, both of which every caller here
+ * already has.
+ *
+ * `project-history` is about the reader rather than the method. `projects.history`
+ * is always registered, but a build with no reader has no revisions to page and
+ * answers an empty one — which a client cannot tell from a project nobody has ever
+ * committed to. So the capability is present only where there is a reader that can
+ * page a history, and a client that wants to offer a person a list of versions
+ * checks it rather than inferring one from an empty page.
  *
  * Worked out from what this build was given rather than written down, so that the
- * discovery document cannot come to say something this file does not do.
- * `password-sign-in` is unconditional: the sign-in route needs nothing beyond the
- * database and the keys, both of which every caller of this API already has.
- * `project-history` is there only where there is a reader that can page one, for
- * the reason a project row leaves its history absent until one has been read - a
- * name in the list that nothing answers would be a client waiting on a 404.
+ * discovery document cannot come to say something this server does not do.
  */
-export function restCapabilities(options: StudioApiOptions): TeamCapability[] {
+export function serviceCapabilities(options: StudioApiOptions): TeamCapability[] {
   const capabilities: TeamCapability[] = ["password-sign-in"];
   if (options.readings?.revisions !== undefined) {
     capabilities.push("project-history");
@@ -329,19 +276,6 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 }
 
 /**
- * It is done, and there is nothing to say about it.
- *
- * No body at all rather than an empty object: 204 is the answer to a request
- * whose whole result is that it worked, and a client parsing one has nothing to
- * read out of it. Deliberately not {@link sendJson}, which would give it a
- * content length and a type for a body that is not there.
- */
-function sendNothing(response: ServerResponse): void {
-  response.writeHead(204, { "cache-control": "no-store" });
-  response.end();
-}
-
-/**
  * Say no, in the shape everything else here answers in.
  *
  * One sentence and nothing else. A client that cannot act on the difference
@@ -374,12 +308,11 @@ function holdOff(response: ServerResponse, seconds: number): void {
 /**
  * Answer, and turn anything nobody planned for into one sentence.
  *
- * Every route here is reached over the network and one of them is reached
- * before any token has been presented, so a handler whose promise rejects is an
- * unhandled rejection — which takes the whole server down rather than the one
- * request. A body abandoned halfway through is enough to make one. The same
- * guard ./api.ts puts in front of the operator's interface, for the same
- * reason.
+ * The route here is reached over the network before any token has been
+ * presented, so a handler whose promise rejects is an unhandled rejection —
+ * which takes the whole server down rather than the one request. A body
+ * abandoned halfway through is enough to make one. The same guard ./api.ts puts
+ * in front of the operator's interface, for the same reason.
  */
 function answering(
   options: StudioApiOptions,
@@ -464,28 +397,6 @@ function text(body: Record<string, unknown>, name: string): string | undefined {
 }
 
 /**
- * Whoever presented the token, or undefined once the refusal has been sent.
- *
- * The same check the authorization service makes, so a token this API accepts
- * is one that reaches a repository and a token it refuses is one that would
- * have failed later anyway.
- */
-function caller(
-  options: StudioApiOptions,
-  request: IncomingMessage,
-  response: ServerResponse,
-): UserRecord | undefined {
-  const authorization = request.headers["authorization"];
-  const token = bearerToken(Array.isArray(authorization) ? authorization[0] : authorization);
-  const identified = identifyToken(options.database, options.keys, options.config, token);
-  if (identified.kind === "refused") {
-    refuse(response, 401, describeRefusal(identified.reason));
-    return undefined;
-  }
-  return identified.user;
-}
-
-/**
  * The settings to mint a token with, as they stand now.
  *
  * The base is what this server was brought up as. The stored lifetimes are read
@@ -511,7 +422,10 @@ function mintingConfig(options: StudioApiOptions): IdentityConfig {
  *
  * Everything **inside** the prefix is answered here, including the addresses
  * there is nothing at, so that a mistyped API address is refused as one rather
- * than falling through to something that knows nothing about this API.
+ * than falling through to something that knows nothing about this API. That is
+ * most of the prefix: everything a Studio installation asks a server for beyond
+ * a token is a method on the session, so an address under here that is not the
+ * sign-in route is one nothing has ever served.
  */
 export function serveStudioApi(
   options: StudioApiOptions,
@@ -523,28 +437,6 @@ export function serveStudioApi(
     return false;
   }
 
-  if (path === PROJECTS) {
-    if (request.method === "GET") {
-      void answerProjectList(options, request, response);
-      return true;
-    }
-    if (request.method === "POST") {
-      answering(options, response, answerProjectCreate(options, request, response));
-      return true;
-    }
-    onlyMethods(response, "GET, POST", "GET and POST");
-    return true;
-  }
-
-  if (path === MEMBERS) {
-    if (request.method !== "GET") {
-      onlyMethods(response, "GET", "GET");
-      return true;
-    }
-    answerMembers(options, request, response);
-    return true;
-  }
-
   if (path === SIGN_IN) {
     if (request.method !== "POST") {
       onlyMethods(response, "POST", "POST");
@@ -554,198 +446,14 @@ export function serveStudioApi(
     return true;
   }
 
-  const under = beneathProjects(path);
-  if (under !== undefined) {
-    if (under.rest === undefined) {
-      if (request.method === "GET") {
-        answerProject(options, request, response, under.reference);
-        return true;
-      }
-      if (request.method === "DELETE") {
-        answerProjectForget(options, request, response, under.reference);
-        return true;
-      }
-      onlyMethods(response, "GET, DELETE", "GET and DELETE");
-      return true;
-    }
-    if (under.rest === HISTORY) {
-      if (request.method !== "GET") {
-        onlyMethods(response, "GET", "GET");
-        return true;
-      }
-      answering(
-        options,
-        response,
-        answerProjectHistory(options, request, response, under.reference),
-      );
-      return true;
-    }
-  }
-
   refuse(response, 404, "this server has nothing at that address.");
   return true;
-}
-
-/**
- * Take a path apart into the project it names and whatever hangs off it.
- *
- * Undefined for anything that is not under the collection, so the router goes
- * on to the pages rather than this claiming an address it has no answer for.
- * The separator is a real one: the URL parser leaves an escaped slash escaped,
- * so a project reference cannot be made to look like two segments.
- */
-function beneathProjects(path: string): { reference: string; rest?: string } | undefined {
-  if (!path.startsWith(`${PROJECTS}/`)) {
-    return undefined;
-  }
-  const [first, second, ...more] = path.slice(PROJECTS.length + 1).split("/");
-  if (first === undefined || first === "" || more.length > 0) {
-    return undefined;
-  }
-  const reference = decodeSegment(first);
-  if (reference === undefined) {
-    return undefined;
-  }
-  return second === undefined || second === "" ? { reference } : { reference, rest: second };
-}
-
-/** One path segment as it was written, or undefined if it was written wrongly. */
-function decodeSegment(segment: string): string | undefined {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return undefined;
-  }
 }
 
 /** Say which methods an address takes, in the header and in the sentence. */
 function onlyMethods(response: ServerResponse, allow: string, spoken: string): void {
   response.writeHead(405, { allow, "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify({ error: `that address takes ${spoken}` }));
-}
-
-function answerProjectList(
-  options: StudioApiOptions,
-  request: IncomingMessage,
-  response: ServerResponse,
-): void {
-  const user = caller(options, request, response);
-  if (user === undefined) {
-    return;
-  }
-  const projects = listProjects(options.database).map((project) =>
-    projectBody(options, project),
-  );
-  options.log?.(`studio: ${user.username} listed ${projects.length} project(s)`);
-  sendJson(response, 200, { projects });
-}
-
-/**
- * One project, and what is in it.
- *
- * The project is the same body a row of the list is, history and all, so
- * nothing here is a second account of what a project is. What this adds is the
- * project file — the title, the stage, how many scenes and assets — which is
- * read out of the repository and is therefore the part that may be absent.
- *
- * A file Team could not make sense of is `readable: false` and a sentence
- * saying why, never a refusal. Most often it was written by a newer Studio,
- * and the project around it is still true.
- */
-function answerProject(
-  options: StudioApiOptions,
-  request: IncomingMessage,
-  response: ServerResponse,
-  reference: string,
-): void {
-  const user = caller(options, request, response);
-  if (user === undefined) {
-    return;
-  }
-  // By id or by name, because both are things a client has in front of it: the
-  // id every row carries, and the name the remote address ends with.
-  const project = findProject(options.database, reference);
-  if (project === undefined) {
-    refuse(response, 404, `there is no project called ${reference}.`);
-    return;
-  }
-  const read = options.readings?.get(project.id) ?? NOT_READ_YET;
-  options.log?.(`studio: ${user.username} opened ${project.name} (${project.id})`);
-  sendJson(response, 200, { project: projectBody(options, project), file: read.file });
-}
-
-/**
- * `DELETE /api/studio/v1/projects/:id`: take a project off this server's list.
- *
- * 204 and no body when it is gone, 404 when there was nothing by that name or
- * id, 401 without a token this server signed.
- *
- * What it removes and what it does not
- * ------------------------------------
- * It removes the row: this server stops listing the project, stops reading its
- * repository on the interval, and stops answering permission questions about
- * it — a resource nothing here has a project for is not one of ours, which is
- * what src/projects/service.ts already answers.
- *
- * **It does not delete anything the repository holds.** loreserver keeps the
- * store, the branches and every revision in them, exactly as they were. This
- * is the same act as {@link forgetProject}, which is why it is that function
- * and not a new one: Team's row and the repository's contents are two things,
- * and only the first of them is this server's to remove. An author whose
- * project was taken off a server by mistake publishes it again, under the id
- * their repository has always carried, and gets their history back with it.
- *
- * That asymmetry is deliberate and is not an oversight to be tidied up later.
- * loreserver has a verb that would destroy the store; it is not called from
- * anywhere in Team, and nothing about an operator clearing a stray row off a
- * list is a reason to reach for it.
- *
- * Who may
- * -------
- * Any account that can present a token this server signed, which is the same
- * rule every other project route here is written to: an account of this server
- * reaches every project on it. No group is consulted — not `operator`, which
- * is a label about the management page, and not the account that created the
- * project, which is a name shown beside it rather than a claim over it.
- *
- * Why the reading is dropped
- * --------------------------
- * The reader keeps what it last read under the repository id, and the id is
- * the one thing a re-registration keeps. Left behind, it would answer for the
- * next registration of that repository with a history read before it was
- * removed — including, in the case this exists for, a reading of nothing at
- * all taken while a stray empty project sat on the list.
- */
-function answerProjectForget(
-  options: StudioApiOptions,
-  request: IncomingMessage,
-  response: ServerResponse,
-  reference: string,
-): void {
-  const user = caller(options, request, response);
-  if (user === undefined) {
-    return;
-  }
-  // By id or by name, as the read of one project is, because a client holding
-  // a stray row has both and neither is more correct than the other.
-  const project = findProject(options.database, reference);
-  if (project === undefined) {
-    // The same sentence a read of a project that is not here answers with. A
-    // second delete of the same project lands here, which is the right answer
-    // to it: there is nothing by that name on this server.
-    refuse(response, 404, `there is no project called ${reference}.`);
-    return;
-  }
-  forgetProject(options.database, project.id);
-  options.readings?.forget?.(project.id);
-  // The name is read out of the row before it goes, because this is the one
-  // line here whose subject does not exist by the time anybody reads it.
-  options.log?.(`studio: ${user.username} forgot ${project.name} (${project.id})`);
-  // Its conversations went with the row, by the foreign key migration 8 wrote.
-  // Anybody holding that project's threads topic is told the project is gone
-  // rather than told nothing and left listening to something that cannot speak.
-  options.announce?.({ kind: "project-forgotten", project: project.id });
-  sendNothing(response);
 }
 
 /**
@@ -866,215 +574,12 @@ async function answerSignIn(
 }
 
 /**
- * Every account of this server, so that a name on a revision is a person.
- *
- * Every account, including the disabled ones. This is not a list of who may do
- * something — everybody may, which is the rule the rest of this server is built
- * on — it is the list a history is read against, and somebody who left is still
- * the author of what they wrote.
- */
-function answerMembers(
-  options: StudioApiOptions,
-  request: IncomingMessage,
-  response: ServerResponse,
-): void {
-  const user = caller(options, request, response);
-  if (user === undefined) {
-    return;
-  }
-  const members = listUsers(options.database).map((account) => memberBody(account));
-  options.log?.(`studio: ${user.username} listed ${members.length} member(s)`);
-  sendJson(response, 200, { members });
-}
-
-/**
- * A page of one project's revisions.
- *
- * Read when it is asked for and never on the interval that refreshes the rest:
- * a history is read by one person looking at one project, and reading every
- * page of every project once a minute would be work nobody asked for.
- *
- * A project Team has no checkout of yet answers with `revisions` absent, for
- * the same reason a row of the list has no history: an empty page reads as a
- * project with no revisions, which is a different and untrue thing.
- */
-async function answerProjectHistory(
-  options: StudioApiOptions,
-  request: IncomingMessage,
-  response: ServerResponse,
-  reference: string,
-): Promise<void> {
-  const user = caller(options, request, response);
-  if (user === undefined) {
-    return;
-  }
-  const project = findProject(options.database, reference);
-  if (project === undefined) {
-    refuse(response, 404, `there is no project called ${reference}.`);
-    return;
-  }
-  const readings = options.readings;
-  if (readings?.revisions === undefined) {
-    // A build serving no history says so in its capabilities, so a client that
-    // read them does not ask. One that asked anyway is answered the same way a
-    // project nobody has read is: absent, rather than a refusal it can do
-    // nothing about.
-    sendJson(response, 200, { more: false });
-    return;
-  }
-
-  const query = new URL(request.url ?? "/", "http://team.invalid").searchParams;
-  const limit = pageLimit(query.get("limit"));
-  const before = query.get("before") ?? undefined;
-
-  // Called on the reader rather than through a reference lifted off it. The
-  // reader is a class, its `revisions` keeps a set of the projects a read is
-  // inside of, and a copy of the method called on its own has no `this` to
-  // find that set on — which every stand-in for it in a test does have, being
-  // an object literal, so this answered in the suite and threw on every server.
-  const page = await readings.revisions(project.id, {
-    limit,
-    ...(before === undefined || before === "" ? {} : { before }),
-  });
-  if (page === undefined) {
-    sendJson(response, 200, { more: false });
-    return;
-  }
-  options.log?.(
-    `studio: ${user.username} read ${page.revisions.length} revision(s) of ${project.name}`,
-  );
-  sendJson(response, 200, { revisions: page.revisions, more: page.more });
-}
-
-/**
- * How many revisions to read, from what was asked for.
- *
- * Anything that is not a number this can act on becomes the default rather
- * than a refusal: a client that sent nonsense wanted a page of history, and a
- * page of history is a better answer than a sentence about its query string.
- */
-function pageLimit(asked: string | null): number {
-  const wanted = Number(asked);
-  if (asked === null || asked === "" || !Number.isInteger(wanted) || wanted < 1) {
-    return DEFAULT_HISTORY_LIMIT;
-  }
-  return Math.min(wanted, MAXIMUM_HISTORY_LIMIT);
-}
-
-/**
- * `POST /api/studio/v1/projects`: make a project, or register one that exists.
- *
- * ```
- * {"name": "...", "description": "...", "repositoryId": "..."}
- * ```
- *
- * Two acts behind one address, and `repositoryId` is what says which.
- *
- * **Without it**, this makes a project from nothing: an id is generated here
- * and loreserver is asked for the repository to go with it. That is the whole
- * of what this route used to do, and it is unchanged.
- *
- * **With it**, the repository already exists — on the author's own disk, under
- * an id it has carried since the day they enabled version control — and what is
- * missing is the row saying it belongs on this server. So the row is written
- * and loreserver is not asked for anything: it is the client that will push,
- * and asking for a repository under the same id would either be refused or
- * would make a second one under a name the author had already claimed.
- *
- * The ordering note below is why publishing works at all. loreserver announces
- * a repository to Team as it is created, and Team answers for one only when it
- * has the row — so the row has to be there before the client's push, which is
- * to say before this answers. It is, and nothing between here and the push can
- * reorder them.
- *
- * A repository id already registered is a 409 rather than a silent adoption:
- * the author is publishing what they believe is a new project, and the server
- * already holding it means somebody has published it, which they have to know
- * before they push into it.
- */
-async function answerProjectCreate(
-  options: StudioApiOptions,
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<void> {
-  const user = caller(options, request, response);
-  if (user === undefined) {
-    return;
-  }
-  const body = await readJson(request);
-  if (typeof body === "string") {
-    refuse(response, 400, body);
-    return;
-  }
-  const name = text(body, "name");
-  if (name === undefined) {
-    refuse(response, 400, "a project needs a name");
-    return;
-  }
-  const description = text(body, "description");
-  const repositoryId = text(body, "repositoryId");
-
-  // The whole of what it is to make or adopt a project is behind this call, and
-  // it is the same call the socket's projects.create makes. What is left here is
-  // how a Studio installation over HTTP is answered: a status and a sentence.
-  const result = await makeOrAdoptProject(options, user, {
-    name,
-    ...(description === undefined ? {} : { description }),
-    ...(repositoryId === undefined ? {} : { repositoryId }),
-  });
-
-  switch (result.kind) {
-    case "invalid-repository-id":
-      refuse(response, 400, "a repository id is thirty-two hexadecimal characters");
-      return;
-    case "repository-taken":
-      refuse(
-        response,
-        409,
-        `the repository ${result.repositoryId} is already a project on this server.`,
-      );
-      return;
-    case "invalid-name":
-    case "name-taken":
-      // Both are the create refusing a name, which this route has always answered
-      // as a conflict, message and all.
-      refuse(response, 409, result.message);
-      return;
-    case "repository-refused":
-      options.log?.(`studio: ${user.username} could not create ${name}: ${result.message}`);
-      // 502 rather than 500: Team did its part, and the thing that refused is the
-      // other server. A client that says so is one whose operator looks in the
-      // right log.
-      refuse(response, 502, result.message);
-      return;
-    case "repeat":
-      // A create that already happened, handed back the project it made. This
-      // route hands out no client id, so it never reaches here; a client of the
-      // socket that retries a dropped create does.
-      sendJson(response, 201, { project: projectBody(options, result.project) });
-      return;
-    case "made": {
-      options.log?.(
-        `studio: ${user.username} ${result.adopted ? "registered" : "created"} ` +
-          `${result.project.name} (${result.project.id})`,
-      );
-      options.announce?.({ kind: "project-created", project: result.project.id });
-      // No history on it, and that is right: absent says the reader has not been
-      // round; a nought would say somebody had already emptied it.
-      sendJson(response, 201, { project: projectBody(options, result.project) });
-      return;
-    }
-  }
-}
-
-/**
  * The outcome of trying to make a project, apart from how the answer is carried.
  *
- * The core of the create route and of `projects.create` over the socket, in one
- * place so the two cannot come to make a project differently. What differs
- * between the callers — an HTTP status against a protocol error code, a body
- * against a return value, the topic each announces the new project on — is
- * theirs; how a project comes to exist is here.
+ * Every way a create can end, said once and separately from how it is reported,
+ * so that how a project comes to exist is one piece of code rather than one per
+ * caller. What a caller does with each outcome — which error code it raises,
+ * what it announces and on which topic — is the caller's.
  */
 export type ProjectCreation =
   | { readonly kind: "made"; readonly project: ProjectRecord; readonly adopted: boolean }
@@ -1113,12 +618,12 @@ function projectCreateKey(clientId: string): string {
 /**
  * Make a project from nothing, or adopt one that already exists.
  *
- * Every ordering the create route depends on is kept here, because both callers
- * rely on it: the row is written before loreserver is asked and removed again if
- * it refuses, so that loreserver announcing the new repository back to Team —
- * while the create call is still open — finds the row already there. A create
- * carrying a repository id asks loreserver for nothing: the repository exists on
- * the author's disk under that id, and what is missing is only the row.
+ * The ordering here is what makes publishing work at all: the row is written
+ * before loreserver is asked and removed again if it refuses, so that loreserver
+ * announcing the new repository back to Team — while the create call is still
+ * open — finds the row already there. A create carrying a repository id asks
+ * loreserver for nothing: the repository exists on the author's disk under that
+ * id, and what is missing is only the row.
  */
 export async function makeOrAdoptProject(
   options: StudioApiOptions,

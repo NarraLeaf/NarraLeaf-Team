@@ -3,9 +3,8 @@
  *
  * A method is a name, a capability it belongs to, and a function of the
  * parameters and who is calling. Nothing else: no route, no status code, no
- * header. That is the point of the table, and it is why adding the sixth verb to
- * this protocol costs a file here and a caller in Studio rather than the eight
- * places the REST API needed.
+ * header. That is the point of the table, and it is why adding a verb to this
+ * protocol costs a file here and a caller in Studio.
  *
  * The capability a method belongs to is what the discovery document announces,
  * and it is worked out from this table rather than written beside it - see
@@ -16,7 +15,7 @@
  * capability is for.
  */
 import type { UserRecord } from "../identity/users.js";
-import { restCapabilities, type StudioApiOptions } from "../web/studio.js";
+import { serviceCapabilities, type StudioApiOptions } from "../web/studio.js";
 import type { TeamPresence } from "./presence.js";
 import { CONTRACT, TEAM_METHODS } from "./protocol.js";
 import type { TeamAccount, TeamCapability, TeamClientInstance, TeamErrorCode } from "./protocol.js";
@@ -131,14 +130,14 @@ export function capabilitiesOf(table: ReadonlyMap<string, TeamMethod>): TeamCapa
 }
 
 /**
- * Everything this build advertises, socket and HTTP, as one derived list.
+ * Everything this build advertises, as one derived list.
  *
  * The discovery document and the opening `hello` frame both carry this, so a
  * client is told the same thing before and after it connects. It is two halves
- * worked out from what the build actually does: the socket capabilities the
- * method table implies, and the capabilities the HTTP routes add for the two
- * things answered before a session exists - see {@link restCapabilities}. Neither
- * half is written down a second time, so a module left out of the build takes its
+ * worked out from what the build actually does: the capabilities this table
+ * implies, and the ones that turn on what the build was handed rather than on
+ * which methods it registered - see {@link serviceCapabilities}. Neither half is
+ * written down a second time, so a module left out of the build takes its
  * capability with it.
  */
 export function serverCapabilities(
@@ -146,7 +145,7 @@ export function serverCapabilities(
   service: StudioApiOptions,
 ): TeamCapability[] {
   const capabilities = new Set<TeamCapability>(capabilitiesOf(table));
-  for (const capability of restCapabilities(service)) {
+  for (const capability of serviceCapabilities(service)) {
     capabilities.add(capability);
   }
   return [...capabilities];

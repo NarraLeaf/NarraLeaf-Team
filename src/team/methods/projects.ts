@@ -1,29 +1,21 @@
 /**
  * The projects and the people, over a session.
  *
- * The same answers the REST API gives, from the same builders, so that a client
- * reading a project over the socket and one reading it over HTTP are looking at
- * the same document. Not a second implementation: `projectBody` and `memberBody`
- * are imported from the file that serves the routes, because two functions
- * building the same JSON is how a field comes to exist on one path and not the
- * other.
+ * Everything a Studio installation asks a server about its projects is here, and
+ * it is here rather than behind a request of its own because a session is how
+ * Studio finds out that a list changed. Reading over the socket means the read
+ * and the event that invalidates it come down one connection in order, so there
+ * is no window in which a client has asked, been told the answer, and missed the
+ * event that arrived in between.
  *
- * Why they are here at all, when the routes already work: a session is how
- * Studio finds out that a list changed. Reading it over the socket means the
- * read and the event that invalidates it come down one connection in order, so
- * there is no window where Studio has asked over HTTP, been told the answer, and
- * missed the event that came in between.
+ * What a project and an account look like in an answer is not composed here:
+ * `projectBody` and `memberBody` are imported, because two functions building the
+ * same JSON is how a field comes to exist on one path and not another.
  */
 import { findProject, forgetProject, listProjects } from "../../projects/registry.js";
 import { listUsers } from "../../identity/users.js";
 import { NOT_READ_YET } from "../../teamview.js";
-import {
-  DEFAULT_HISTORY_LIMIT,
-  makeOrAdoptProject,
-  MAXIMUM_HISTORY_LIMIT,
-  memberBody,
-  projectBody,
-} from "../../web/studio.js";
+import { makeOrAdoptProject, memberBody, projectBody } from "../../web/studio.js";
 import {
   boundedCount,
   MethodError,
@@ -52,14 +44,28 @@ const DESCRIPTION_LIMIT = 4 * 1024;
 /** The most a client id may be. Long enough for a UUID and a word, short of a payload. */
 const CLIENT_ID_LIMIT = 128;
 
+/** How many revisions a page of history holds when it is not asked for a number. */
+const DEFAULT_HISTORY_LIMIT = 20;
+
 /**
- * Say a project appeared or went, the way the server's own REST announce does.
+ * The most revisions one page may hold.
+ *
+ * Each one costs a read of its metadata, so a page is a bounded amount of work
+ * rather than however much a client asked for. Somebody wanting the whole of a
+ * long history pages through it, which is what the cursor is for.
+ */
+const MAXIMUM_HISTORY_LIMIT = 100;
+
+/**
+ * Say a project appeared or went.
  *
  * The list moves for whoever holds the `projects` topic; a project going is said
  * on its own topic too, because anybody watching it is watching something that is
- * not there any more, and telling them beats a screen that just goes quiet. This
- * mirrors the announce wired to the HTTP routes, so a project made or forgotten
- * over a session reaches every open session exactly as one made over HTTP does.
+ * not there any more, and telling them beats a screen that just goes quiet.
+ *
+ * Announced from the method rather than from the registry, because the registry
+ * is also written by the CLI and by loreserver adopting a repository — and an
+ * announcement is about a decision somebody made, not about a row.
  */
 function announceProjects(context: MethodContext, event: TeamProjectsEvent): void {
   context.publish(TOPIC_PROJECTS, event);
@@ -86,19 +92,18 @@ export function projectMethods(): TeamMethod[] {
       name: TEAM_METHODS.projectsGet,
       capability: "session",
       handle: (params: unknown, context: MethodContext) => {
-        // By id or by name, as the REST twin resolves it: a client has both in
-        // front of it - the id every row carries, and the name the remote address
-        // ends with - and neither is more correct than the other.
+        // By id or by name: a client has both in front of it - the id every row
+        // carries, and the name the remote address ends with - and neither is more
+        // correct than the other.
         const reference = requiredText(paramsObject(params), "project", ID_LIMIT);
         const project = findProject(context.options.database, reference);
         if (project === undefined) {
           throw new MethodError("not-found", "there is no project of that id on this server");
         }
-        // The project file the REST route also answers with, read out of the
-        // repository and therefore the part that may be absent. A file this server
-        // could not make sense of degrades to `readable: false` with a sentence,
-        // never a refusal - the same NOT_READ_YET the route falls back to for a
-        // project whose first clone has not landed.
+        // The project file, read out of the repository and therefore the part that
+        // may be absent. A file this server could not make sense of degrades to
+        // `readable: false` with a sentence, never a refusal - and so does one
+        // whose first clone has not landed.
         const read = context.options.readings?.get(project.id) ?? NOT_READ_YET;
         return { project: projectBody(context.options, project), file: read.file };
       },
@@ -115,21 +120,22 @@ export function projectMethods(): TeamMethod[] {
         }
         const readings = context.options.readings;
         if (readings?.revisions === undefined) {
-          // A build that reads no repositories has no history to page. The same
-          // silence the REST route answers with, shaped as an empty page rather
-          // than a refusal a client can do nothing about.
+          // A build that reads no repositories has no history to page. An empty
+          // page rather than a refusal a client can do nothing about; such a build
+          // leaves `project-history` out of its capabilities, so a client that read
+          // them does not ask.
           return { revisions: [] };
         }
         const limit = boundedCount(read, "limit", DEFAULT_HISTORY_LIMIT, MAXIMUM_HISTORY_LIMIT);
         // Opaque to the client: the cursor is a revision id this server handed
         // back, passed straight through to the reader.
         const cursor = optionalText(read, "cursor", ID_LIMIT);
-        // Called on the reader rather than through a reference lifted off it, for
-        // the reason the history route is: the reader is a class whose `revisions`
-        // keeps a set of the projects a read is inside of, and a copy of the
-        // method called on its own has no `this` to find that set on - which
-        // every object-literal stand-in in a test does have, so a detached call
-        // answers in the suite and throws on every real server.
+        // Called on the reader rather than through a reference lifted off it. The
+        // reader is a class whose `revisions` keeps a set of the projects a read is
+        // inside of, and a copy of the method called on its own has no `this` to
+        // find that set on - which every object-literal stand-in in a test does
+        // have, so a detached call answers in the suite and throws on every real
+        // server.
         const page = await readings.revisions(project.id, {
           limit,
           ...(cursor === undefined ? {} : { before: cursor }),
@@ -163,11 +169,10 @@ export function projectMethods(): TeamMethod[] {
         const repositoryId = optionalText(read, "repositoryId", ID_LIMIT);
         const clientId = optionalText(read, "clientId", CLIENT_ID_LIMIT);
 
-        // The one call that makes or adopts a project, shared with the REST route
-        // so the two cannot come to make one differently: it writes the row
-        // before it asks loreserver and rolls the row back if loreserver refuses,
-        // adopts rather than creates when a repository id is given, and hands back
-        // the row a repeat already made rather than a second one.
+        // The one call that makes or adopts a project: it writes the row before it
+        // asks loreserver and rolls the row back if loreserver refuses, adopts
+        // rather than creates when a repository id is given, and hands back the row
+        // a repeat already made rather than a second one.
         const result = await makeOrAdoptProject(context.options, context.user, {
           name,
           ...(description === undefined ? {} : { description }),
@@ -211,8 +216,8 @@ export function projectMethods(): TeamMethod[] {
       name: TEAM_METHODS.projectsForget,
       capability: "session",
       handle: (params: unknown, context: MethodContext) => {
-        // By id or by name, as the REST twin resolves it: a client holding a
-        // stray row has both, and neither is more correct than the other.
+        // By id or by name: a client holding a stray row has both, and neither is
+        // more correct than the other.
         const reference = requiredText(paramsObject(params), "project", ID_LIMIT);
         const project = findProject(context.options.database, reference);
         if (project === undefined) {
@@ -244,9 +249,8 @@ export function projectMethods(): TeamMethod[] {
       name: TEAM_METHODS.membersList,
       capability: "session",
       handle: (_params: unknown, context: MethodContext) => ({
-        // Disabled accounts included, for the reason the route gives: somebody
-        // who wrote half a history and then left is still the person that
-        // history names.
+        // Disabled accounts included: somebody who wrote half a history and then
+        // left is still the person that history names.
         members: listUsers(context.options.database).map((user) => memberBody(user)),
       }),
     },
