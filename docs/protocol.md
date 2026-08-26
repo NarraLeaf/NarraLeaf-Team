@@ -1,0 +1,385 @@
+# The Team protocol
+
+What a Studio installation and a Team server say to each other, on the wire. This
+is the contract, stated once so that a client written against it and the server
+that answers it cannot come to disagree quietly. Where a shape or a name is given
+below, it is the one in the canonical contract package — `@narraleaf/team-protocol`,
+under [`protocol/`](../protocol/) — which the server imports and from which
+[`protocol/contract.json`](../protocol/contract.json) is generated. Every shape
+here is one the server answers with today, not one it means to.
+
+The whole of it is one protocol carried over two kinds of connection: a little
+HTTP, for the two things that have to work before a client has a session, and a
+WebSocket, for everything after. Both arrive over one TLS listener, so an
+operator compares one certificate and every conversation that follows is over the
+connection whose certificate was compared.
+
+## The address a client is given
+
+An author is handed one address, `nlteam://host:port`, and nothing else. That is
+not where anything is served — it names a deployment, and reading the discovery
+document is what turns it into the URLs a client actually uses. The default port
+is `41402`.
+
+That address resolves to a TLS listener bound on every interface. It speaks
+HTTP/1.1 for the three things a client needs — the discovery document, the
+sign-in route and the WebSocket upgrade — over the same certificate. A deployment
+also runs listeners bound to the loopback for its own supervised `loreserver` to
+reach: a JWKS document and a gRPC authorisation service. A client never speaks to
+those, and they are not part of this protocol.
+
+## The discovery document
+
+```
+GET /.well-known/nlteam
+```
+
+Unauthenticated, and the one request that turns an address into a server. It is
+served as JSON, is never cached, and answers `GET` and `HEAD`.
+
+```json
+{
+  "protocol": 2,
+  "name": "team.example.lan",
+  "auth": { "required": true, "url": "https://team.example.lan:41402" },
+  "data": { "url": "lore://team.example.lan:41337" },
+  "capabilities": ["session", "comments", "clients", "live", "overlay", "password-sign-in", "project-history"],
+  "authority": { "sha256": "3D:38:…" },
+  "version": "0.1.0"
+}
+```
+
+- `protocol` is the contract version, `2`. It is the same number the opening
+  socket frame carries, so a client is told the same thing before and after it
+  connects. A client that reads a number it does not know stops here.
+- `name` is what the deployment calls itself, for a list a person reads. It is
+  read as each request is answered, so an operator renaming a server over ssh
+  reaches the next request rather than the next restart.
+- `auth.required` is whether a token is needed to reach the projects. It is false
+  only for a server whose storage was brought up with no identity at all, which
+  accepts anyone who can reach it; asking such a server's authors for a token
+  would be asking for something nobody can issue.
+- `auth.url` is where a token is presented — the `https` origin of this same
+  listener.
+- `data.url` is the remote the repositories live on. A client stores it and shows
+  it to nobody: which storage a server runs is a detail, not something a person
+  should have to learn and type.
+- `capabilities` is described under [Capabilities](#capabilities).
+- `authority.sha256` is the fingerprint of the authority this endpoint's
+  certificate chains to. It lets a client that has already trusted this server
+  recognise the machine answering. It proves nothing on its own — it arrives over
+  the connection it describes — and is treated as a label rather than as evidence.
+- `version` is the server's own build, for a support conversation rather than for
+  a decision.
+
+Unknown fields are ignored, never refused. A client must ignore a field it does
+not know, and a server must not begin requiring a field it did not previously
+require.
+
+## Signing in
+
+```
+POST /api/studio/v1/sign-in
+```
+
+The one route that takes no token, because it is where a token comes from. It
+takes a username and a password and mints the same token the server's own
+tooling would, claim for claim, so that an operator can hand a person a username
+and a password instead of a token through a chat window.
+
+The request is a JSON object, `{ "username": …, "password": … }`, at most four
+kilobytes. On success it answers `200` with the token and the account it belongs
+to:
+
+```json
+{ "token": "…", "account": { "username": "ada", "displayName": "Ada", "email": "ada@example.lan" } }
+```
+
+Every way it can be refused is one status and one sentence, so that whoever is at
+the other end learns nothing about which accounts exist: a wrong password, an
+account that is not there, one that has been disabled and one that belongs to a
+machine are all `401` with the same words. A request from another site's page is
+`403` on its origin; a body that is too large or not JSON is `400`; and a name
+guessed at too often from one place is held off with `429` and a `retry-after`,
+its password never looked at. The password is never written to a log.
+
+A client that has a token already does not use this route. It presents the token
+as a bearer on the socket upgrade below, and the token's lifetime is the whole of
+how long that works — there is no session to sign out of.
+
+## The session
+
+Everything an author does travels on one WebSocket per installation:
+
+```
+GET /api/team/v1/socket
+Authorization: Bearer <token>
+```
+
+The bearer is on the upgrade request, and it is checked before the `101` is
+written — a refusal is worth far more to a client as an HTTP status it can show a
+person than as a close code on a socket that connected and then did not. A
+missing or refused token is `401`; a request that is not a WebSocket handshake
+this server speaks is `400`.
+
+Once open, either side may speak. The client makes calls and subscribes to
+topics; the server answers calls, acknowledges subscriptions and pushes events.
+The caller is identified again out of the token on every call, and on a timer of
+thirty seconds besides, so that disabling an account or revoking its tokens ends
+its session within that window rather than at the token's expiry.
+
+### Framing
+
+The framing is [RFC 6455](https://www.rfc-editor.org/rfc/rfc6455) in the amount
+this protocol uses, and no more.
+
+- Every message is a text frame carrying JSON. A binary frame is refused with
+  `1003`.
+- No extensions are negotiated; a client that offers one is answered without it,
+  and a reserved bit set on a frame is a protocol error.
+- A frame from a client must be masked, as the specification requires of a client.
+- A message may total at most **128 KiB**, fragments included. One larger is
+  refused with `1009` before it is assembled.
+- Ping, pong and close are control frames and carry at most 125 bytes. The server
+  pings on the heartbeat interval it announced and closes a peer it has not heard
+  from for twice that.
+
+### The opening frame
+
+Before anything is asked, the server sends one `hello`:
+
+```json
+{
+  "t": "hello",
+  "protocol": 2,
+  "server": { "name": "team.example.lan", "version": "0.1.0" },
+  "session": "<connection id>",
+  "account": { "id": "…", "username": "ada", "displayName": "Ada", "operator": false },
+  "methods": ["projects.list", "…"],
+  "capabilities": ["session", "comments", "clients", "live", "overlay", "password-sign-in", "project-history"],
+  "serverTime": 1737936000000,
+  "heartbeatMs": 30000
+}
+```
+
+`protocol` is the same number the discovery document carries. `account` is the
+person the session is, so that a client can show whose comments are its own
+without parsing a token it is told to treat as opaque; `operator` says the
+account may administer the server, and is not a permission over any project.
+`methods` is every method this build answers and `capabilities` is described
+below — a client checks either before it asks. `serverTime` lets a client say
+"two minutes ago" without trusting its own clock, and `heartbeatMs` is how often
+each side should expect to hear something.
+
+### Calls
+
+A call names a method and carries an id the client chose. The id is echoed on the
+one frame that answers it, which is exactly one of a `result` or an `error`.
+
+```json
+{ "t": "call", "id": 1, "method": "threads.create", "params": { … } }
+```
+
+```json
+{ "t": "result", "id": 1, "value": { … } }
+```
+
+**Every method answers with an object.** A method that has nothing to report
+answers with `{}`, never a bare `null`, so that `result.value` is always an
+object rather than a value a client has to tell apart from a handler that built
+no body. A session holds at most 64 calls in flight at once.
+
+Every write accepts an optional `clientId`, and repeating a write with the same
+one is safe: the key is `(account, method, clientId)`, so a write that arrives
+twice — the same client, the same id, over a socket that dropped between the
+request and the answer — returns the row it already made rather than a second
+one, and a repeat announces nothing on any topic.
+
+### Errors
+
+A call that is not answered is refused with a coded frame:
+
+```json
+{ "t": "error", "id": 1, "code": "not-found", "message": "…" }
+```
+
+The message is English, for a log; the sentence a person reads is written by the
+client, in their language, from the code. The codes are the whole vocabulary of
+failure:
+
+| Code | Means |
+|---|---|
+| `unknown-method` | This build has no such method. A client that read `methods` never sees it. |
+| `bad-params` | The parameters were not the shape the method takes. |
+| `not-found` | The thing named is not on this server. |
+| `refused` | The caller may not do that. |
+| `conflict` | It would collide with something already there. |
+| `unavailable` | True now and perhaps not in a moment — a repository not read yet. |
+| `unauthenticated` | The token is no longer good; reconnecting will not help. |
+| `internal` | Something nobody planned for. The message is kept off the wire. |
+
+### Subscriptions and events
+
+A client asks to be told when something changes by subscribing to a topic. The
+acknowledgement carries the topic's sequence as it stands:
+
+```json
+{ "t": "subscribe", "id": 2, "topic": "project:abc/threads" }
+```
+
+```json
+{ "t": "subscribed", "id": 2, "topic": "project:abc/threads", "seq": 7 }
+```
+
+Subscribing validates; unsubscribing never fails. A well-formed topic whose
+project or room is not on this server is `not-found`; a topic that is not a shape
+this server publishes is `not-found`; but dropping a topic that was never held is
+a success, because a client tidying up should not have to know what it still
+holds. A session holds at most 64 topics at once.
+
+An event names its topic and carries a sequence and a payload:
+
+```json
+{ "t": "event", "topic": "project:abc/threads", "seq": 8, "payload": { "kind": "thread-created", "thread": { … } } }
+```
+
+Delivery is deliberately weak. The sequences live in the server's memory and
+start again at nought when it restarts, and events are never queued or replayed.
+A client compares each sequence with the last it saw, and **anything other than
+exactly the next number means read the collection again** — a gap, or a restart,
+both mean the same thing and both have the same answer. A client too slow to read
+may be dropped, because dropping it is correct: it reconnects and re-reads.
+
+### Closing
+
+A clean end is a WebSocket close of `1000`. When the server ends a session
+itself, it first sends a `bye` saying why, because a close code is two bytes and
+cannot tell a token that expired from a server that is shutting down — only one
+of those is worth reconnecting into at once:
+
+```json
+{ "t": "bye", "code": "unauthenticated", "message": "…" }
+```
+
+The close code that follows names the reason, so that a client author has
+something to fix rather than a goodbye that reads as clean:
+
+| Situation | Close code |
+|---|---|
+| A normal end, or a `bye` for any non-authentication reason | `1000` |
+| A frame the protocol does not allow | `1002` |
+| A quota, an in-flight cap or a topic cap reached | `1008` |
+| A token refused or revoked, after `bye{unauthenticated}` | `1008` |
+| A message over the ceiling | `1009` |
+
+## Capabilities
+
+One vocabulary, carried the same way by the discovery document and the `hello`
+frame, so a client is told the same thing before and after it connects. It is
+derived from what the build actually serves rather than written down, so a module
+left out of a build takes its capability with it, and a capability is never
+announced by a server that cannot answer it.
+
+| Capability | What it means |
+|---|---|
+| `session` | The socket exists. Everything else on it implies this, including the project list, one project's detail and the member list, which are methods gated by `session` rather than capabilities of their own. |
+| `comments` | Threads and comments anchored in a project. |
+| `clients` | Which installations are connected, and what each has open. |
+| `live` | Live sessions: rooms on a project, for finding installations and broadcasting to them. |
+| `overlay` | Data attached to a project at a revision, which never enters the repository. |
+| `password-sign-in` | A username and a password may be exchanged for a token, before any session. This names the sign-in route above. |
+| `project-history` | A project's revisions may be read a page at a time, over HTTP. Present only where the server has a reader that can page one. |
+
+A client decides what a server can do from `capabilities` or from `hello.methods`,
+never by probing for a `404`.
+
+## Methods
+
+The whole surface, and every name a client may call. All are gated by `session`
+unless a capability is named; the project and member reads share the builders the
+HTTP routes use, so a client reading a project over the socket and one reading it
+over HTTP see the same document.
+
+| Method | Capability | What it does |
+|---|---|---|
+| `projects.list` | `session` | Every project on this server. |
+| `projects.get` | `session` | One project, and what has been read of its repository. |
+| `members.list` | `session` | Every account, as a name beside a piece of work. |
+| `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. |
+| `threads.get` | `comments` | One thread and every comment in it. |
+| `threads.create` | `comments` | Open a thread on an anchor, with its first comment. |
+| `threads.reply` | `comments` | Add a comment to a thread. |
+| `threads.resolve` | `comments` | Mark a thread resolved, or open it again. Idempotent: resolving a thread that is already in the asked-for state changes nothing and announces nothing. |
+| `comments.edit` | `comments` | Change the wording of one's own comment. |
+| `comments.delete` | `comments` | Withdraw one's own comment, keeping the shape of the conversation. |
+| `clients.announce` | `clients` | Say which installation this is, and what it has open. |
+| `clients.withdraw` | `clients` | Take one window's presence back. |
+| `clients.list` | `clients` | Which installations are connected, optionally on one project. |
+| `live.list` | `live` | The live sessions open on one project. |
+| `live.open` | `live` | Open one, and be its first member. |
+| `live.join` | `live` | Join one somebody else opened. |
+| `live.leave` | `live` | Leave one. The last one out closes it. |
+| `live.close` | `live` | Close one outright, which only its opener may do. |
+| `live.say` | `live` | Say something to everybody in one. Kept by nobody. |
+| `overlay.list` | `overlay` | What is attached to one project, and what the server last read its head to be. |
+| `overlay.put` | `overlay` | Attach something, or replace something one attached before. |
+| `overlay.drop` | `overlay` | Take one's own record off again. |
+
+### Anchors
+
+Where in a project something is attached is an **anchor**: `{ document?, element?, revision? }`,
+three strings the server stores, indexes on and hands back, and **never parses**.
+`document` is a path as the client writes it, `element` is the client's id for a
+row or an element inside that document, and `revision` is what the repository
+stood at. That the server never reads them is what lets the two halves ship on
+separate schedules: a client that begins anchoring to a new kind of thing needs
+no server release.
+
+## Topics
+
+A topic is a string a client subscribes to. Every one has a publisher; a name the
+server never publishes on is refused rather than left waiting.
+
+| Topic | When it fires |
+|---|---|
+| `projects` | The list of projects on this server changed. |
+| `project:{project}` | One project's row changed, or the server read its repository again. |
+| `project:{project}/threads` | A thread or comment in one project changed. |
+| `project:{project}/overlay` | An overlay record on one project changed. |
+| `project:{project}/clients` | An installation opened or closed one project. |
+| `project:{project}/live` | A live session on one project opened, changed or closed. |
+| `live:{session}` | Something was said inside one live session. Kept by nobody. |
+
+The people on a server are read on demand, through `members.list`, rather than
+watched on a topic.
+
+## Limits
+
+Every limit is in the contract, so that a client can know it rather than discover
+it by being refused.
+
+| Limit | Bytes | Bounds |
+|---|---|---|
+| `anchorField` | 512 | Each field of an anchor. |
+| `commentBody` | 8 192 | One comment. |
+| `suggestion` | 65 536 | What a suggestion carries. |
+| `overlayBody` | 65 536 | One overlay record. |
+| `livePayload` | 16 384 | One thing said in a live session. |
+| `instanceField` | 256 | Each field describing a client installation. |
+
+Two transport ceilings sit above the per-field limits: a WebSocket message may
+total **128 KiB**, and an HTTP request body — the sign-in route's — at most
+**4 KiB**. Both are refused before they are read in full.
+
+## Versioning
+
+`protocol` moves only when a field an older client relies on stops meaning what
+it meant. Adding a capability, a method, a topic, an event kind or an optional
+field is additive and does not move it, which is why a newer server answers an
+older client without either being rebuilt. A client that finds a `protocol` it
+does not know refuses the server rather than guessing at frames.
+
+The number is `2`. It moved to `2` while Team had never been released and the
+only client shipped in step with it, so the change cost nobody a migration. That
+justification does not return: once Team is released, a further breaking change is
+made by negotiation rather than by moving this number under a client's feet.
