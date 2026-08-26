@@ -113,8 +113,8 @@ export function projectMethods(): TeamMethod[] {
         if (project === undefined) {
           throw new MethodError("not-found", "there is no project of that id on this server");
         }
-        const revisions = context.options.readings?.revisions;
-        if (revisions === undefined) {
+        const readings = context.options.readings;
+        if (readings?.revisions === undefined) {
           // A build that reads no repositories has no history to page. The same
           // silence the REST route answers with, shaped as an empty page rather
           // than a refusal a client can do nothing about.
@@ -124,7 +124,13 @@ export function projectMethods(): TeamMethod[] {
         // Opaque to the client: the cursor is a revision id this server handed
         // back, passed straight through to the reader.
         const cursor = optionalText(read, "cursor", ID_LIMIT);
-        const page = await revisions(project.id, {
+        // Called on the reader rather than through a reference lifted off it, for
+        // the reason the history route is: the reader is a class whose `revisions`
+        // keeps a set of the projects a read is inside of, and a copy of the
+        // method called on its own has no `this` to find that set on - which
+        // every object-literal stand-in in a test does have, so a detached call
+        // answers in the suite and throws on every real server.
+        const page = await readings.revisions(project.id, {
           limit,
           ...(cursor === undefined ? {} : { before: cursor }),
         });

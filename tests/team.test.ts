@@ -557,6 +557,53 @@ describe("a project's history over the socket", () => {
       "not-found",
     );
   });
+
+  it("reads through a reader that is a class, keeping its `this`", async () => {
+    // The real reader is a class whose `revisions` finds its state on `this`, so
+    // a handler that lifted the method off it and called it on its own would
+    // throw where the server runs and pass on every object-literal stand-in. This
+    // reader is a class for exactly that reason: it is the shape that catches it.
+    const pages: Record<string, { id: string }[]> = {};
+    class ClassReader {
+      // The state lives on the instance, so `revisions` has to reach it through
+      // `this` - which a method lifted off the object and called on its own no
+      // longer has.
+      readonly pages = pages;
+      get(): undefined {
+        return undefined;
+      }
+      revisions(
+        projectId: string,
+        page: { limit: number; before?: string },
+      ): Promise<{ revisions: { id: string }[]; more: boolean } | undefined> {
+        const whole = this.pages[projectId];
+        if (whole === undefined) {
+          return Promise.resolve(undefined);
+        }
+        const start =
+          page.before === undefined
+            ? 0
+            : whole.findIndex((revision) => revision.id === page.before) + 1;
+        const taken = whole.slice(start, start + page.limit);
+        return Promise.resolve({ revisions: taken, more: start + taken.length < whole.length });
+      }
+    }
+    const team = await harness({ readings: new ClassReader() });
+    const ada = await account(team.database, "ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    pages[project.id] = [{ id: "r1" }];
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.projectsHistory, { project: project.id });
+    expect((answer["revisions"] as { id: string }[]).map((revision) => revision.id)).toEqual([
+      "r1",
+    ]);
+  });
 });
 
 describe("making a project over the socket", () => {
