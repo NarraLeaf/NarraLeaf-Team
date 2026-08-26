@@ -372,6 +372,75 @@ describe("calling", () => {
       "not-found",
     );
   });
+
+  it("hands one project the file the REST twin does, by id or by name", async () => {
+    let project = { id: "", name: "" };
+    const team = await harness({
+      // Standing in for the reader, which needs a running loreserver to say
+      // either of these. What matters is the shape a read has landed in.
+      readings: {
+        get: (id: string) =>
+          id === project.id
+            ? {
+                history: { revisions: 3 },
+                file: {
+                  readable: true,
+                  title: "Lighthouse",
+                  stageWidth: 1920,
+                  stageHeight: 1080,
+                  scenes: 4,
+                  assets: 12,
+                  assetBytes: 3400,
+                },
+              }
+            : undefined,
+      },
+    });
+    const maker = await account(team.database, "ada");
+    project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: maker,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const byId = await client.value(TEAM_METHODS.projectsGet, { project: project.id });
+    expect((byId["project"] as { name: string }).name).toBe("lighthouse");
+    // The whole file the route answers with, matched field for field rather than
+    // in part: this is the shape a client reads over either transport.
+    expect(byId["file"]).toEqual({
+      readable: true,
+      title: "Lighthouse",
+      stageWidth: 1920,
+      stageHeight: 1080,
+      scenes: 4,
+      assets: 12,
+      assetBytes: 3400,
+    });
+    // The name resolves the same project, because the remote address ends with
+    // the name and that is what a client has after a clone.
+    const byName = await client.value(TEAM_METHODS.projectsGet, { project: "lighthouse" });
+    expect((byName["project"] as { id: string }).id).toBe(project.id);
+  });
+
+  it("degrades the file cleanly for a project it has not read, never a refusal", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.projectsGet, { project: project.id });
+    // Absent-reading is `readable: false` with a sentence, exactly as the route's
+    // NOT_READ_YET is, rather than an error the caller can do nothing about.
+    expect((answer["file"] as { readable: boolean }).readable).toBe(false);
+    expect((answer["file"] as { reason?: string }).reason).toBeTypeOf("string");
+  });
 });
 
 describe("subscribing", () => {

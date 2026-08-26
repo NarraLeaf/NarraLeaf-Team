@@ -14,8 +14,9 @@
  * there is no window where Studio has asked over HTTP, been told the answer, and
  * missed the event that came in between.
  */
-import { findProjectById, listProjects } from "../../projects/registry.js";
+import { findProject, listProjects } from "../../projects/registry.js";
 import { listUsers } from "../../identity/users.js";
+import { NOT_READ_YET } from "../../teamview.js";
 import { memberBody, projectBody } from "../../web/studio.js";
 import {
   MethodError,
@@ -47,12 +48,21 @@ export function projectMethods(): TeamMethod[] {
       name: TEAM_METHODS.projectsGet,
       capability: "session",
       handle: (params: unknown, context: MethodContext) => {
-        const id = requiredText(paramsObject(params), "project", ID_LIMIT);
-        const project = findProjectById(context.options.database, id);
+        // By id or by name, as the REST twin resolves it: a client has both in
+        // front of it - the id every row carries, and the name the remote address
+        // ends with - and neither is more correct than the other.
+        const reference = requiredText(paramsObject(params), "project", ID_LIMIT);
+        const project = findProject(context.options.database, reference);
         if (project === undefined) {
           throw new MethodError("not-found", "there is no project of that id on this server");
         }
-        return { project: projectBody(context.options, project) };
+        // The project file the REST route also answers with, read out of the
+        // repository and therefore the part that may be absent. A file this server
+        // could not make sense of degrades to `readable: false` with a sentence,
+        // never a refusal - the same NOT_READ_YET the route falls back to for a
+        // project whose first clone has not landed.
+        const read = context.options.readings?.get(project.id) ?? NOT_READ_YET;
+        return { project: projectBody(context.options, project), file: read.file };
       },
     },
     {
