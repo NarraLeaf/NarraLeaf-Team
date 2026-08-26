@@ -188,6 +188,41 @@ describe("parseArgs, up", () => {
   });
 });
 
+describe("parseArgs, the root from the environment", () => {
+  it("takes NLTEAM_ROOT as the root when no flag names one", () => {
+    // The container case: an image sets the variable once and every command it
+    // runs is given the root without a flag list to compose.
+    expect(parseArgs(["up"], { NLTEAM_ROOT: "/var/lib/nlteam" })).toMatchObject({
+      kind: "up",
+      root: "/var/lib/nlteam",
+    });
+    expect(parseArgs(["settings", "list"], { NLTEAM_ROOT: "/var/lib/nlteam" })).toEqual({
+      kind: "settings-list",
+      root: "/var/lib/nlteam",
+    });
+  });
+
+  it("lets an explicit --root win over the environment", () => {
+    expect(
+      parseArgs(["settings", "list", "--root", "/srv/team"], { NLTEAM_ROOT: "/var/lib/nlteam" }),
+    ).toEqual({ kind: "settings-list", root: "/srv/team" });
+  });
+
+  it("treats an empty NLTEAM_ROOT as no root at all", () => {
+    // A variable declared and left blank has named nothing, so the missing-root
+    // error is still what a command with no flag gets.
+    const result = parseArgs(["settings", "list"], { NLTEAM_ROOT: "" });
+    expect(result.kind).toBe("error");
+    expect(result.kind === "error" && result.message).toContain("--root");
+  });
+
+  it("still insists on a root when neither the flag nor the variable names one", () => {
+    const result = parseArgs(["up"], {});
+    expect(result.kind).toBe("error");
+    expect(result.kind === "error" && result.message).toContain("NLTEAM_ROOT");
+  });
+});
+
 describe("parseArgs, the identity commands", () => {
   it("makes the first account, and wants a name for it", () => {
     expect(parseArgs(["init", "ada", "--root", "/srv/team"])).toEqual({

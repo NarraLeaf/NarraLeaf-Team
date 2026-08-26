@@ -83,7 +83,8 @@ Commands:
   trust                     Show this server's certificate authority and its
                             fingerprint, and change nothing
 
-Every command takes --root <path>, the directory Team keeps its files in.
+Every command takes --root <path>, the directory Team keeps its files in, or
+reads it from NLTEAM_ROOT when the flag is not given.
 
 Options for up:
       --health-port <port>  loreserver's HTTP health check port (default ${DEFAULT_PORTS.healthPort})

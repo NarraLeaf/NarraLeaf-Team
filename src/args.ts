@@ -161,7 +161,55 @@ function error(message: string): Invocation {
 
 /** Every command that keeps state needs to be told which storage root. */
 function missingRoot(command: string): Invocation {
-  return error(`${command} needs --root <path>, the directory Team keeps its files in`);
+  return error(
+    `${command} needs --root <path> or NLTEAM_ROOT, the directory Team keeps its files in`,
+  );
+}
+
+/**
+ * The environment variable that stands in for each command-line option.
+ *
+ * A container entrypoint cannot compose a long flag list, so every option an
+ * operator would otherwise write on the line has a variable it can be given
+ * through instead. The mapping lives here, once, so that the rule "a flag beats
+ * the environment" is expressed in one place rather than at every option — see
+ * {@link optionValue}.
+ */
+const ENVIRONMENT: Readonly<Record<string, string>> = {
+  "--root": "NLTEAM_ROOT",
+};
+
+/**
+ * The value of an environment variable, or undefined when it is unset or empty.
+ *
+ * An empty variable is treated as absent rather than as an empty value: a
+ * container that declares `NLTEAM_ROOT` and leaves it blank has named no root,
+ * not a root that is the empty string.
+ */
+function envValue(env: NodeJS.ProcessEnv, option: string): string | undefined {
+  const name = ENVIRONMENT[option];
+  if (name === undefined) {
+    return undefined;
+  }
+  const value = env[name];
+  return value === undefined || value === "" ? undefined : value;
+}
+
+/**
+ * One option's value: the flag if it was written, otherwise the environment.
+ *
+ * This is the whole of the precedence between a flag and its variable, in one
+ * function: an explicit flag wins, and the environment answers for a flag that
+ * was not given. What is stored in the database, and the built-in default, are
+ * lower still and are settled where a token is minted rather than here.
+ */
+function optionValue(tokens: Tokens, env: NodeJS.ProcessEnv, option: string): string | undefined {
+  return tokens.values.get(option) ?? envValue(env, option);
+}
+
+/** The storage root a command was given, on the line or in the environment. */
+function rootOf(tokens: Tokens, env: NodeJS.ProcessEnv): string | undefined {
+  return optionValue(tokens, env, "--root");
 }
 
 /**
@@ -441,7 +489,7 @@ function readIdentityOverrides(tokens: Tokens): IdentityOverrides | string {
 }
 
 /** Parse the arguments that follow `up`. */
-function parseUp(argv: readonly string[]): Invocation {
+function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const result = readTokens(
     argv,
     ["--root", "--health-port", ...IDENTITY_OPTIONS],
@@ -461,7 +509,7 @@ function parseUp(argv: readonly string[]): Invocation {
     return error(`unexpected argument: ${extra}`);
   }
 
-  const root = tokens.values.get("--root");
+  const root = rootOf(tokens, env);
   if (root === undefined) {
     return missingRoot("up");
   }
@@ -519,7 +567,7 @@ function parseUp(argv: readonly string[]): Invocation {
 }
 
 /** Parse the arguments that follow `init`. */
-function parseInit(argv: readonly string[]): Invocation {
+function parseInit(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const result = readTokens(argv, ["--root", "--display-name", "--email"]);
   if (result.kind !== "tokens") {
     return result.kind === "help" ? { kind: "help" } : error(result.message);
@@ -533,7 +581,7 @@ function parseInit(argv: readonly string[]): Invocation {
   if (tokens.positionals[1] !== undefined) {
     return error(`unexpected argument: ${tokens.positionals[1]}`);
   }
-  const root = tokens.values.get("--root");
+  const root = rootOf(tokens, env);
   if (root === undefined) {
     return missingRoot("init");
   }
@@ -548,7 +596,7 @@ function parseInit(argv: readonly string[]): Invocation {
 }
 
 /** Parse the arguments that follow `user`. */
-function parseUser(argv: readonly string[]): Invocation {
+function parseUser(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const [verb, ...rest] = argv;
   if (verb === undefined) {
     return error(
@@ -565,7 +613,7 @@ function parseUser(argv: readonly string[]): Invocation {
     if (result.kind !== "tokens") {
       return result.kind === "help" ? { kind: "help" } : error(result.message);
     }
-    const root = result.tokens.values.get("--root");
+    const root = rootOf(result.tokens, env);
     return root === undefined ? missingRoot("user list") : { kind: "user-list", root };
   }
 
@@ -587,7 +635,7 @@ function parseUser(argv: readonly string[]): Invocation {
     if (tokens.positionals[1] !== undefined) {
       return error(`unexpected argument: ${tokens.positionals[1]}`);
     }
-    const root = tokens.values.get("--root");
+    const root = rootOf(tokens, env);
     if (root === undefined) {
       return missingRoot("user create");
     }
@@ -615,7 +663,7 @@ function parseUser(argv: readonly string[]): Invocation {
     if (tokens.positionals[1] !== undefined) {
       return error(`unexpected argument: ${tokens.positionals[1]}`);
     }
-    const root = tokens.values.get("--root");
+    const root = rootOf(tokens, env);
     if (root === undefined) {
       return missingRoot(`user ${verb}`);
     }
@@ -635,7 +683,7 @@ function parseUser(argv: readonly string[]): Invocation {
     if (tokens.positionals[1] !== undefined) {
       return error(`unexpected argument: ${tokens.positionals[1]}`);
     }
-    const root = tokens.values.get("--root");
+    const root = rootOf(tokens, env);
     if (root === undefined) {
       return missingRoot(`user ${verb}`);
     }
@@ -651,7 +699,7 @@ function parseUser(argv: readonly string[]): Invocation {
 }
 
 /** Parse the arguments that follow `token`. */
-function parseToken(argv: readonly string[]): Invocation {
+function parseToken(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const [verb, ...rest] = argv;
   if (verb === undefined) {
     return error("token needs a verb: mint");
@@ -676,7 +724,7 @@ function parseToken(argv: readonly string[]): Invocation {
   if (tokens.positionals[1] !== undefined) {
     return error(`unexpected argument: ${tokens.positionals[1]}`);
   }
-  const root = tokens.values.get("--root");
+  const root = rootOf(tokens, env);
   if (root === undefined) {
     return missingRoot("token mint");
   }
@@ -689,7 +737,7 @@ function parseToken(argv: readonly string[]): Invocation {
 }
 
 /** Parse the arguments that follow `project`. */
-function parseProject(argv: readonly string[]): Invocation {
+function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const [verb, ...rest] = argv;
   if (verb === undefined) {
     return error("project needs a verb: create or list");
@@ -717,7 +765,7 @@ function parseProject(argv: readonly string[]): Invocation {
     if (tokens.positionals[1] !== undefined) {
       return error(`unexpected argument: ${tokens.positionals[1]}`);
     }
-    const root = tokens.values.get("--root");
+    const root = rootOf(tokens, env);
     if (root === undefined) {
       return missingRoot("project create");
     }
@@ -749,7 +797,7 @@ function parseProject(argv: readonly string[]): Invocation {
     if (extra !== undefined) {
       return error(`unexpected argument: ${extra}`);
     }
-    const root = tokens.values.get("--root");
+    const root = rootOf(tokens, env);
     if (root === undefined) {
       return missingRoot("project list");
     }
@@ -760,7 +808,7 @@ function parseProject(argv: readonly string[]): Invocation {
 }
 
 /** Parse the arguments that follow `settings`. */
-function parseSettings(argv: readonly string[]): Invocation {
+function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const [verb, ...rest] = argv;
   if (verb === undefined) {
     return error("settings needs a verb: list or set");
@@ -778,7 +826,7 @@ function parseSettings(argv: readonly string[]): Invocation {
     if (extra !== undefined) {
       return error(`unexpected argument: ${extra}`);
     }
-    const root = result.tokens.values.get("--root");
+    const root = rootOf(result.tokens, env);
     return root === undefined ? missingRoot("settings list") : { kind: "settings-list", root };
   }
 
@@ -796,7 +844,7 @@ function parseSettings(argv: readonly string[]): Invocation {
     if (extra !== undefined) {
       return error(`unexpected argument: ${extra}`);
     }
-    const root = tokens.values.get("--root");
+    const root = rootOf(tokens, env);
     if (root === undefined) {
       return missingRoot("settings set");
     }
@@ -831,7 +879,7 @@ function parseSettings(argv: readonly string[]): Invocation {
 }
 
 /** Parse the arguments that follow `key`. */
-function parseKey(argv: readonly string[]): Invocation {
+function parseKey(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const [verb, ...rest] = argv;
   if (verb === undefined) {
     return error("key needs a verb: list or rotate");
@@ -851,7 +899,7 @@ function parseKey(argv: readonly string[]): Invocation {
   if (extra !== undefined) {
     return error(`unexpected argument: ${extra}`);
   }
-  const root = result.tokens.values.get("--root");
+  const root = rootOf(result.tokens, env);
   if (root === undefined) {
     return missingRoot(`key ${verb}`);
   }
@@ -859,7 +907,7 @@ function parseKey(argv: readonly string[]): Invocation {
 }
 
 /** Parse the arguments that follow `trust`. */
-function parseTrust(argv: readonly string[]): Invocation {
+function parseTrust(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const result = readTokens(argv, ["--root"], ["--install", "--remove"]);
   if (result.kind !== "tokens") {
     return result.kind === "help" ? { kind: "help" } : error(result.message);
@@ -870,7 +918,7 @@ function parseTrust(argv: readonly string[]): Invocation {
   if (extra !== undefined) {
     return error(`unexpected argument: ${extra}`);
   }
-  const root = tokens.values.get("--root");
+  const root = rootOf(tokens, env);
   if (root === undefined) {
     return missingRoot("trust");
   }
@@ -892,7 +940,10 @@ function parseTrust(argv: readonly string[]): Invocation {
  * An empty command line is treated as a request for help: a bare `nlteam` names
  * no command, and there is nothing else it could mean.
  */
-export function parseArgs(argv: readonly string[]): Invocation {
+export function parseArgs(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Invocation {
   const [first, ...rest] = argv;
 
   if (first === undefined) {
@@ -912,21 +963,21 @@ export function parseArgs(argv: readonly string[]): Invocation {
     // The only token a command consumes is its own name; the rest belong to
     // it, including any it does not recognise.
     case "up":
-      return parseUp(rest);
+      return parseUp(rest, env);
     case "init":
-      return parseInit(rest);
+      return parseInit(rest, env);
     case "user":
-      return parseUser(rest);
+      return parseUser(rest, env);
     case "token":
-      return parseToken(rest);
+      return parseToken(rest, env);
     case "project":
-      return parseProject(rest);
+      return parseProject(rest, env);
     case "settings":
-      return parseSettings(rest);
+      return parseSettings(rest, env);
     case "key":
-      return parseKey(rest);
+      return parseKey(rest, env);
     case "trust":
-      return parseTrust(rest);
+      return parseTrust(rest, env);
     default:
       // Every option this program takes belongs to a command, so a command line
       // that names none is a mistake however it was spelled: a mistyped command
