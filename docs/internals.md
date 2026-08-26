@@ -1,7 +1,8 @@
 # How Team works
 
 Why the parts are the shape they are. None of it is needed to run a Team server — that is
-[operations.md](operations.md).
+[operations.md](operations.md), and what Team is, above the parts, is
+[architecture.md](architecture.md).
 
 ## Reading what is inside a project
 
