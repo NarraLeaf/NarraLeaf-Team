@@ -39,6 +39,10 @@ function serverOptions() {
   format: "esm",
   target: "node24",
   sourcemap: true,
+  // The wire contract is imported as `@narraleaf/team-protocol` and lives under
+  // protocol/ rather than in node_modules, so the bundler is pointed at the
+  // tsconfig that maps the name to its source. It is bundled in, not external.
+  tsconfig: join(root, "tsconfig.json"),
   // The two that cannot be bundled, for the reason at the top of this file.
   // The platform packages are named as a group because exactly one of the four
   // is ever installed — each declares the os and cpu it is for — and a build on

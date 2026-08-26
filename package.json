@@ -22,6 +22,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node scripts/build.mjs --watch",
+    "contract": "node scripts/gen-contract.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

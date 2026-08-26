@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vitest/config";
 
@@ -13,6 +14,16 @@ const manifest: { version: string } = JSON.parse(
 export default defineConfig({
   define: {
     __NLTEAM_VERSION__: JSON.stringify(manifest.version),
+  },
+  resolve: {
+    alias: {
+      // The wire contract is consumed from source under protocol/ rather than
+      // from node_modules; the checker learns this from tsconfig's paths, and
+      // the test runner from here.
+      "@narraleaf/team-protocol": fileURLToPath(
+        new URL("./protocol/src/index.ts", import.meta.url),
+      ),
+    },
   },
   test: {
     include: ["tests/**/*.test.ts"],

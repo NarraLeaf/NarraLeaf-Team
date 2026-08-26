@@ -1,8 +1,14 @@
 {
-  "note": "The Team protocol's wire names. A byte-identical copy lives in Studio at src/shared/types/teamContract.json; both move together or the two stop understanding each other. Each side has a test that pins its own constants to this file, so a rename that forgets one half fails there rather than on somebody's machine.",
+  "_generated": "This file is generated from protocol/src/index.ts by scripts/gen-contract.mjs. Do not edit it by hand.",
   "protocol": 1,
   "socketPath": "/api/team/v1/socket",
-  "capabilities": ["session", "comments", "clients", "live", "overlay"],
+  "capabilities": [
+    "session",
+    "comments",
+    "clients",
+    "live",
+    "overlay"
+  ],
   "errorCodes": [
     "unknown-method",
     "bad-params",
@@ -48,8 +54,19 @@
     "live": "live:{session}"
   },
   "frames": {
-    "fromServer": ["hello", "result", "error", "subscribed", "event", "bye"],
-    "fromClient": ["call", "subscribe", "unsubscribe"]
+    "fromServer": [
+      "hello",
+      "result",
+      "error",
+      "subscribed",
+      "event",
+      "bye"
+    ],
+    "fromClient": [
+      "call",
+      "subscribe",
+      "unsubscribe"
+    ]
   },
   "limits": {
     "anchorField": 512,

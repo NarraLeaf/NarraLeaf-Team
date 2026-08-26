@@ -1,19 +1,18 @@
 /**
- * What both halves of the protocol have to agree about.
+ * What the contract module, the generated JSON and the registered handlers all
+ * have to agree about.
  *
- * The names on the wire are written down twice - once in `src/team/protocol.ts` here and
- * once in `src/shared/types/team.ts` in Studio - because the two repositories release
- * separately and neither depends on the other. Two copies of anything drift, so the names
- * themselves live in `src/team/contract.json`, of which Studio holds a byte-identical
- * copy, and each side pins its own constants to it.
+ * The names on the wire live once, as ordinary constants in the canonical
+ * package `@narraleaf/team-protocol` under `protocol/`. `protocol/contract.json`
+ * is generated from that package rather than authored beside it, so the two
+ * cannot drift: the checks below pin the constants and the registered handlers
+ * to the generated file, and pin the generated file to the module it was written
+ * from, so that a change to the contract that forgot to regenerate the JSON is a
+ * failing test rather than a stale artifact.
  *
- * What that catches: a method renamed here without the file moving, a capability added to
- * the document and not to the list, an error code invented in one place.
- *
- * What it does not catch, and it is worth being plain about: the two JSON files are kept
- * identical by whoever edits them. A change made in one repository and not the other
- * passes both suites. What it buys is that the change is a diff on a file whose whole
- * purpose is to be compared, rather than a rename buried in a module.
+ * A client that ships separately - Studio today, and any other tomorrow -
+ * consumes this same package, so there is no second hand-kept copy for a rename
+ * to slip past.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -23,6 +22,7 @@ import { describe, expect, it } from "vitest";
 import {
   ANCHOR_FIELD_LIMIT,
   COMMENT_BODY_LIMIT,
+  CONTRACT,
   INSTANCE_FIELD_LIMIT,
   LIVE_PAYLOAD_LIMIT,
   OVERLAY_BODY_LIMIT,
@@ -50,16 +50,29 @@ interface Contract {
   methods: string[];
   topics: Record<string, string>;
   limits: Record<string, number>;
+  frames: { fromServer: string[]; fromClient: string[] };
 }
 
-const contract = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../src/team/contract.json", import.meta.url)), "utf-8"),
-) as Contract;
+const generated = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../protocol/contract.json", import.meta.url)), "utf-8"),
+) as Contract & { _generated: string };
+
+// Everything below reads the same set of fields the module carries, so the
+// header the generator writes is dropped before either is compared.
+const { _generated: _header, ...contract } = generated;
 
 describe("the protocol contract", () => {
   it("is the version this build speaks", () => {
     expect(TEAM_PROTOCOL_VERSION).toBe(contract.protocol);
     expect(TEAM_SOCKET_PATH).toBe(contract.socketPath);
+  });
+
+  it("has a JSON that is in step with the module it was generated from", () => {
+    // The module is the source and the JSON is the product. Compared through a
+    // round trip so that the tuples the module freezes read as the arrays the
+    // file holds; a mismatch is a contract.json that was not regenerated after
+    // the module changed.
+    expect(contract).toEqual(JSON.parse(JSON.stringify(CONTRACT)));
   });
 
   it("serves every method the contract names, and no others", () => {

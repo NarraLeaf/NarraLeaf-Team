@@ -1,0 +1,22 @@
+{
+  "name": "@narraleaf/team-protocol",
+  "version": "2.0.0",
+  "private": true,
+  "description": "The wire contract for the NarraLeaf Team protocol: frames, methods, capabilities, error codes, topics, limits, the protocol number, and the types over them.",
+  "license": "MIT",
+  "author": "NarraLeaf Project",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./contract.json": "./contract.json"
+  },
+  "files": [
+    "src",
+    "contract.json"
+  ],
+  "sideEffects": false
+}

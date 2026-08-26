@@ -9,6 +9,15 @@
     "moduleResolution": "NodeNext",
     "types": ["node"],
 
+    // The wire contract is its own package under protocol/. It is not installed
+    // into node_modules - it is consumed straight from source here and bundled
+    // in by esbuild - so the checker is pointed at it by hand. When it is
+    // published to a registry, this mapping gives way to an ordinary dependency.
+    "baseUrl": ".",
+    "paths": {
+      "@narraleaf/team-protocol": ["./protocol/src/index.ts"]
+    },
+
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -25,5 +34,5 @@
   // `scripts` holds one TypeScript file - the socket endpoint a real client is driven
   // at - and it is checked here rather than left out. The rest of that directory is
   // JavaScript, which this configuration does not look at either way.
-  "include": ["src", "tests", "scripts", "vitest.config.ts"]
+  "include": ["src", "tests", "scripts", "protocol/src", "vitest.config.ts"]
 }
