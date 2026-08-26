@@ -203,6 +203,15 @@ export interface StudioApiOptions {
    * somebody made, not about a row.
    */
   readonly announce?: (event: TeamProjectsEvent) => void;
+  /**
+   * Whether this build has somewhere for a live session to put a file down.
+   *
+   * A flag rather than the store itself, because nothing in this file serves
+   * those addresses - src/web/blobs.ts does, on its own arm of the router. What
+   * belongs here is the announcement, because this is where the discovery
+   * document's capabilities are worked out.
+   */
+  readonly blobs?: boolean;
 }
 
 /**
@@ -216,7 +225,9 @@ export type StudioCapability =
   | "project-detail"
   | "members"
   | "project-history"
-  | "password-sign-in";
+  | "password-sign-in"
+  /** Takes a file a live session is carrying, and hands it to whoever is short of it. */
+  | "blobs";
 
 /**
  * What every build of this file serves, whatever it was given.
@@ -246,6 +257,9 @@ export function studioCapabilities(options: StudioApiOptions): StudioCapability[
   const capabilities: StudioCapability[] = [...ALWAYS_SERVED];
   if (options.readings?.revisions !== undefined) {
     capabilities.push("project-history");
+  }
+  if (options.blobs === true) {
+    capabilities.push("blobs");
   }
   return capabilities;
 }

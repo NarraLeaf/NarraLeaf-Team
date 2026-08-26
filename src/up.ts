@@ -44,6 +44,7 @@ import { LORESERVER_VERSION, resolveArtifact } from "./loreserver/pin.js";
 import { Supervisor, describeExit } from "./loreserver/supervisor.js";
 import { ProjectReadings } from "./projects/refresh.js";
 import { startAuthorizationService } from "./projects/service.js";
+import { TeamBlobStore } from "./team/blobs.js";
 import { createTeamSocket, type TeamSocket } from "./team/endpoint.js";
 import { projectTopic, TOPIC_PROJECTS } from "./team/protocol.js";
 import { refuseUpgrade } from "./team/websocket.js";
@@ -177,6 +178,8 @@ export async function up(
    * three go through this and check.
    */
   let team: TeamSocket | undefined;
+  /** Where a live session's files wait for the machines that are short of them. */
+  let blobs: TeamBlobStore | undefined;
 
   try {
     const artifact = resolveArtifact();
@@ -284,11 +287,20 @@ export async function up(
     });
     readings = projects;
 
+    // Opened before the API options below, because whether there is one is part
+    // of what this server announces. Opening empties the directory: a file in it
+    // belongs to a live session, live sessions are held in memory, and this
+    // process starting means every one of them has ended.
+    const blobStore = await TeamBlobStore.open(options.root);
+    blobs = blobStore;
+    stdout(`live session files wait under ${identity.root}\n`);
+
     const studio: StudioApiOptions = {
       database,
       keys,
       config,
       dataPort: ports.dataPort,
+      blobs: true,
       // For the token the sign-in route hands out, which travels to a machine
       // that may not yet trust this server — the same claim `nlteam token mint`
       // writes, for the same reason.
@@ -312,11 +324,12 @@ export async function up(
     // Made here rather than beside the listener because it needs the service
     // above and the listener needs it: one object, handed to the thing that
     // starts sessions and to the things that publish into them.
-    team = createTeamSocket({
+    const socket = createTeamSocket({
       service: studio,
       version: VERSION,
       host: hostOf(config.authOrigin),
     });
+    team = socket;
 
     // The one address an author is given resolves to the listener below. It
     // answers before they have an account, which is the point: a server that
@@ -352,7 +365,10 @@ export async function up(
       anyInterface: true,
       portOption: "--auth-tls-port",
       tls: { cert: certificates.leafCertPem, key: certificates.leafKeyPem },
-      http1: webHandler(() => discoveryDocument(discovery), { studio }),
+      http1: webHandler(() => discoveryDocument(discovery), {
+        studio,
+        blobs: { store: blobStore, presence: socket.presence, service: studio },
+      }),
       upgrade: (request, socket, head) => {
         if (team?.handleUpgrade(request, socket, head) === true) {
           return;
@@ -544,6 +560,9 @@ export async function up(
     // stopped answering is one whose client reconnects into a machine that is
     // going down, and then does it again a second later.
     team?.hub.closeAll("this server is shutting down");
+    // It holds a sweep timer and parked readers, each of which is a response
+    // waiting for a byte that is not going to come now.
+    blobs?.close();
     readings?.stop();
     database?.close();
   }
