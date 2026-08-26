@@ -1,6 +1,6 @@
 {
   "_generated": "This file is generated from protocol/src/index.ts by scripts/gen-contract.mjs. Do not edit it by hand.",
-  "protocol": 1,
+  "protocol": 2,
   "socketPath": "/api/team/v1/socket",
   "capabilities": [
     "session",

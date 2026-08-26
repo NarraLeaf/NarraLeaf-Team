@@ -309,7 +309,7 @@ describe("opening a session", () => {
     await account(team.database, "ada");
     const client = await team.connect(team.tokenFor("ada"));
 
-    expect(client.hello?.protocol).toBe(1);
+    expect(client.hello?.protocol).toBe(2);
     expect(client.hello?.account.username).toBe("ada");
     expect(client.hello?.account.operator).toBe(false);
     expect(client.hello?.methods).toContain(TEAM_METHODS.projectsList);

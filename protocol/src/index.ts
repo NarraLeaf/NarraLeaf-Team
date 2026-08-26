@@ -50,7 +50,7 @@ export const TEAM_SOCKET_PATH = "/api/team/v1/socket";
  * meant. Adding a capability, a method, a topic, an event kind or an optional
  * field is additive and does not move it.
  */
-export const TEAM_PROTOCOL_VERSION = 1;
+export const TEAM_PROTOCOL_VERSION = 2;
 
 /**
  * How often each side expects to hear anything at all.

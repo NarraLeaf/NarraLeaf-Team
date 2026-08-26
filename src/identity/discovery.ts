@@ -21,6 +21,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
 
+import { TEAM_PROTOCOL_VERSION } from "@narraleaf/team-protocol";
+
 import { storedServerName } from "./settings.js";
 
 /** The path this document is served at, and the only path the HTTP/1.1 side answers. */
@@ -31,10 +33,12 @@ export const DISCOVERY_PATH = "/.well-known/nlteam";
  *
  * `protocol` is a number rather than a range so that a client can say "this server speaks
  * something I do not" in one comparison. It changes only when a field an older client
- * relies on stops meaning what it meant.
+ * relies on stops meaning what it meant, and it is the same number the opening `hello`
+ * frame carries - both are {@link TEAM_PROTOCOL_VERSION}, so a client cannot be told one
+ * thing here and another over the socket.
  */
 export interface DiscoveryDocument {
-  readonly protocol: 1;
+  readonly protocol: number;
   /**
    * What this deployment calls itself, for a list of servers a person reads.
    *
@@ -115,7 +119,7 @@ export interface DiscoverySource {
 /** The document as it stands now, name and all. */
 export function discoveryDocument(source: DiscoverySource): DiscoveryDocument {
   return {
-    protocol: 1,
+    protocol: TEAM_PROTOCOL_VERSION,
     name: storedServerName(source.database, source.host),
     auth: source.auth,
     data: source.data,

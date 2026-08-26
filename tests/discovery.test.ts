@@ -25,7 +25,7 @@ import { useTemporaryRoots } from "./temporary.js";
 const temporaryRoot = useTemporaryRoots("nlteam-discovery-");
 
 const DOCUMENT: DiscoveryDocument = {
-    protocol: 1,
+    protocol: 2,
     name: "team.example.lan",
     auth: { required: true, url: "https://team.example.lan:41402" },
     data: { url: "lore://team.example.lan:41337" },

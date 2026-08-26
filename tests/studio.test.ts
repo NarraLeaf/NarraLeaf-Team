@@ -74,7 +74,7 @@ const SIGN_IN = "/api/studio/v1/sign-in";
 const FINGERPRINT = "3D:38:9F:E6";
 
 const DISCOVERY: DiscoveryDocument = {
-  protocol: 1,
+  protocol: 2,
   name: "127.0.0.1",
   auth: { required: true, url: "https://127.0.0.1:41402" },
   data: { url: "lore://127.0.0.1:41337" },
@@ -438,9 +438,9 @@ describe("what a server says it serves", () => {
     const document = (await response.json()) as DiscoveryDocument;
 
     expect(response.status).toBe(200);
-    // Additive: an older client that has never heard of this reads the rest of
-    // the document exactly as it always did.
-    expect(document.protocol).toBe(1);
+    // The one number a client compares before anything else, and the same one
+    // the opening socket frame carries.
+    expect(document.protocol).toBe(2);
     expect(document.capabilities).toContain("project-detail");
     expect(document.capabilities).toContain("members");
     expect(document.capabilities).toContain("project-history");
