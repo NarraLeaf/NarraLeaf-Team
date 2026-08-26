@@ -257,12 +257,12 @@ commas, since a variable cannot be given more than once.
 says: the issuer and the audience it carries, the auth origin, its `env` and
 `idp` claims, and the four ports are all identity options, and every command that
 mints a token — `token mint` and `project create` among them — accepts the same
-set `up` does. This was once a trap. Minting with a different set from the one
-`up` was brought up with produced a token whose audience named an address nothing
-answered on, so it signed in and then failed every repository operation. It is
-not a trap now: `up` records the identity it was started with, and the mint
-commands read it, so a bare `nlteam token mint` names the audience the running
-server mints for, and a flag is only how you override that on purpose.
+set `up` does. You need not repeat them: `up` records the identity it was started
+with and the mint commands read it, so a bare `nlteam token mint` names the
+audience the running server mints for. A flag is only how you override that on
+purpose, and overriding it with a set that disagrees with the running server
+produces a token whose audience names an address nothing answers on — it signs
+in and then fails every repository operation — so pass one only when you mean to.
 
 Each of these settings has an environment variable of the same name as its flag —
 `NLTEAM_ISSUER`, `NLTEAM_AUDIENCE`, `NLTEAM_AUTH_ORIGIN`, `NLTEAM_ENV`,

@@ -108,9 +108,9 @@ every method decides from the token it was presented, not from where the
 connection came.
 
 Team identifies the caller by verifying the token against its own signing keys,
-and answers with the projects that caller has a grant on. A token that is
-expired, altered, from a disabled account, or issued before that account's
-access was revoked is refused, and a refusal reaches the person as "not found" —
+and answers with the projects of this server, since every account of it reaches
+every project. A token that is expired, altered, from a disabled account, or
+issued before that account's access was revoked is refused, and a refusal reaches the person as "not found" —
 `loreserver` tells a client nothing about why. Every decision is written to
 Team's log with the caller, the resource and the outcome, and kept in `team.db`
 where something other than the terminal `up` is running in can read it —

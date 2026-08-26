@@ -1,9 +1,9 @@
 /**
- * The projects Team knows about, and who may reach each of them.
+ * The projects Team knows about.
  *
  * A project is one loreserver repository. Team keeps the row that says who made
- * it and who it has been shared with; loreserver keeps the contents and asks
- * Team, on every access, whether the caller is one of those people.
+ * it; loreserver keeps the contents and asks Team, on every access, whether the
+ * caller is an account of this server, which every project of it answers yes to.
  *
  * The two systems agree on an identifier and nothing else. loreserver's
  * repository id is sixteen bytes; it appears in a permission question as a
@@ -23,14 +23,6 @@ import {
   type Row,
 } from "../identity/database.js";
 
-/**
- * What one person may do with one project.
- *
- * Three words, ordered: an owner may do what a writer may, and a writer may do
- * what a reader may. There is deliberately no table of verbs behind them —
- * loreserver 0.8.6 does not read the verbs it is sent, and a permission system
- * nobody consults is somewhere for a mistake to sit unnoticed.
- */
 /**
  * What every account may do with every project on this server.
  *
