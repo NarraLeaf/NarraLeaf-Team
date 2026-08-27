@@ -139,7 +139,8 @@ being the only way:
 
 ```sh
 printf '%s' 'the password' | nlteam login team.example.com:41402 ada
-nlteam project list --server team.example.com:41402
+nlteam user list --server team.example.com:41402
+nlteam settings set token.sign_in_lifetime_seconds 7d --server team.example.com:41402
 ```
 
 `login` exchanges a password for a token over TLS, pins the certificate
@@ -147,10 +148,11 @@ authority the server presented — printing its fingerprint to be compared again
 `nlteam trust` run on the server itself — and keeps both under this account's own
 configuration directory rather than under any storage root. `--fingerprint` names
 what to expect instead, for a deployment that must trust nothing it was not told
-to. `project list` takes `--server` today and the rest of the administrative
-commands will follow; each of them is a method the protocol already has, because
-a command line that grew a verb the protocol does not have would be one Studio's
-own management surface could never catch up with.
+to. Every command in the table then takes `--server` in place of `--root`, apart
+from the three below, and prints the same thing either way; each of them is a
+method the protocol already has, because a command line that grew a verb the
+protocol does not have would be one Studio's own management surface could never
+catch up with.
 
 `up`, `init` and `trust` take `--root` alone and always will. They are what a
 server is rescued with, and a rescue that worked only over the thing being
