@@ -572,7 +572,7 @@ describe("parseArgs, the project commands", () => {
   it("lists what the server holds, and takes no account to list it for", () => {
     expect(parseArgs(["project", "list", "--root", "/srv/team"])).toEqual({
       kind: "project-list",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
     });
     // There is no per-account listing, because there is no per-account access.
     expect(messageFor(["project", "list", "--root", "/srv/team", "--as", "ada"])).toContain("--as");
@@ -597,5 +597,119 @@ describe("parseArgs, the project commands", () => {
     expect(messageFor(["project", "create", "--root", "/srv/team"])).toContain("needs a name");
     expect(messageFor(["project", "invent"])).toBe("unknown project command: invent");
     expect(messageFor(["project"])).toContain("create or list");
+  });
+});
+
+describe("parseArgs, naming a server rather than a storage root", () => {
+  it("takes an address on the line, in the one spelling it is filed under", () => {
+    expect(parseArgs(["project", "list", "--server", "Team.Example.LAN"])).toEqual({
+      kind: "project-list",
+      target: { kind: "server", server: "team.example.lan:41402" },
+    });
+  });
+
+  it("lets NLTEAM_SERVER stand in for the flag, as every other variable does", () => {
+    expect(parseArgs(["project", "list"], { NLTEAM_SERVER: "team.example.lan:41402" })).toEqual({
+      kind: "project-list",
+      target: { kind: "server", server: "team.example.lan:41402" },
+    });
+  });
+
+  it("lets a flag beat a variable, either way round", () => {
+    // The rule the whole environment layer is written to, applied across the
+    // two halves rather than only within one of them: a flag is what somebody
+    // typed just now, and a variable is what a container was configured with.
+    expect(
+      parseArgs(["project", "list", "--root", "/srv/team"], {
+        NLTEAM_SERVER: "team.example.lan:41402",
+      }),
+    ).toEqual({ kind: "project-list", target: { kind: "root", root: "/srv/team" } });
+    expect(
+      parseArgs(["project", "list", "--server", "team.example.lan:41402"], {
+        NLTEAM_ROOT: "/srv/team",
+      }),
+    ).toEqual({
+      kind: "project-list",
+      target: { kind: "server", server: "team.example.lan:41402" },
+    });
+  });
+
+  it("refuses both, on the line and in the environment, rather than choosing", () => {
+    expect(
+      messageFor(["project", "list", "--root", "/srv/team", "--server", "team.example.lan"]),
+    ).toContain("not both");
+    expect(
+      messageFor2(
+        parseArgs(["project", "list"], {
+          NLTEAM_ROOT: "/srv/team",
+          NLTEAM_SERVER: "team.example.lan:41402",
+        }),
+      ),
+    ).toContain("both set");
+  });
+
+  it("names both when a command line named neither", () => {
+    const message = messageFor2(parseArgs(["project", "list"], {}));
+
+    expect(message).toContain("--root");
+    expect(message).toContain("--server");
+  });
+
+  it("still takes --root alone on the commands that rescue a server", () => {
+    // up, init and trust reach a storage root and nothing else. A rescue that
+    // could only be performed over the protocol would not be one.
+    expect(messageFor(["up", "--server", "team.example.lan"])).toBe(
+      "unknown argument: --server",
+    );
+    expect(messageFor(["init", "ada", "--server", "team.example.lan"])).toBe(
+      "unknown argument: --server",
+    );
+    expect(messageFor(["trust", "--server", "team.example.lan"])).toBe(
+      "unknown argument: --server",
+    );
+  });
+});
+
+describe("parseArgs, login and logout", () => {
+  it("takes an address and the account to sign in as", () => {
+    expect(parseArgs(["login", "team.example.lan:41402", "ada"])).toEqual({
+      kind: "login",
+      server: "team.example.lan:41402",
+      username: "ada",
+      fingerprint: undefined,
+    });
+    // The address a person is actually given, scheme and all.
+    expect(parseArgs(["login", "nlteam://team.example.lan:41402", "ada"])).toMatchObject({
+      server: "team.example.lan:41402",
+    });
+  });
+
+  it("takes the authority to expect, on the line or in the environment", () => {
+    expect(
+      parseArgs(["login", "team.example.lan:41402", "ada", "--fingerprint", "AB:CD"]),
+    ).toMatchObject({ fingerprint: "AB:CD" });
+    // The deployment that most needs to name a fingerprint is the one that
+    // composes no command line at all.
+    expect(
+      parseArgs(["login", "team.example.lan:41402", "ada"], { NLTEAM_FINGERPRINT: "AB:CD" }),
+    ).toMatchObject({ fingerprint: "AB:CD" });
+  });
+
+  it("says which half of the command line is missing", () => {
+    expect(messageFor(["login"])).toContain("address of a server");
+    expect(messageFor(["login", "team.example.lan:41402"])).toContain("username");
+    expect(messageFor(["logout"])).toContain("address of a server");
+  });
+
+  it("refuses an address that is not one, where the command line is read", () => {
+    expect(messageFor(["login", "https://team.example.lan", "ada"])).toContain("scheme");
+    expect(messageFor(["logout", "team.example.lan/projects"])).toContain("nothing after it");
+  });
+
+  it("forgets one server by address, in the same spelling login filed it under", () => {
+    expect(parseArgs(["logout", "TEAM.example.lan"])).toEqual({
+      kind: "logout",
+      server: "team.example.lan:41402",
+    });
   });
 });
