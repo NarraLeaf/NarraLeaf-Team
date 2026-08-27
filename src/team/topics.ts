@@ -8,11 +8,12 @@
  *   - **Is it a topic at all?** A name nobody publishes on is a subscription
  *     that would never fire, and a client holding one would wait forever for an
  *     event rather than being told it asked for something that does not exist.
- *   - **May this caller have it?** Today the answer is yes for every account of
- *     this server, because that is the whole of the authorization model: every
- *     account reaches every project - see src/projects/registry.ts. It is asked
- *     here anyway, in one function, so that the day it stops being one sentence
- *     there is one place for the sentence to grow.
+ *   - **May this caller have it?** For anything about a project the answer is
+ *     yes for every account of this server, because that is the whole of the
+ *     authorization model: every account reaches every project - see
+ *     src/projects/registry.ts. The `admin/*` topics are the exception, and the
+ *     reason this question is asked at all: they carry the accounts, the
+ *     settings and the keys, and they are an operator's business.
  *
  * A topic that names a project checks the project exists. Not for secrecy - the
  * list is the same list for everybody - but because a subscription to a project
@@ -22,9 +23,14 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { findProjectById } from "../projects/registry.js";
-import type { UserRecord } from "../identity/users.js";
+import { isOperator, type UserRecord } from "../identity/users.js";
 import type { TeamPresence } from "./presence.js";
-import { TOPIC_PROJECTS } from "./protocol.js";
+import {
+  TOPIC_ADMIN_KEYS,
+  TOPIC_ADMIN_SETTINGS,
+  TOPIC_ADMIN_USERS,
+  TOPIC_PROJECTS,
+} from "./protocol.js";
 
 /** What a topic turned out to be. */
 export type TopicVerdict =
@@ -46,20 +52,52 @@ const PROJECT_SUFFIXES: readonly string[] = ["", "/threads", "/overlay", "/clien
 /** The prefix a live session's own topic starts with. */
 const LIVE_PREFIX = "live:";
 
+/** The prefix every topic about this server itself starts with. */
+export const ADMIN_PREFIX = "admin/";
+
+/** Every topic under that prefix, which is the whole set an operator may hold. */
+const ADMIN_TOPICS: readonly string[] = [
+  TOPIC_ADMIN_USERS,
+  TOPIC_ADMIN_SETTINGS,
+  TOPIC_ADMIN_KEYS,
+];
+
+/** Whether `topic` is one of this server's own, whoever is asking for it. */
+export function isAdminTopic(topic: string): boolean {
+  return topic.startsWith(ADMIN_PREFIX);
+}
+
 /**
  * Whether this session may subscribe to `topic`.
  *
- * The caller is taken even though nothing is done with it today, because the
- * alternative is a signature change on the day somebody has to look at it, in a
- * function called from the one place a subscription is granted.
+ * The caller is read for the `admin/*` topics and for nothing else, which is
+ * the shape of the authorization model rather than an accident of what has been
+ * written so far.
  */
 export function judgeTopic(
   database: DatabaseSync,
-  _user: UserRecord,
+  user: UserRecord,
   topic: string,
   presence?: TeamPresence,
 ): TopicVerdict {
   if (topic === TOPIC_PROJECTS) {
+    return { kind: "allowed" };
+  }
+
+  if (isAdminTopic(topic)) {
+    // Existence before permission, deliberately in that order. A name under
+    // this prefix that nothing publishes on is a mistake in a client whoever
+    // holds the socket, and saying "you may not" to somebody asking for a topic
+    // that does not exist would send them looking for a role rather than for
+    // their typo. There is nothing secret here that the capability list does
+    // not already say: it announces to every session that this server can be
+    // administered, and refuses everybody who is not an operator.
+    if (!ADMIN_TOPICS.includes(topic)) {
+      return { kind: "unknown", detail: `${topic} is not something this server publishes` };
+    }
+    if (!isOperator(user.groups)) {
+      return { kind: "refused", detail: "what this server is doing is for its operators" };
+    }
     return { kind: "allowed" };
   }
 

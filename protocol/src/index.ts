@@ -110,7 +110,7 @@ export const TEAM_CAPABILITIES = [
   "overlay",
   /**
    * This server's own state - its accounts, settings, keys, decisions and
-   * health - may be read over the socket, by an operator.
+   * health - may be read and changed over the socket, by an operator.
    *
    * Announced to everybody, refused to all but operators. It is what this build
    * can do; whether the account on the other end may do it is
@@ -339,6 +339,23 @@ export function projectLiveTopic(projectId: string): string {
 export function liveTopic(sessionId: string): string {
   return `live:${sessionId}`;
 }
+
+/**
+ * The three topics a management surface listens on.
+ *
+ * **Every one of them is refused to anybody who is not an operator**, which no
+ * other topic on this server is: the rest are about projects, and every account
+ * reaches every project. See the note on `admin/*` in src/team/topics.ts.
+ */
+
+/** An account was made, disabled, enabled, given or denied administration, or had its tokens refused. */
+export const TOPIC_ADMIN_USERS = "admin/users";
+
+/** A setting of this server changed. */
+export const TOPIC_ADMIN_SETTINGS = "admin/settings";
+
+/** This server rotated its signing keys. */
+export const TOPIC_ADMIN_KEYS = "admin/keys";
 
 /* ----------------------------------------------------------------- anchors */
 
@@ -911,6 +928,67 @@ export interface TeamAdminReach {
   readonly loopback: ReadonlyArray<{ readonly port: number; readonly what: string }>;
 }
 
+/**
+ * A sign-in token minted for somebody else, and the one answer on this wire
+ * that carries a credential.
+ *
+ * It is what a person is handed so that they can sign in for the first time,
+ * minted by an operator who does not know their password and does not need to:
+ * whoever can disable the account can hardly be stopped from issuing it a
+ * token.
+ *
+ * **The token is shown once and kept nowhere.** Not in this server's log, not
+ * in its database, not in the note it keeps of the write. A person who lost it
+ * is minted another.
+ */
+export interface TeamAdminMintedToken {
+  /** The account it is for, by name. */
+  readonly username: string;
+  /** When it expires, in milliseconds since the epoch, as every other time here is. */
+  readonly expiresAt: number;
+  /**
+   * The token itself — **absent on a repeat**.
+   *
+   * A client id makes a mint safe to send twice, and what "safe" means here is
+   * that the second one mints nothing: a token nobody received is a live
+   * credential nobody can account for. So a repeat is answered with the account
+   * and the expiry of the mint that did happen, and with no token, because this
+   * server did not keep the one it made. A caller that lost the answer mints
+   * again under a new client id.
+   */
+  readonly token?: string;
+}
+
+/**
+ * What happened on the `admin/users` topic.
+ *
+ * Every one of these carries the whole account rather than its name, so that a
+ * panel updates the row it is already holding instead of re-reading a page to
+ * find out what changed — which is the same bargain every write in this family
+ * strikes by answering with the record rather than with an acknowledgement.
+ */
+export type TeamAdminUsersEvent =
+  | { readonly kind: "user-created"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-disabled"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-enabled"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-granted-admin"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-revoked-admin"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-tokens-revoked"; readonly user: TeamAdminUser };
+
+/** What happened on the `admin/settings` topic. */
+export type TeamAdminSettingsEvent =
+  | { readonly kind: "setting-changed"; readonly setting: TeamAdminSetting };
+
+/**
+ * What happened on the `admin/keys` topic.
+ *
+ * The whole list rather than the key that was made: a rotation changes which
+ * key signs, so the row for the key before it changes too, and sending one row
+ * would leave a panel holding a list with two keys claiming to sign.
+ */
+export type TeamAdminKeysEvent =
+  | { readonly kind: "keys-rotated"; readonly keys: readonly TeamAdminKey[] };
+
 /* -------------------------------------------------------- method names */
 
 /**
@@ -973,10 +1051,28 @@ export const TEAM_METHODS = {
   overlayDrop: "overlay.drop",
   /** A page of this server's accounts, newest first. */
   adminUsersList: "admin.users.list",
+  /** Make an account, and answer with it. */
+  adminUsersCreate: "admin.users.create",
+  /** Stop an account being issued anything, and refuse what it already holds. */
+  adminUsersDisable: "admin.users.disable",
+  /** Let a disabled account sign in again. */
+  adminUsersEnable: "admin.users.enable",
+  /** Let an account administer this server. */
+  adminUsersGrantAdmin: "admin.users.grantAdmin",
+  /** Stop an account administering this server. Never the last one. */
+  adminUsersRevokeAdmin: "admin.users.revokeAdmin",
+  /** Refuse every token an account already holds, without disabling it. */
+  adminUsersRevokeTokens: "admin.users.revokeTokens",
+  /** Mint a sign-in token for an account, without knowing its password. */
+  adminTokensMint: "admin.tokens.mint",
   /** Everything this server keeps in its settings, and which of it may be changed. */
   adminSettingsList: "admin.settings.list",
+  /** Change one setting, found by the label the settings list gives it. */
+  adminSettingsSet: "admin.settings.set",
   /** Every signing key this server holds, published and retired. */
   adminKeysList: "admin.keys.list",
+  /** Generate a signing key and sign with it from now on. */
+  adminKeysRotate: "admin.keys.rotate",
   /** A page of the decisions this server has been asked to make, newest first. */
   adminAuditList: "admin.audit.list",
   /** What this server is and what it can reach, as of the moment it was gathered. */
@@ -1010,6 +1106,9 @@ export const CONTRACT = {
     projectClients: "project:{project}/clients",
     projectLive: "project:{project}/live",
     live: "live:{session}",
+    adminUsers: TOPIC_ADMIN_USERS,
+    adminSettings: TOPIC_ADMIN_SETTINGS,
+    adminKeys: TOPIC_ADMIN_KEYS,
   },
   frames: {
     fromServer: TEAM_SERVER_FRAME_KINDS,

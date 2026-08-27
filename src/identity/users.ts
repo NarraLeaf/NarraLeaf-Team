@@ -508,6 +508,29 @@ export function countAdmins(database: DatabaseSync): number {
   return row === undefined ? 0 : integerColumn(row, "count");
 }
 
+/**
+ * How many accounts are in the admin group and can still sign in.
+ *
+ * Beside {@link countAdmins} rather than instead of it, because the two answer
+ * different questions and both are asked. The command line asks whether
+ * anybody is in the group at all: it runs on the machine that holds the storage
+ * root, so an operator whose account is disabled is one `nlteam user enable`
+ * away from being useful again, and refusing on their account would be refusing
+ * over nothing. Anything reached over the network asks whether anybody in the
+ * group could still reach it, and a disabled account cannot — it is refused a
+ * sign-in and every token it holds is refused too, so counting it would let the
+ * last usable operator be taken away by a check that said one was left.
+ */
+export function countEnabledAdmins(database: DatabaseSync): number {
+  const row = database
+    .prepare(
+      "SELECT COUNT(*) AS count FROM user_groups JOIN users ON users.id = user_groups.user_id " +
+        "WHERE user_groups.group_name = ? AND users.disabled_at IS NULL",
+    )
+    .get(ADMIN_ROLE);
+  return row === undefined ? 0 : integerColumn(row, "count");
+}
+
 /** Read the stored password hash of one account. */
 function passwordHashOf(database: DatabaseSync, id: string): string | undefined {
   const row = database.prepare("SELECT password_hash FROM users WHERE id = ?").get(id);

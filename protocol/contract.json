@@ -49,8 +49,17 @@
     "overlay.put",
     "overlay.drop",
     "admin.users.list",
+    "admin.users.create",
+    "admin.users.disable",
+    "admin.users.enable",
+    "admin.users.grantAdmin",
+    "admin.users.revokeAdmin",
+    "admin.users.revokeTokens",
+    "admin.tokens.mint",
     "admin.settings.list",
+    "admin.settings.set",
     "admin.keys.list",
+    "admin.keys.rotate",
     "admin.audit.list",
     "admin.server.status"
   ],
@@ -61,7 +70,10 @@
     "projectOverlay": "project:{project}/overlay",
     "projectClients": "project:{project}/clients",
     "projectLive": "project:{project}/live",
-    "live": "live:{session}"
+    "live": "live:{session}",
+    "adminUsers": "admin/users",
+    "adminSettings": "admin/settings",
+    "adminKeys": "admin/keys"
   },
   "frames": {
     "fromServer": [

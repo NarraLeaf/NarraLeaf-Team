@@ -31,6 +31,8 @@ import {
   ADMIN_ROLE,
   createUser,
   disableUser,
+  findUser,
+  listUsers,
   requireUser,
   revokeUserTokens,
   setAdmin,
@@ -51,6 +53,9 @@ import {
   projectLiveTopic,
   projectOverlayTopic,
   projectThreadsTopic,
+  TOPIC_ADMIN_KEYS,
+  TOPIC_ADMIN_SETTINGS,
+  TOPIC_ADMIN_USERS,
   TOPIC_PROJECTS,
   type TeamHelloFrame,
 } from "../src/team/protocol.js";
@@ -2129,8 +2134,8 @@ async function administered(extra: Partial<TeamService> = {}): Promise<{
   };
 }
 
-/** Every method of the family, named once so that no test of the gate can miss one. */
-const ADMIN_METHODS = [
+/** Every method of the family that only reads, named once. */
+const ADMIN_READS = [
   TEAM_METHODS.adminUsersList,
   TEAM_METHODS.adminSettingsList,
   TEAM_METHODS.adminKeysList,
@@ -2138,19 +2143,49 @@ const ADMIN_METHODS = [
   TEAM_METHODS.adminServerStatus,
 ];
 
+/** Every method of the family that changes something. */
+const ADMIN_WRITES = [
+  TEAM_METHODS.adminUsersCreate,
+  TEAM_METHODS.adminUsersDisable,
+  TEAM_METHODS.adminUsersEnable,
+  TEAM_METHODS.adminUsersGrantAdmin,
+  TEAM_METHODS.adminUsersRevokeAdmin,
+  TEAM_METHODS.adminUsersRevokeTokens,
+  TEAM_METHODS.adminTokensMint,
+  TEAM_METHODS.adminSettingsSet,
+  TEAM_METHODS.adminKeysRotate,
+];
+
+/** Both halves, which is what the gate has to cover. */
+const ADMIN_METHODS = [...ADMIN_READS, ...ADMIN_WRITES];
+
 describe("who may administer a server", () => {
+  it("names every method of the family in the lists the gate is tested against", () => {
+    // The lists above are written by hand, and a method added to the family and
+    // not to them would be a method nothing here proves is gated at all. This is
+    // what makes forgetting one a failing test rather than an open door.
+    const family = Object.values(TEAM_METHODS).filter((name) => name.startsWith("admin."));
+
+    expect([...ADMIN_METHODS].sort()).toEqual([...family].sort());
+  });
+
   it("refuses every one of these methods to somebody who is not an operator", async () => {
     const { bob } = await administered();
 
     for (const method of ADMIN_METHODS) {
+      // No parameters, on the writes as well: the gate is in front of the
+      // handler, so a caller who may not do this is refused before anything it
+      // sent is read. A `bad-params` here would mean the order was the other way
+      // round, and a client would be learning what a method takes by being told
+      // off for getting it wrong.
       expect((await bob.call(method)).code, method).toBe("refused");
     }
   });
 
-  it("answers every one of them to an operator", async () => {
+  it("answers every read to an operator", async () => {
     const { ada } = await administered();
 
-    for (const method of ADMIN_METHODS) {
+    for (const method of ADMIN_READS) {
       expect((await ada.call(method)).code, method).toBeUndefined();
     }
   });
@@ -2577,5 +2612,584 @@ describe("what this server is", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(health.asked()).toBe(0);
+  });
+});
+
+/**
+ * A server with an operator, somebody who is not one, and a third session of
+ * the operator's watching the accounts.
+ *
+ * A watcher of its own rather than subscribing the session that does the work,
+ * because what is being asserted is that everybody holding the topic is told —
+ * a client hearing its own write back is the easy half.
+ */
+async function watchingAccounts(): Promise<{
+  team: Harness;
+  ada: Client;
+  bob: Client;
+  watcher: Client;
+}> {
+  const made = await administered();
+  const watcher = await made.team.connect(made.team.tokenFor("ada"));
+  await watcher.send("subscribe", { topic: TOPIC_ADMIN_USERS });
+  return { ...made, watcher };
+}
+
+/** How long a test that hashes a real password is given. */
+const HASHING = 20_000;
+
+/** The account inside an answer that carries one. */
+function answered(value: Record<string, unknown>): Record<string, unknown> {
+  return value["user"] as Record<string, unknown>;
+}
+
+describe("making an account over the session", () => {
+  it(
+    "answers with the account it made, and says so on the accounts topic",
+    async () => {
+      const { ada, watcher, team } = await watchingAccounts();
+
+      const made = answered(
+        await ada.value(TEAM_METHODS.adminUsersCreate, {
+          username: "cleo",
+          password: "a password nobody guesses",
+          displayName: "Cleo",
+          email: "cleo@example.test",
+        }),
+      );
+
+      // The record, not an acknowledgement: a panel updates the row it is
+      // holding from this rather than re-reading the page to find out what it
+      // just did.
+      expect(made).toMatchObject({
+        username: "cleo",
+        displayName: "Cleo",
+        email: "cleo@example.test",
+        groups: ["member"],
+        operator: false,
+        disabled: false,
+      });
+      expect(findUser(team.database, "cleo")).toBeDefined();
+
+      await watcher.until(() => watcher.events.length > 0);
+      expect(watcher.events).toHaveLength(1);
+      expect(watcher.events[0]?.topic).toBe(TOPIC_ADMIN_USERS);
+      const event = watcher.events[0]?.payload as { kind: string; user: { username: string } };
+      expect(event.kind).toBe("user-created");
+      expect(event.user.username).toBe("cleo");
+    },
+    HASHING,
+  );
+
+  it(
+    "puts one in the admin group when it is asked to",
+    async () => {
+      const { ada } = await administered();
+
+      const made = answered(
+        await ada.value(TEAM_METHODS.adminUsersCreate, {
+          username: "cleo",
+          password: "a password nobody guesses",
+          operator: true,
+        }),
+      );
+
+      expect(made["groups"]).toEqual([ADMIN_ROLE]);
+      expect(made["operator"]).toBe(true);
+    },
+    HASHING,
+  );
+
+  it("refuses a name somebody on this server already has", async () => {
+    const { ada } = await administered();
+
+    const answer = await ada.call(TEAM_METHODS.adminUsersCreate, {
+      username: "bob",
+      password: "a password nobody guesses",
+    });
+
+    expect(answer.code).toBe("conflict");
+  });
+
+  it("refuses a name that could not be a username, and a password too short to store", async () => {
+    const { ada } = await administered();
+
+    // The sentences come from the one place that decides what a name and a
+    // password may be, so a person retyping either is reading the same rule the
+    // command line prints.
+    const named = await ada.call(TEAM_METHODS.adminUsersCreate, {
+      username: "not a username",
+      password: "a password nobody guesses",
+    });
+    const weak = await ada.call(TEAM_METHODS.adminUsersCreate, {
+      username: "cleo",
+      password: "short",
+    });
+
+    expect(named.code).toBe("bad-params");
+    expect(weak.code).toBe("bad-params");
+  });
+
+  it("refuses a call that named no password at all", async () => {
+    const { ada } = await administered();
+
+    expect((await ada.call(TEAM_METHODS.adminUsersCreate, { username: "cleo" })).code).toBe(
+      "bad-params",
+    );
+  });
+
+  it(
+    "hands a repeated create back the account it made, and announces nothing again",
+    async () => {
+      const { ada, watcher, team } = await watchingAccounts();
+      const first = answered(
+        await ada.value(TEAM_METHODS.adminUsersCreate, {
+          username: "cleo",
+          password: "a password nobody guesses",
+          clientId: "make-cleo",
+        }),
+      );
+      await watcher.until(() => watcher.events.length > 0);
+
+      // The same client id, replayed as after a socket that dropped between the
+      // call and its answer: the account it already made, not a name-taken
+      // refusal, which is what a plain retry would have been told.
+      const second = answered(
+        await ada.value(TEAM_METHODS.adminUsersCreate, {
+          username: "cleo",
+          password: "a password nobody guesses",
+          clientId: "make-cleo",
+        }),
+      );
+
+      expect(second["id"]).toBe(first["id"]);
+      expect(listUsers(team.database).map((user) => user.username)).toEqual(["ada", "bob", "cleo"]);
+      expect(watcher.events).toHaveLength(1);
+    },
+    HASHING,
+  );
+});
+
+describe("changing an account over the session", () => {
+  it("disables one, answers with it, and says so", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+
+    const changed = answered(await ada.value(TEAM_METHODS.adminUsersDisable, { username: "bob" }));
+
+    expect(changed["disabled"]).toBe(true);
+    expect(requireUser(team.database, "bob").disabledAt).toBeTypeOf("number");
+    await watcher.until(() => watcher.events.length > 0);
+    const event = watcher.events[0]?.payload as { kind: string; user: { disabled: boolean } };
+    expect(event.kind).toBe("user-disabled");
+    expect(event.user.disabled).toBe(true);
+  });
+
+  it("says nothing when the account is already disabled, and does not move the epoch", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+    await ada.value(TEAM_METHODS.adminUsersDisable, { username: "bob" });
+    await watcher.until(() => watcher.events.length > 0);
+    const epoch = requireUser(team.database, "bob").tokenEpoch;
+
+    const again = answered(await ada.value(TEAM_METHODS.adminUsersDisable, { username: "bob" }));
+
+    // Already disabled is the state that was asked for. Doing it again would not
+    // be free — disabling bumps the epoch — and announcing it would make every
+    // panel redraw a row that did not move.
+    expect(again["disabled"]).toBe(true);
+    expect(requireUser(team.database, "bob").tokenEpoch).toBe(epoch);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(watcher.events).toHaveLength(1);
+  });
+
+  it("enables one again, and says nothing about an account that was never disabled", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+    disableUser(team.database, "bob");
+
+    const enabled = answered(await ada.value(TEAM_METHODS.adminUsersEnable, { username: "bob" }));
+    await watcher.until(() => watcher.events.length > 0);
+    await ada.value(TEAM_METHODS.adminUsersEnable, { username: "bob" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(enabled["disabled"]).toBe(false);
+    expect(watcher.events).toHaveLength(1);
+    expect((watcher.events[0]?.payload as { kind: string }).kind).toBe("user-enabled");
+  });
+
+  it("grants administration, and says nothing granting it to an operator", async () => {
+    const { ada, watcher } = await watchingAccounts();
+
+    const granted = answered(
+      await ada.value(TEAM_METHODS.adminUsersGrantAdmin, { username: "bob" }),
+    );
+    await watcher.until(() => watcher.events.length > 0);
+    await ada.value(TEAM_METHODS.adminUsersGrantAdmin, { username: "bob" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(granted["operator"]).toBe(true);
+    expect(granted["groups"]).toContain(ADMIN_ROLE);
+    expect(watcher.events).toHaveLength(1);
+    expect((watcher.events[0]?.payload as { kind: string }).kind).toBe("user-granted-admin");
+  });
+
+  it("revokes it again", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+    setAdmin(team.database, "bob", true);
+
+    const revoked = answered(
+      await ada.value(TEAM_METHODS.adminUsersRevokeAdmin, { username: "bob" }),
+    );
+
+    expect(revoked["operator"]).toBe(false);
+    await watcher.until(() => watcher.events.length > 0);
+    expect((watcher.events[0]?.payload as { kind: string }).kind).toBe("user-revoked-admin");
+  });
+
+  it("refuses every token an account holds, and answers with when that was", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+    const before = requireUser(team.database, "bob").tokenEpoch;
+
+    const revoked = answered(
+      await ada.value(TEAM_METHODS.adminUsersRevokeTokens, { username: "bob" }),
+    );
+
+    expect(revoked["tokensInvalidatedAt"]).toBeTypeOf("number");
+    expect(requireUser(team.database, "bob").tokenEpoch).toBe(before + 1);
+    await watcher.until(() => watcher.events.length > 0);
+    expect((watcher.events[0]?.payload as { kind: string }).kind).toBe("user-tokens-revoked");
+  });
+
+  it("does not refuse them a second time for one client id", async () => {
+    // The sharpest of the repeats, because this write is the one that is never a
+    // no-op on its own: the epoch moves every time it is called, and a second
+    // one would refuse whatever had been minted in between.
+    const { ada, watcher, team } = await watchingAccounts();
+    await ada.value(TEAM_METHODS.adminUsersRevokeTokens, { username: "bob", clientId: "once" });
+    await watcher.until(() => watcher.events.length > 0);
+    const epoch = requireUser(team.database, "bob").tokenEpoch;
+
+    await ada.value(TEAM_METHODS.adminUsersRevokeTokens, { username: "bob", clientId: "once" });
+
+    expect(requireUser(team.database, "bob").tokenEpoch).toBe(epoch);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(watcher.events).toHaveLength(1);
+  });
+
+  it("keeps one client id apart from another, and from the same id on another method", async () => {
+    const { ada, team } = await administered();
+    await ada.value(TEAM_METHODS.adminUsersRevokeTokens, { username: "bob", clientId: "one" });
+    const after = requireUser(team.database, "bob").tokenEpoch;
+
+    // A different id is a different write and really happens.
+    await ada.value(TEAM_METHODS.adminUsersRevokeTokens, { username: "bob", clientId: "two" });
+    expect(requireUser(team.database, "bob").tokenEpoch).toBe(after + 1);
+
+    // The same id on a different method is also a different write. A key that
+    // left the method out would answer this one about the revoke.
+    const disabled = answered(
+      await ada.value(TEAM_METHODS.adminUsersDisable, { username: "bob", clientId: "one" }),
+    );
+    expect(disabled["disabled"]).toBe(true);
+  });
+
+  it("says there is no such account rather than inventing one", async () => {
+    const { ada } = await administered();
+
+    expect((await ada.call(TEAM_METHODS.adminUsersDisable, { username: "nobody" })).code).toBe(
+      "not-found",
+    );
+  });
+});
+
+describe("the last operator of a server", () => {
+  it("cannot be demoted over the protocol, and the refusal names the way back", async () => {
+    // A management surface that lets a person lock themselves out with one click
+    // is a trap. The way back is on the machine that holds the storage root, so
+    // the refusal says which command it is.
+    const { ada } = await administered();
+
+    const answer = await ada.call(TEAM_METHODS.adminUsersRevokeAdmin, { username: "ada" });
+
+    expect(answer.code).toBe("refused");
+    expect((answer as { message: string }).message).toContain("nlteam user grant-admin ada");
+  });
+
+  it("cannot be disabled over the protocol either", async () => {
+    // Disabling the only operator's account leaves exactly the same server:
+    // one nobody can administer over this protocol. The rescue is a different
+    // command, so that is the one named.
+    const { ada } = await administered();
+
+    const answer = await ada.call(TEAM_METHODS.adminUsersDisable, { username: "ada" });
+
+    expect(answer.code).toBe("refused");
+    expect((answer as { message: string }).message).toContain("nlteam user enable ada");
+  });
+
+  it("may be demoted once there is another who can sign in", async () => {
+    const { ada, team } = await administered();
+    setAdmin(team.database, "bob", true);
+
+    expect((await ada.call(TEAM_METHODS.adminUsersRevokeAdmin, { username: "ada" })).code)
+      .toBeUndefined();
+  });
+
+  it("is not made up of operators who cannot sign in", async () => {
+    // Two accounts in the group and one of them disabled is one operator, not
+    // two: a disabled account is refused a sign-in and every token it holds.
+    const { ada, team } = await administered();
+    setAdmin(team.database, "bob", true);
+    disableUser(team.database, "bob");
+
+    expect((await ada.call(TEAM_METHODS.adminUsersRevokeAdmin, { username: "ada" })).code).toBe(
+      "refused",
+    );
+  });
+});
+
+describe("minting a token for somebody", () => {
+  it("answers a token that account can open a session with", async () => {
+    const { ada, team } = await administered();
+
+    const minted = (await ada.value(TEAM_METHODS.adminTokensMint, { username: "bob" }))[
+      "minted"
+    ] as { username: string; expiresAt: number; token: string };
+
+    expect(minted.username).toBe("bob");
+    expect(minted.expiresAt).toBeGreaterThan(Date.now());
+    // The whole point of the method: somebody who never told this server their
+    // password is now signed in as themselves.
+    const opened = await team.connect(minted.token);
+    expect(opened.hello?.account.username).toBe("bob");
+  });
+
+  it("keeps nothing anywhere that would let the token be read a second time", async () => {
+    const { ada, team } = await administered();
+
+    const minted = (await ada.value(TEAM_METHODS.adminTokensMint, {
+      username: "bob",
+      clientId: "for-bob",
+    }))["minted"] as { token: string };
+
+    // The note of the write is the only record a mint leaves, and what it holds
+    // is which account and until when. A token written down is a credential
+    // sitting in a file that is worth stealing.
+    const notes = team.database.prepare("SELECT account, method, answer FROM client_writes").all();
+    expect(notes).toHaveLength(1);
+    expect(JSON.stringify(notes)).not.toContain(minted.token);
+  });
+
+  it("answers a repeat with the mint that happened, and no token", async () => {
+    const { ada } = await administered();
+    const first = (await ada.value(TEAM_METHODS.adminTokensMint, {
+      username: "bob",
+      clientId: "for-bob",
+    }))["minted"] as { expiresAt: number; token: string };
+
+    const second = (await ada.value(TEAM_METHODS.adminTokensMint, {
+      username: "bob",
+      clientId: "for-bob",
+    }))["minted"] as Record<string, unknown>;
+
+    // Nothing was minted the second time, which is the point: a token nobody
+    // received is a live credential nobody can account for. What comes back is
+    // the mint that did happen, and no token, because this server kept none.
+    expect(second["expiresAt"]).toBe(first.expiresAt);
+    expect(second).not.toHaveProperty("token");
+  });
+
+  it("refuses to mint for an account that has been disabled", async () => {
+    const { ada, team } = await administered();
+    disableUser(team.database, "bob");
+
+    expect((await ada.call(TEAM_METHODS.adminTokensMint, { username: "bob" })).code).toBe(
+      "refused",
+    );
+  });
+
+  it("says nothing on any topic: a mint changes no record anybody is watching", async () => {
+    const { ada, watcher } = await watchingAccounts();
+
+    await ada.value(TEAM_METHODS.adminTokensMint, { username: "bob" });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(watcher.events).toHaveLength(0);
+  });
+});
+
+describe("changing a setting over the session", () => {
+  /** An operator and a session of theirs watching the settings. */
+  async function watchingSettings(): Promise<{ team: Harness; ada: Client; watcher: Client }> {
+    const { team, ada } = await administered();
+    const watcher = await team.connect(team.tokenFor("ada"));
+    await watcher.send("subscribe", { topic: TOPIC_ADMIN_SETTINGS });
+    return { team, ada, watcher };
+  }
+
+  it("answers with the row it changed, in the shape the list carries", async () => {
+    const { ada, watcher } = await watchingSettings();
+
+    const changed = (await ada.value(TEAM_METHODS.adminSettingsSet, {
+      label: "sign-in token",
+      value: "7 days",
+    }))["setting"] as Record<string, unknown>;
+
+    expect(changed).toMatchObject({
+      group: "tokens",
+      label: "sign-in token",
+      value: "7 days",
+      seconds: 7 * 24 * 60 * 60,
+      editable: true,
+    });
+    await watcher.until(() => watcher.events.length > 0);
+    const event = watcher.events[0]?.payload as { kind: string; setting: { value: string } };
+    expect(event.kind).toBe("setting-changed");
+    expect(event.setting.value).toBe("7 days");
+  });
+
+  it("takes the seconds a row carries as readily as the words it shows", async () => {
+    // A row carries both, so that nobody has to take a duration apart in
+    // whatever language it was written in. Either one is what somebody meant.
+    const { ada } = await administered();
+
+    const changed = (await ada.value(TEAM_METHODS.adminSettingsSet, {
+      label: "repository token",
+      value: "900",
+    }))["setting"] as Record<string, unknown>;
+
+    expect(changed["seconds"]).toBe(900);
+  });
+
+  it("says nothing when the value is the one that was already there", async () => {
+    const { ada, watcher } = await watchingSettings();
+    await ada.value(TEAM_METHODS.adminSettingsSet, { label: "name", value: "moonlit" });
+    await watcher.until(() => watcher.events.length > 0);
+
+    await ada.value(TEAM_METHODS.adminSettingsSet, { label: "name", value: "moonlit" });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(watcher.events).toHaveLength(1);
+  });
+
+  it("refuses a row this server has nowhere to write", async () => {
+    // Shown and read-only: the identity settings are named on the command line
+    // that started the server, so a value written here would be thrown away, and
+    // something that looks like it worked is worse than something that refuses.
+    const { ada } = await administered();
+
+    const answer = await ada.call(TEAM_METHODS.adminSettingsSet, {
+      label: "issuer",
+      value: "somebody else",
+    });
+
+    expect(answer.code).toBe("refused");
+  });
+
+  it("says there is no such setting rather than making one", async () => {
+    const { ada } = await administered();
+
+    expect(
+      (await ada.call(TEAM_METHODS.adminSettingsSet, { label: "colour", value: "blue" })).code,
+    ).toBe("not-found");
+  });
+
+  it("refuses a value that is not a duration, and one outside what may be stored", async () => {
+    const { ada } = await administered();
+
+    expect(
+      (await ada.call(TEAM_METHODS.adminSettingsSet, { label: "sign-in token", value: "whenever" }))
+        .code,
+    ).toBe("bad-params");
+    expect(
+      (await ada.call(TEAM_METHODS.adminSettingsSet, { label: "sign-in token", value: "1s" })).code,
+    ).toBe("bad-params");
+  });
+
+  it("does not change it twice for one client id", async () => {
+    const { ada } = await administered();
+    await ada.value(TEAM_METHODS.adminSettingsSet, {
+      label: "name",
+      value: "moonlit",
+      clientId: "name-it",
+    });
+
+    // The same id carrying a different value is still the same write. What comes
+    // back is the row as it stands, which is what the write that happened left.
+    const second = (await ada.value(TEAM_METHODS.adminSettingsSet, {
+      label: "name",
+      value: "something else",
+      clientId: "name-it",
+    }))["setting"] as Record<string, unknown>;
+
+    expect(second["value"]).toBe("moonlit");
+  });
+});
+
+describe("rotating the signing keys over the session", () => {
+  it("makes a key, signs with it, and answers with the whole list", async () => {
+    const { team, ada } = await administered();
+    const watcher = await team.connect(team.tokenFor("ada"));
+    await watcher.send("subscribe", { topic: TOPIC_ADMIN_KEYS });
+    const before = (await ada.value(TEAM_METHODS.adminKeysList))["keys"] as { kid: string }[];
+
+    const after = (await ada.value(TEAM_METHODS.adminKeysRotate))["keys"] as {
+      kid: string;
+      serial: number;
+      signing: boolean;
+    }[];
+
+    expect(after).toHaveLength(before.length + 1);
+    // The whole list rather than the key that was made: the row for the key that
+    // used to sign changed too, and a panel sent one row would be holding two
+    // keys that both claim to.
+    const signing = after.filter((key) => key.signing);
+    expect(signing).toHaveLength(1);
+    expect(signing[0]?.serial).toBe(Math.max(...after.map((key) => key.serial)));
+    await watcher.until(() => watcher.events.length > 0);
+    const event = watcher.events[0]?.payload as { kind: string; keys: unknown[] };
+    expect(event.kind).toBe("keys-rotated");
+    expect(event.keys).toHaveLength(after.length);
+  });
+
+  it("does not rotate twice for one client id", async () => {
+    const { ada } = await administered();
+    const first = (await ada.value(TEAM_METHODS.adminKeysRotate, { clientId: "once" }))["keys"] as
+      unknown[];
+
+    const second = (await ada.value(TEAM_METHODS.adminKeysRotate, { clientId: "once" }))["keys"] as
+      unknown[];
+
+    // A key file is written per rotation and never removed, so a repeat that
+    // acted would leave this server holding one more key than anybody asked for.
+    expect(second).toHaveLength(first.length);
+  });
+});
+
+describe("who may be told what this server is doing", () => {
+  it("refuses a management topic to somebody who is not an operator", async () => {
+    const { bob } = await administered();
+
+    for (const topic of [TOPIC_ADMIN_USERS, TOPIC_ADMIN_SETTINGS, TOPIC_ADMIN_KEYS]) {
+      expect((await bob.send("subscribe", { topic })).code, topic).toBe("refused");
+    }
+  });
+
+  it("lets an operator hold every one of them", async () => {
+    const { ada } = await administered();
+
+    for (const topic of [TOPIC_ADMIN_USERS, TOPIC_ADMIN_SETTINGS, TOPIC_ADMIN_KEYS]) {
+      const answer = await ada.send("subscribe", { topic });
+      expect(answer.code, topic).toBeUndefined();
+      expect(answer.seq, topic).toBeTypeOf("number");
+    }
+  });
+
+  it("says a name under the prefix that nothing publishes on does not exist", async () => {
+    // Existence before permission: somebody asking for a topic this server does
+    // not have has a typo, and telling them they may not have it would send them
+    // looking for a role instead.
+    const { ada, bob } = await administered();
+
+    expect((await ada.send("subscribe", { topic: "admin/nonsense" })).code).toBe("not-found");
+    expect((await bob.send("subscribe", { topic: "admin/nonsense" })).code).toBe("not-found");
   });
 });
