@@ -78,6 +78,16 @@ interface LiveEntry {
   /** How it may be joined. Changed by its opener; see {@link Presence.setRule}. */
   rule: TeamLiveJoinRule;
   /**
+   * Who has asked to be let in and has not been answered, by instance id.
+   *
+   * ⚠ **Held here rather than timed out here.** Nothing on this server counts down:
+   * a request that is never answered stays until its room ends or its asker's
+   * connection does, and the window that asked is the one that decides how long it
+   * is willing to wait. A timer here would be this server having an opinion about
+   * how long a person takes to look at a notice.
+   */
+  readonly requests: Map<string, TeamLiveMember>;
+  /**
    * The four digits somebody joins by, minted when the room opened.
    *
    * **Minted for every room and not only for the ones that need it**, because the
@@ -97,6 +107,14 @@ export class NoSuchLiveSessionError extends Error {
   constructor() {
     super("there is no live session of that id on this server");
     this.name = "NoSuchLiveSessionError";
+  }
+}
+
+/** Raised where a room is joined by asking and the caller tried to walk in. */
+export class LiveJoinNeedsAskingError extends Error {
+  constructor() {
+    super("that live session is joined by asking whoever opened it");
+    this.name = "LiveJoinNeedsAskingError";
   }
 }
 
@@ -301,6 +319,10 @@ export class TeamPresence {
     }
     this.instances.delete(id);
     for (const session of [...this.sessions.values()]) {
+      // A request outlives nothing: the window that made it has gone, so there is
+      // nobody left for a yes to admit. Dropped without a word, because the only
+      // thing that could hear one is the connection that just closed.
+      session.requests.delete(id);
       if (session.members.has(id)) {
         this.part(session, id);
       }
@@ -377,6 +399,7 @@ export class TeamPresence {
       members: new Map([[instance.id, memberOf(instance, now)]]),
       rule: input.rule ?? "open",
       code: this.mintCode(),
+      requests: new Map(),
     };
     this.sessions.set(session.id, session);
     const seen = view(session);
@@ -467,18 +490,94 @@ export class TeamPresence {
     if (session === undefined) {
       throw new NoSuchLiveSessionError();
     }
-    if (
-      session.rule === "code"
-      && !session.members.has(instance.id)
-      && code !== session.code
-    ) {
-      throw new WrongLiveCodeError();
+    if (!session.members.has(instance.id)) {
+      if (session.rule === "code" && code !== session.code) {
+        throw new WrongLiveCodeError();
+      }
+      if (session.rule === "request") {
+        // Listed, and still not walk-in-able. Without this the rule would be a
+        // decoration on a room anybody could join by pressing the same button.
+        throw new LiveJoinNeedsAskingError();
+      }
     }
     if (!session.members.has(instance.id)) {
       session.members.set(instance.id, memberOf(instance, Date.now()));
       this.announceChange(session);
     }
     return view(session);
+  }
+
+  /**
+   * Ask to be let into a room that is joined by asking.
+   *
+   * Answers what the asker is already able to see - the room - rather than a
+   * receipt: what they are waiting for is a change to the roster, and the only
+   * thing that can tell them it happened is the roster.
+   *
+   * Asking twice is the request that is already outstanding, for the reason
+   * joining twice is the room one is already in. Asking about a room one is
+   * already in is nothing at all.
+   */
+  request(instance: TeamClientInstance, id: string): TeamLiveSession {
+    const session = this.sessions.get(id);
+    if (session === undefined) {
+      throw new NoSuchLiveSessionError();
+    }
+    if (!session.members.has(instance.id) && !session.requests.has(instance.id)) {
+      const member = memberOf(instance, Date.now());
+      session.requests.set(instance.id, member);
+      // On the project's topic, where the person who asked is listening: they are
+      // not in the room, so the room's own topic would reach the host and nobody
+      // else. See `TeamLiveEvent`.
+      this.publish(projectLiveTopic(session.project), {
+        kind: "live-requested",
+        session: session.id,
+        member,
+      });
+    }
+    return view(session);
+  }
+
+  /**
+   * Say yes or no to somebody who asked, which the room's opener may do and nobody else.
+   *
+   * ⚠ **Yes has no event of its own.** Admitting somebody is a change to the
+   * roster, and a change to the roster is already announced - so whoever asked
+   * learns they are in by finding themselves in it, which is the same thing every
+   * other member learns from. Only a no needs saying, because nothing else about
+   * the room changes when the answer is no.
+   */
+  answer(
+    openerInstanceId: string,
+    id: string,
+    instanceId: string,
+    admit: boolean,
+  ): boolean {
+    const session = this.sessions.get(id);
+    if (session === undefined) {
+      throw new NoSuchLiveSessionError();
+    }
+    if (session.openedByInstance !== openerInstanceId) {
+      return false;
+    }
+    const asked = session.requests.get(instanceId);
+    if (asked === undefined) {
+      // Nobody by that name is waiting: answered already, gone, or never asked.
+      // The state the caller wanted is the state there is.
+      return true;
+    }
+    session.requests.delete(instanceId);
+    if (admit) {
+      session.members.set(instanceId, { ...asked, joinedAt: Date.now() });
+      this.announceChange(session);
+      return true;
+    }
+    this.publish(projectLiveTopic(session.project), {
+      kind: "live-refused",
+      session: session.id,
+      instance: instanceId,
+    });
+    return true;
   }
 
   /**
