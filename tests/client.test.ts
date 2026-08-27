@@ -16,6 +16,7 @@
  * tests/cli.test.ts drives them, so what is asserted is what somebody at a
  * terminal would see.
  */
+import { randomUUID } from "node:crypto";
 import { createServer as createHttpsServer, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
 import type { DatabaseSync } from "node:sqlite";
@@ -37,8 +38,20 @@ import { discoveryDocument } from "../src/identity/discovery.js";
 import { KeyStore } from "../src/identity/keys.js";
 import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
+import {
+  persistIdentity,
+  SERVER_NAME_KEY,
+  SIGN_IN_LIFETIME_KEY,
+  storedTokenLifetimes,
+} from "../src/identity/settings.js";
 import { SignInLimiter } from "../src/identity/signin.js";
-import { createUser } from "../src/identity/users.js";
+import {
+  ADMIN_ROLE,
+  createUser,
+  insertUser,
+  listUsers,
+  prepareUser,
+} from "../src/identity/users.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
 import { createTeamSocket } from "../src/team/endpoint.js";
 import { TEAM_METHODS } from "../src/team/protocol.js";
@@ -125,7 +138,18 @@ async function harness(): Promise<Harness> {
   const database = await openMigratedDatabase(layout.databasePath);
   openDatabases.push(database);
   const keys = await KeyStore.open(layout.keysDir);
-  const config = identityConfig({});
+  // A port this process held long enough to learn the number of and then let go
+  // of, for the same reason the health port below is one: `project create`
+  // reaches loreserver on it, and a test that named loreserver's usual port
+  // would be asserting about whatever happened to be listening on the machine
+  // it ran on.
+  const dataPort = await unusedPort();
+  const config = identityConfig({ dataPort });
+  // What `up` writes on every start, written here too, so that the commands
+  // which read the stored identity off the disk read the same deployment this
+  // server is answering as. Without it the two halves of `settings list` would
+  // be describing a server that had never been brought up and one that had.
+  persistIdentity(database, config);
 
   const service: TeamService = {
     database,
@@ -138,7 +162,7 @@ async function harness(): Promise<Harness> {
     // on a machine with no Team server running, which is not the machine of
     // anybody working on this.
     healthPort: await unusedPort(),
-    dataPort: config.dataPort,
+    dataPort,
     fingerprint: certificates.authority.fingerprint256,
     // One per harness, so that a test cannot spend what the next one counts on.
     signIns: new SignInLimiter(),
@@ -156,7 +180,7 @@ async function harness(): Promise<Harness> {
           database,
           host: "127.0.0.1",
           auth: { required: true, url: `https://127.0.0.1:${port}` },
-          data: { url: `lore://127.0.0.1:${config.dataPort}` },
+          data: { url: `lore://127.0.0.1:${dataPort}` },
           capabilities: socket.capabilities,
           authority: { sha256: certificates.authority.fingerprint256 },
           version: "0.0.0-test",
@@ -173,7 +197,15 @@ async function harness(): Promise<Harness> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   port = (server.address() as AddressInfo).port;
 
-  await createUser(database, hasher, { username: "ada", password: PASSWORD, displayName: "Ada" });
+  await createUser(database, hasher, {
+    username: "ada",
+    password: PASSWORD,
+    displayName: "Ada",
+    // The account this server starts with administers it, exactly as the one
+    // `nlteam init` makes does: a server whose only account could not administer
+    // it would need a second command to undo the first.
+    groups: [ADMIN_ROLE],
+  });
 
   return {
     address: `127.0.0.1:${port}`,
@@ -181,6 +213,15 @@ async function harness(): Promise<Harness> {
     root,
     database,
   };
+}
+
+/** One more account on a server, for the tests that need somebody besides Ada. */
+async function account(
+  server: Harness,
+  username: string,
+  groups: readonly string[] = [],
+): Promise<void> {
+  await createUser(server.database, hasher, { username, password: PASSWORD, groups });
 }
 
 /** A fresh directory for this test's credentials, and nobody else's. */
@@ -555,5 +596,541 @@ describe("a session", () => {
     } finally {
       open.close();
     }
+  });
+});
+
+/**
+ * The rest of the administrative commands, driven both ways.
+ *
+ * What each of these asserts is the same pair of things: that the command
+ * reaches its method when it is given an address, and that what it prints does
+ * not depend on which of the two it took. The exceptions are the interesting
+ * part, and each of them has a test of its own saying what the difference is
+ * and why it is not a defect.
+ */
+
+/** What a command wrote with the trailing "set here" or "default" taken off. */
+function withoutSource(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/(?:set here|default)$/, "").trimEnd())
+    .join("\n");
+}
+
+/** The same line with whichever key it named taken out; a kid differs per server. */
+function withoutKid(text: string): string {
+  return text.replace(/signing with \S+/, "signing with <kid>");
+}
+
+describe("user list", () => {
+  it("reads the same accounts from a storage root and from a session", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await account(server, "bob", ["authors"]);
+    await account(server, "zoe");
+    await signedIn(server);
+
+    const onDisk = await invoke(["user", "list", "--root", server.root]);
+    const overProtocol = await invoke(["user", "list", "--server", server.address]);
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.code).toBe(0);
+    expect(overProtocol.err).toBe("");
+    // By name on both, though the method hands them back newest first: a cursor
+    // has to be cut on something that cannot move, and a person reads a list by
+    // name.
+    expect(overProtocol.out).toBe(onDisk.out);
+    expect(overProtocol.out).toContain("bob");
+    expect(overProtocol.out).toContain("authors");
+  });
+
+  it("pages through a list longer than one page rather than stopping at the first", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    // More than the fifty a page holds by default. Hashed once and inserted
+    // sixty times: nothing here is about what a password costs, and sixty
+    // scrypt runs would be the slowest thing in this file by a long way.
+    const prepared = await prepareUser(hasher, { username: "filler", password: PASSWORD });
+    for (let index = 0; index < 60; index += 1) {
+      insertUser(server.database, {
+        ...prepared,
+        id: randomUUID(),
+        username: `filler${String(index).padStart(3, "0")}`,
+      });
+    }
+    await signedIn(server);
+
+    const { code, out, err } = await invoke(["user", "list", "--server", server.address]);
+
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    expect(out.trimEnd().split("\n")).toHaveLength(listUsers(server.database).length);
+    // The first page and the last row of the second, so that a command which
+    // asked once and printed what it got would fail here.
+    expect(out).toContain("filler000");
+    expect(out).toContain("filler059");
+    expect(out).toBe((await invoke(["user", "list", "--root", server.root])).out);
+  });
+});
+
+describe("user create", () => {
+  it("makes the account either way, and names the command that gives them a token", async () => {
+    const first = await harness();
+    const second = await harness();
+    await credentialDirectory();
+    await signedIn(second);
+
+    const onDisk = await invoke(["user", "create", "bob", "--root", first.root], PASSWORD);
+    const overProtocol = await invoke(
+      ["user", "create", "bob", "--server", second.address],
+      PASSWORD,
+    );
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.code).toBe(0);
+    // The same two lines on both, up to the id each server made. The third is
+    // the one that differs, and it differs because it names the command the
+    // person reading it would actually run next.
+    expect(onDisk.out).toContain("groups: member\n");
+    expect(overProtocol.out).toContain("groups: member\n");
+    expect(onDisk.out).toContain(`nlteam token mint bob --root ${first.root}`);
+    expect(overProtocol.out).toContain(`nlteam token mint bob --server ${second.address}`);
+  });
+
+  it("sends the password over the session, and puts it in nothing it prints", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+    const secret = "the password bob was given";
+
+    const made = await invoke(["user", "create", "bob", "--server", server.address], secret);
+
+    expect(made.code).toBe(0);
+    expect(made.out).not.toContain(secret);
+    expect(made.err).toBe("");
+    // It arrived, rather than merely having been sent: bob signs in with it.
+    const asBob = await invoke(["login", server.address, "bob"], secret);
+    expect(asBob.err).toBe("");
+    expect(asBob.code).toBe(0);
+  });
+
+  it("makes an operator when it is asked to, and says so", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+
+    const { code, out } = await invoke(
+      ["user", "create", "bob", "--server", server.address, "--role", "admin"],
+      PASSWORD,
+    );
+
+    expect(code).toBe(0);
+    expect(out).toContain("groups: admin\n");
+  });
+
+  it("refuses a role and a mark the protocol cannot carry, before it dials anything", async () => {
+    // Dropped silently, either of these would look exactly like it had worked.
+    const role = await invoke([
+      "user",
+      "create",
+      "bob",
+      "--server",
+      "team.example.lan:41402",
+      "--role",
+      "authors",
+    ]);
+    expect(role.code).toBe(2);
+    expect(role.err).toContain("--role admin");
+    expect(role.err).toContain("--root");
+
+    const mark = await invoke([
+      "user",
+      "create",
+      "builder",
+      "--server",
+      "team.example.lan:41402",
+      "--service-account",
+    ]);
+    expect(mark.code).toBe(2);
+    expect(mark.err).toContain("--service-account");
+  });
+});
+
+describe("taking access away", () => {
+  it("says how far disabling reaches, in the same words either way", async () => {
+    const first = await harness();
+    const second = await harness();
+    await credentialDirectory();
+    await account(first, "bob");
+    await account(second, "bob");
+    await signedIn(second);
+
+    const onDisk = await invoke(["user", "disable", "bob", "--root", first.root]);
+    const overProtocol = await invoke(["user", "disable", "bob", "--server", second.address]);
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.code).toBe(0);
+    // Including the repository lifetime in the middle of it, which this path has
+    // to ask the server for: a sentence that lost its number on one of the two
+    // would be the two paths saying different things about one server.
+    expect(overProtocol.out).toBe(onDisk.out);
+    expect(overProtocol.out).toContain("15 minutes from now");
+  });
+
+  it("says the same about refusing the tokens an account holds", async () => {
+    const first = await harness();
+    const second = await harness();
+    await credentialDirectory();
+    await account(first, "bob");
+    await account(second, "bob");
+    await signedIn(second);
+
+    const onDisk = await invoke(["user", "revoke-tokens", "bob", "--root", first.root]);
+    const overProtocol = await invoke([
+      "user",
+      "revoke-tokens",
+      "bob",
+      "--server",
+      second.address,
+    ]);
+
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.out).toBe(onDisk.out);
+    expect(overProtocol.out).toContain("is not disabled");
+  });
+
+  it("enables an account again, and says the same either way", async () => {
+    const first = await harness();
+    const second = await harness();
+    await credentialDirectory();
+    await account(first, "bob");
+    await account(second, "bob");
+    await invoke(["user", "disable", "bob", "--root", first.root]);
+    await invoke(["user", "disable", "bob", "--root", second.root]);
+    await signedIn(second);
+
+    const onDisk = await invoke(["user", "enable", "bob", "--root", first.root]);
+    const overProtocol = await invoke(["user", "enable", "bob", "--server", second.address]);
+
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.out).toBe(onDisk.out);
+    expect(overProtocol.out).toBe("enabled bob\n");
+  });
+
+  it("grants and revokes administration, and says the same either way", async () => {
+    const first = await harness();
+    const second = await harness();
+    await credentialDirectory();
+    await account(first, "bob");
+    await account(second, "bob");
+    await signedIn(second);
+
+    const granted = await invoke(["user", "grant-admin", "bob", "--root", first.root]);
+    const grantedOverProtocol = await invoke([
+      "user",
+      "grant-admin",
+      "bob",
+      "--server",
+      second.address,
+    ]);
+    expect(grantedOverProtocol.err).toBe("");
+    expect(grantedOverProtocol.out).toBe(granted.out);
+
+    const revoked = await invoke(["user", "revoke-admin", "bob", "--root", first.root]);
+    const revokedOverProtocol = await invoke([
+      "user",
+      "revoke-admin",
+      "bob",
+      "--server",
+      second.address,
+    ]);
+    expect(revokedOverProtocol.err).toBe("");
+    expect(revokedOverProtocol.out).toBe(revoked.out);
+    expect(revokedOverProtocol.out).toContain("no longer an admin");
+  });
+});
+
+describe("token mint", () => {
+  it("mints over the session without reading standard input", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await account(server, "bob");
+    await signedIn(server);
+
+    // A stream that records having been read from and then ends, rather than
+    // one that never does: a command which read this would otherwise hang, and
+    // a test that proves something by timing out proves it slowly and badly.
+    let readStandardInput = false;
+    const stream = new Readable({
+      read() {
+        readStandardInput = true;
+        this.push(null);
+      },
+    }) as unknown as NodeJS.ReadStream;
+    stream.isTTY = false;
+    Object.defineProperty(process, "stdin", { value: stream, configurable: true });
+
+    const { code, out, err } = await invoke(["token", "mint", "bob", "--server", server.address]);
+
+    expect(code).toBe(0);
+    expect(readStandardInput).toBe(false);
+    // The credential on standard output on its own, as the other path prints it,
+    // so that a script capturing one need not know which path it came from.
+    expect(out).toMatch(/^[\w-]+\.[\w-]+\.[\w-]+\n$/);
+    expect(err).toContain("expires ");
+    // The header and the claims belong to the local path, because they are what
+    // that path minted rather than anything this answer carries.
+    expect(err).not.toContain("claims ");
+  });
+
+  it("mints a token that server accepts", async () => {
+    const server = await harness();
+    const directory = await credentialDirectory();
+    await account(server, "bob");
+    await signedIn(server);
+
+    const { out } = await invoke(["token", "mint", "bob", "--server", server.address]);
+
+    const held = (await readCredentials(directory)).get(server.address) as ServerCredential;
+    const open = await TeamSessionClient.open({
+      address: held.address,
+      ca: held.authority.pem,
+      token: out.trim(),
+    });
+    try {
+      expect(open.hello.account.username).toBe("bob");
+    } finally {
+      open.close();
+    }
+  });
+
+  it("refuses an identity option written beside an address", async () => {
+    const { code, err } = await invoke([
+      "token",
+      "mint",
+      "bob",
+      "--server",
+      "team.example.lan:41402",
+      "--data-port",
+      "41500",
+    ]);
+
+    expect(code).toBe(2);
+    expect(err).toContain("--data-port");
+    expect(err).toContain("--root");
+  });
+});
+
+describe("settings", () => {
+  it("reads the same settings both ways, with nothing invented in the last column", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await invoke(["settings", "set", SERVER_NAME_KEY, "Winterlight", "--root", server.root]);
+    await signedIn(server);
+
+    const onDisk = await invoke(["settings", "list", "--root", server.root]);
+    const overProtocol = await invoke(["settings", "list", "--server", server.address]);
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.code).toBe(0);
+    // The keys and the values agree. The column after them does not, and that is
+    // the point: a server says what a setting is, never whether the value was
+    // chosen there, so this path leaves it blank rather than guessing.
+    expect(overProtocol.out).toBe(withoutSource(onDisk.out));
+    expect(overProtocol.out).toContain("Winterlight");
+    expect(overProtocol.out).not.toContain("default");
+    expect(onDisk.out).toContain("set here");
+  });
+
+  it("changes one, says what it was and what it is, and reaches the running server", async () => {
+    const first = await harness();
+    const second = await harness();
+    await credentialDirectory();
+    await signedIn(second);
+
+    const onDisk = await invoke([
+      "settings",
+      "set",
+      SIGN_IN_LIFETIME_KEY,
+      "7d",
+      "--root",
+      first.root,
+    ]);
+    const overProtocol = await invoke([
+      "settings",
+      "set",
+      SIGN_IN_LIFETIME_KEY,
+      "7d",
+      "--server",
+      second.address,
+    ]);
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.code).toBe(0);
+    expect(overProtocol.out).toBe(onDisk.out);
+    expect(overProtocol.out).toContain("is 7 days, and was 30 days");
+    // Written where the server reads it, not somewhere that also keeps a copy.
+    expect(storedTokenLifetimes(second.database).signInTokenLifetimeSeconds).toBe(
+      7 * 24 * 60 * 60,
+    );
+  });
+
+  it("names the settings there are when given one there is not, without dialling", async () => {
+    const { code, err } = await invoke([
+      "settings",
+      "set",
+      "token.lifetime",
+      "7d",
+      "--server",
+      "team.example.lan:41402",
+    ]);
+
+    expect(code).toBe(2);
+    expect(err).toContain("there is no setting called token.lifetime");
+  });
+});
+
+describe("signing keys", () => {
+  it("reads the same keys both ways", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+
+    const onDisk = await invoke(["key", "list", "--root", server.root]);
+    const overProtocol = await invoke(["key", "list", "--server", server.address]);
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.out).toBe(onDisk.out);
+    expect(overProtocol.out).toContain("signing  ");
+  });
+
+  it("rotates the running server's keys and says what the other path says", async () => {
+    const first = await harness();
+    const second = await harness();
+    await credentialDirectory();
+    await signedIn(second);
+
+    const onDisk = await invoke(["key", "rotate", "--root", first.root]);
+    const overProtocol = await invoke(["key", "rotate", "--server", second.address]);
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.code).toBe(0);
+    expect(overProtocol.out).toContain("2 key(s) are published");
+    expect(withoutKid(overProtocol.out)).toBe(withoutKid(onDisk.out));
+    // The store the server itself holds, so the next token it mints is signed by
+    // the new key with nothing restarted. Reading the directory again would only
+    // prove that a file had appeared.
+    const listed = await invoke(["key", "list", "--server", second.address]);
+    expect(listed.out.trimEnd().split("\n")).toHaveLength(2);
+    expect(listed.out).toContain(
+      (overProtocol.out.split("\n")[0] ?? "").replace("signing with ", ""),
+    );
+  });
+});
+
+describe("project create", () => {
+  it("reaches projects.create and prints the server's own refusal", async () => {
+    // Nothing is listening on this server's data port — the harness borrowed one
+    // and gave it straight back — so loreserver cannot be asked for the
+    // repository and the server says so. That the refusal is about a repository
+    // rather than about a command line is the assertion: this reached the method.
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+
+    const { code, out, err } = await invoke([
+      "project",
+      "create",
+      "harbour",
+      "--server",
+      server.address,
+    ]);
+
+    expect(code).toBe(1);
+    expect(out).toBe("");
+    expect(err.startsWith("nlteam: ")).toBe(true);
+    expect(err).not.toContain("at Object.");
+    // The row was rolled back with it, so the list is as it was.
+    const listed = await invoke(["project", "list", "--server", server.address]);
+    expect(listed.out).toContain("no projects yet");
+  });
+
+  it("refuses --as beside an address rather than dropping it", async () => {
+    const { code, err } = await invoke([
+      "project",
+      "create",
+      "harbour",
+      "--server",
+      "team.example.lan:41402",
+      "--as",
+      "ada",
+    ]);
+
+    expect(code).toBe(2);
+    expect(err).toContain("--as");
+    expect(err).toContain("--root");
+  });
+});
+
+describe("what a server refuses", () => {
+  it("prints the server's own sentence for an account it does not have", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+
+    const { code, out, err } = await invoke([
+      "user",
+      "disable",
+      "nobody",
+      "--server",
+      server.address,
+    ]);
+
+    expect(code).toBe(1);
+    expect(out).toBe("");
+    expect(err).toBe("nlteam: there is no account of that name on this server\n");
+  });
+
+  it("prints the server's own sentence to somebody who may not administer it", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await account(server, "bob");
+    const signIn = await invoke(["login", server.address, "bob"], PASSWORD);
+    expect(signIn.code).toBe(0);
+
+    const { code, out, err } = await invoke(["user", "list", "--server", server.address]);
+
+    expect(code).toBe(1);
+    expect(out).toBe("");
+    // Worded by the server, printed as it arrived. A client that reworded a
+    // refusal is a client whose output cannot be found in the server's log.
+    expect(err).toBe("nlteam: administering this server is for its operators\n");
+  });
+
+  it("refuses the last operator's administration, and names the way back", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+
+    const { code, err } = await invoke([
+      "user",
+      "revoke-admin",
+      "ada",
+      "--server",
+      server.address,
+    ]);
+
+    expect(code).toBe(1);
+    expect(err).toContain("only operator");
+    // The rescue plane, named in the refusal, because the person reading it is
+    // exactly the person who needs to know there is one.
+    expect(err).toContain("nlteam user grant-admin ada");
+    expect(err).toContain("storage root");
   });
 });

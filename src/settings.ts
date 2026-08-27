@@ -31,10 +31,12 @@ import type { WriteText } from "./cli.js";
 import { readSetting, readSettings, type ListedSetting } from "./client/answers.js";
 import { withSession } from "./client/server.js";
 import { describeDuration } from "./duration.js";
+import { hostOf } from "./identity/config.js";
 import { openMigratedDatabase } from "./identity/database.js";
 import { identityLayout } from "./identity/layout.js";
 import {
   isLifetimeKey,
+  storedIdentity,
   isSettingStored,
   lifetimeUnder,
   REPOSITORY_LIFETIME_CAUTION,
@@ -84,20 +86,29 @@ const KEY_WIDTH = Math.max(...SETTING_KEYS.map((key) => key.length));
 const MINIMUM_VALUE_WIDTH = 12;
 
 /**
- * What answers for the name on a server nobody has named.
+ * What answers for the name on a server nobody has named and nobody has started.
  *
- * The host, and this command cannot say which host: the auth origin is named on
- * the command line that starts `up`, not stored here, so a run of `settings
- * list` on a server that is not up has nothing to read it from. Describing it
- * is honest where printing 127.0.0.1 would be a guess, and the column beside it
- * already says the value was nobody's choice.
+ * The host, described rather than printed, because there is no host to print:
+ * the auth origin is written into the database by `up`, and a storage root that
+ * has never had `up` run against it holds none. Describing it is honest where
+ * printing 127.0.0.1 would be a guess, and the column beside it already says the
+ * value was nobody's choice.
+ *
+ * A server that is answering a session has necessarily been started, so this is
+ * the one row where the two paths can differ — and only on a storage root the
+ * other path could not have reached at all.
  */
 const THE_SERVERS_HOST = "the server's host";
 
 /** One setting as it stands, in the words somebody would have typed. */
 function settingValue(database: DatabaseSync, key: SettingKey): string {
   if (key === SERVER_NAME_KEY) {
-    return storedServerName(database, THE_SERVERS_HOST);
+    // The host this deployment was brought up as, which `up` writes and every
+    // command that mints a token already reads — the same host the discovery
+    // document names and the same one this server's own settings surface falls
+    // back to. It was described rather than read while nothing stored it.
+    const origin = storedIdentity(database).authOrigin;
+    return storedServerName(database, origin === undefined ? THE_SERVERS_HOST : hostOf(origin));
   }
   // The duration in the words somebody would have typed, not the seconds
   // the key names: 2592000 is correct and nobody can hold it up against

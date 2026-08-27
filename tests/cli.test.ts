@@ -98,6 +98,26 @@ describe("run", () => {
     // The rescue commands are named as such, because a reader deciding how to
     // administer a server from elsewhere needs to know what still cannot be.
     expect(out).toContain("up, init and trust take --root alone");
+    expect(out).toContain("Every command above except up, init and trust");
+  });
+
+  it("names the two places the two paths ask for different things", async () => {
+    const { out } = await invoke(["--help"]);
+
+    // Neither is a defect, and neither is discoverable by trying it: a person
+    // scripting token mint has to know before they pipe a password at it, and a
+    // person reading a settings listing has to know the blank column is a thing
+    // this path cannot say rather than a value nobody chose.
+    expect(out).toContain("token mint --server");
+    expect(out).toContain("reads none");
+    expect(out).toContain("settings list --server leaves the last column blank");
+  });
+
+  it("says where a password goes on the path that sends one over a session", async () => {
+    const { out } = await invoke(["--help"]);
+
+    expect(out).toContain("user create --server sends the password over the session");
+    expect(out).toContain("never from an argument");
   });
 
   it("fails with one line on stderr for an unknown argument", async () => {
