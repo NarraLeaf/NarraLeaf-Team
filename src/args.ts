@@ -10,6 +10,9 @@ import { parseServerAddress } from "./client/config.js";
 import { DEFAULT_IDENTITY } from "./identity/config.js";
 import {
   isLifetimeKey,
+  isPublishLineageRule,
+  PUBLISH_LINEAGE_KEY,
+  PUBLISH_LINEAGE_RULES,
   isSettingKey,
   SETTING_KEYS,
   type SettingChange,
@@ -1226,6 +1229,21 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
       return error(
         `there is no setting called ${key}. The settings are ${SETTING_KEYS.join(", ")}.`,
       );
+    }
+    // One of the two words, checked here as well as on the way in: a command
+    // line can say what it likes, and the answer to "is that a rule" is the same
+    // question wherever it is asked.
+    if (key === PUBLISH_LINEAGE_KEY) {
+      if (!isPublishLineageRule(value)) {
+        return error(
+          `${PUBLISH_LINEAGE_KEY} is one of ${PUBLISH_LINEAGE_RULES.join(" or ")}, not ${value}.`,
+        );
+      }
+      return {
+        kind: "settings-set",
+        target,
+        change: { key, rule: value.trim() as "merge" | "refuse" },
+      };
     }
     // A name is stored as it was written, and every check on it is the
     // database's: what is too long, empty or unprintable is the same question

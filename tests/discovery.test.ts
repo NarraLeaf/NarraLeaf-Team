@@ -17,7 +17,7 @@ import {
   type DiscoverySource,
 } from "../src/identity/discovery.js";
 import { identityLayout } from "../src/identity/layout.js";
-import { setServerName } from "../src/identity/settings.js";
+import { setPublishLineage, setServerName } from "../src/identity/settings.js";
 import { ensureCertificates } from "../src/tls/authority.js";
 import { webHandler } from "../src/web/router.js";
 import { useTemporaryRoots } from "./temporary.js";
@@ -29,6 +29,7 @@ const DOCUMENT: DiscoveryDocument = {
     name: "team.example.lan",
     auth: { required: true, url: "https://team.example.lan:41402" },
     data: { url: "lore://team.example.lan:41337" },
+    policy: { publishLineage: "merge" },
     capabilities: ["projects", "project-detail", "members"],
     authority: { sha256: "3D:38:9F:E6" },
     version: "0.1.0",
@@ -226,5 +227,34 @@ describe("the name a server answers with", () => {
 
         // An older client reads the rest of it exactly as it always did.
         expect(discoveryDocument(from)).toEqual({ ...DOCUMENT, name: "Winterlight" });
+    });
+
+    it("carries the rule for a repository this server already holds", async () => {
+        const from = await source();
+
+        // The default is what a deployment nobody configured says, and it is the
+        // answer that loses nothing: the two copies are one project, and the
+        // author is given the means to reconcile them.
+        expect(discoveryDocument(from).policy).toEqual({ publishLineage: "merge" });
+
+        setPublishLineage(from.database, "refuse");
+
+        // Read as the answer is composed, like the name: a rule changed over ssh
+        // reaches the next request rather than the next restart.
+        expect(discoveryDocument(from).policy).toEqual({ publishLineage: "refuse" });
+    });
+
+    it("says merge where somebody has stored a word that is neither rule", async () => {
+        // The file is SQLite and whoever has the storage root can write anything
+        // into it. Falling back is right here and wrong for a token lifetime: this
+        // is composed into the one document that says where to sign in, so
+        // refusing to answer would take that out over a policy with a sane default.
+        const from = await source();
+        setServerName(from.database, "Winterlight");
+        from.database
+            .prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)")
+            .run("project.publish_lineage", "whatever", 0);
+
+        expect(discoveryDocument(from).policy).toEqual({ publishLineage: "merge" });
     });
 });

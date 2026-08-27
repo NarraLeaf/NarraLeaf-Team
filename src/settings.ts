@@ -39,12 +39,15 @@ import {
   storedIdentity,
   isSettingStored,
   lifetimeUnder,
+  PUBLISH_LINEAGE_KEY,
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
   SERVER_NAME_KEY,
+  setPublishLineage,
   setServerName,
   setTokenLifetime,
   SETTING_KEYS,
+  storedPublishLineage,
   storedServerName,
   storedTokenLifetimes,
   type SettingChange,
@@ -109,6 +112,9 @@ function settingValue(database: DatabaseSync, key: SettingKey): string {
     // back to. It was described rather than read while nothing stored it.
     const origin = storedIdentity(database).authOrigin;
     return storedServerName(database, origin === undefined ? THE_SERVERS_HOST : hostOf(origin));
+  }
+  if (key === PUBLISH_LINEAGE_KEY) {
+    return storedPublishLineage(database);
   }
   // The duration in the words somebody would have typed, not the seconds
   // the key names: 2592000 is correct and nobody can hold it up against
@@ -259,6 +265,16 @@ function renderSettingChange(
     );
     return;
   }
+  if (key === PUBLISH_LINEAGE_KEY) {
+    // Said because it is the one thing an operator would otherwise have to
+    // find out by watching somebody publish: this is a rule Studio keeps, so
+    // it reaches a machine the next time that machine reads this server.
+    stdout(
+      "Studio reads this with the rest of what this server says about itself, so a machine " +
+        "already open picks it up the next time it looks.\n",
+    );
+    return;
+  }
   stdout("Tokens already minted keep the lifetime they were given.\n");
   if (key === REPOSITORY_LIFETIME_KEY) {
     stdout(`${REPOSITORY_LIFETIME_CAUTION}\n`);
@@ -279,9 +295,11 @@ export async function settingsSet(
     const after =
       change.key === SERVER_NAME_KEY
         ? setServerName(database, change.name)
-        : describeDuration(
-            lifetimeUnder(setTokenLifetime(database, change.key, change.seconds), change.key),
-          );
+        : change.key === PUBLISH_LINEAGE_KEY
+          ? setPublishLineage(database, change.rule)
+          : describeDuration(
+              lifetimeUnder(setTokenLifetime(database, change.key, change.seconds), change.key),
+            );
     renderSettingChange(change.key, before, after, stdout);
     return 0;
   } catch (error) {
@@ -324,7 +342,15 @@ export async function settingsSetOverProtocol(
       const written = readSetting(
         await session.call(TEAM_METHODS.adminSettingsSet, {
           label: row.label,
-          value: change.key === SERVER_NAME_KEY ? change.name : String(change.seconds),
+          // What this setting is written as, which is a different kind of
+          // thing for each of the three: a name as it was typed, one word out
+          // of a closed set, or a count of seconds.
+          value:
+            change.key === SERVER_NAME_KEY
+              ? change.name
+              : change.key === PUBLISH_LINEAGE_KEY
+                ? change.rule
+                : String(change.seconds),
         }),
       );
       return {

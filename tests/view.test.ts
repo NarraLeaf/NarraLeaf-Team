@@ -75,7 +75,12 @@ describe("the settings surface", () => {
 
     // The rest are named on the command line that started up, so an editor
     // over them would be writing somewhere nothing reads.
-    expect(editable).toEqual(["name", "sign-in token", "repository token"]);
+    expect(editable).toEqual([
+      "name",
+      "repeat publishes",
+      "sign-in token",
+      "repository token",
+    ]);
   });
 
   it("says of the repository token the one thing that is not obvious about it", async () => {

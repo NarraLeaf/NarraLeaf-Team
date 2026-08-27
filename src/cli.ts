@@ -1,7 +1,12 @@
 import { parseArgs } from "./args.js";
 import { describeDuration } from "./duration.js";
 import { DEFAULT_IDENTITY } from "./identity/config.js";
-import { SERVER_NAME_KEY, SETTING_KEYS } from "./identity/settings.js";
+import {
+  PUBLISH_LINEAGE_KEY,
+  PUBLISH_LINEAGE_RULES,
+  SERVER_NAME_KEY,
+  SETTING_KEYS,
+} from "./identity/settings.js";
 import { ADMIN_ROLE, DEFAULT_ROLE } from "./identity/users.js";
 import { init } from "./init.js";
 import { keyList, keyListOverProtocol, keyRotate, keyRotateOverProtocol } from "./key.js";
@@ -219,7 +224,10 @@ Options:
 settings set takes the keys below. The two lifetimes take a duration written
 the way --token-lifetime is: 30m, 48h, 7d, or a bare number of seconds.
 ${SERVER_NAME_KEY} takes the name this deployment is called in Studio, which is
-its host until somebody chooses one. The keys are
+its host until somebody chooses one. ${PUBLISH_LINEAGE_KEY} takes ${PUBLISH_LINEAGE_RULES.join(" or ")}
+and says what Studio does when somebody publishes a repository this server already
+holds - merge connects it under the name it is already registered as, refuse will
+not have it. The keys are
 ${SETTING_KEYS.map((key) => `  ${key}`).join("\n")}
 
 init, user create, token mint --root and login read the password from standard

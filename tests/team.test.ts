@@ -2453,6 +2453,7 @@ describe("the settings, as an operator reads them", () => {
 
     expect(settings.filter((row) => row.editable).map((row) => row.label)).toEqual([
       "name",
+      "repeat publishes",
       "sign-in token",
       "repository token",
     ]);

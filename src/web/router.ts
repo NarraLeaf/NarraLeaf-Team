@@ -1,7 +1,7 @@
 /**
  * What answers an HTTP/1.1 request on the TLS listener.
  *
- * The listener speaks gRPC over h2, and these two paths are everything it
+ * The listener speaks gRPC over h2, and these three paths are everything it
  * answers in HTTP/1.1. They are here rather than on a port of their own, and
  * the reason is the one written at the top of src/identity/discovery.ts.
  * **One listener, one certificate, and therefore one decision to trust.** An
@@ -9,7 +9,7 @@
  * `nlteam trust`; a second port with a second certificate would be a second
  * such conversation.
  *
- * So this is a router with two arms, in the order they are tried:
+ * So this is a router with three arms, in the order they are tried:
  *
  *   - `/.well-known/nlteam`, which is served to whoever asks. It is what turns
  *     one address into a server, so nothing may get in its way.
@@ -17,6 +17,10 @@
  *     route and nothing else: everything an author does afterwards travels on
  *     the WebSocket this listener also upgrades, which is not HTTP/1.1 by the
  *     time it carries anything and so is not routed here.
+ *   - `/api/team/v1/blobs/…`, which src/web/blobs.ts answers. It is the only
+ *     thing on this listener that is bytes rather than a document, and it is
+ *     kept apart for that reason: it neither reads a body into memory nor
+ *     writes one, and the arm above does neither by design.
  *
  * Anything else is a 404. There are no pages on this port: this server is
  * administered from Studio and from the `nlteam` commands, and neither of them
@@ -24,6 +28,7 @@
  */
 import { serveDiscovery, type DiscoveryDocument } from "../identity/discovery.js";
 import type { TeamService } from "../team/service.js";
+import { serveTeamBlobs, type BlobRoutesOptions } from "./blobs.js";
 import { serveStudioApi } from "./studio.js";
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -31,6 +36,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 export interface WebOptions {
   /** What a Studio installation talks to. Absent only where nothing serves it. */
   readonly studio?: TeamService;
+  /**
+   * Where a live session puts a file down. Absent for a build with no store.
+   *
+   * Optional in the sense a method module is: a build without it neither serves
+   * these addresses nor announces the capability, and the two cannot drift apart
+   * because the second is worked out from the first.
+   */
+  readonly blobs?: BlobRoutesOptions;
 }
 
 /**
@@ -61,6 +74,10 @@ export function webHandler(
     }
 
     if (options.studio !== undefined && serveStudioApi(options.studio, request, response, path)) {
+      return;
+    }
+
+    if (options.blobs !== undefined && serveTeamBlobs(options.blobs, request, response, path)) {
       return;
     }
 

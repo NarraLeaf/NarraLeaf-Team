@@ -23,7 +23,9 @@ import { audienceHosts, hostOf, type IdentityConfig } from "./identity/config.js
 import {
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
+  PUBLISH_LINEAGE_KEY,
   SERVER_NAME_KEY,
+  storedPublishLineage,
   SIGN_IN_LIFETIME_KEY,
   storedServerName,
   storedTokenLifetimes,
@@ -65,6 +67,7 @@ const STORAGE_FILE_LIMIT = 50_000;
  * same string would put a new value in the wrong place.
  */
 export const SERVER_NAME_SETTING = "name";
+export const PUBLISH_LINEAGE_SETTING = "repeat publishes";
 export const SIGN_IN_SETTING = "sign-in token";
 export const REPOSITORY_SETTING = "repository token";
 
@@ -82,6 +85,8 @@ export function settingKeyOf(label: string): SettingKey | undefined {
   switch (label) {
     case SERVER_NAME_SETTING:
       return SERVER_NAME_KEY;
+    case PUBLISH_LINEAGE_SETTING:
+      return PUBLISH_LINEAGE_KEY;
     case SIGN_IN_SETTING:
       return SIGN_IN_LIFETIME_KEY;
     case REPOSITORY_SETTING:
@@ -157,6 +162,16 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       // stored, so a server nobody has named reads as the address people
       // already reach it at rather than as a blank.
       value: storedServerName(context.database, hostOf(config.authOrigin)),
+      editable: true,
+    },
+    {
+      group: "server",
+      label: PUBLISH_LINEAGE_SETTING,
+      // What Studio does with a repository this server already holds, published
+      // again under a name of somebody's choosing. Shown in the server group
+      // rather than with the tokens because it is about how this deployment is
+      // used, not about what it lets anybody do.
+      value: storedPublishLineage(context.database),
       editable: true,
     },
     {

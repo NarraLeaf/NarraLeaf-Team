@@ -23,7 +23,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { TEAM_PROTOCOL_VERSION } from "@narraleaf/team-protocol";
 
-import { storedServerName } from "./settings.js";
+import { storedPublishLineage, storedServerName, type PublishLineageRule } from "./settings.js";
 
 /** The path this document is served at, and the only path the HTTP/1.1 side answers. */
 export const DISCOVERY_PATH = "/.well-known/nlteam";
@@ -95,6 +95,23 @@ export interface DiscoveryDocument {
   };
   /** The server's own version, for a support conversation rather than for a decision. */
   readonly version: string;
+  /**
+   * What this deployment asks of the clients that use it.
+   *
+   * ⚠ **Stated, not enforced, and the distinction is the whole of why it is here
+   * rather than checked on a call.** What these govern is what an author's own
+   * machine does with its own repository - which nothing on this server can reach,
+   * and which no request has to pass through. An operator sets them so that every
+   * Studio on the deployment behaves one way; a Studio that ignored them would
+   * only be misusing its own disk.
+   *
+   * Additive by design: a client that does not know a rule ignores it and behaves
+   * as it did, so a rule added here is not a protocol change.
+   */
+  readonly policy: {
+    /** What to do with a repository this server already holds. See `settings.ts`. */
+    readonly publishLineage: PublishLineageRule;
+  };
 }
 
 /**
@@ -123,6 +140,9 @@ export function discoveryDocument(source: DiscoverySource): DiscoveryDocument {
   return {
     protocol: TEAM_PROTOCOL_VERSION,
     name: storedServerName(source.database, source.host),
+    // Read as the answer is composed, for the name's reason: a rule changed over
+    // ssh has to reach the next request rather than the next restart.
+    policy: { publishLineage: storedPublishLineage(source.database) },
     auth: source.auth,
     data: source.data,
     capabilities: source.capabilities,

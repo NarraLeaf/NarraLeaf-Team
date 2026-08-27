@@ -10,7 +10,8 @@
     "overlay",
     "admin",
     "password-sign-in",
-    "project-history"
+    "project-history",
+    "blobs"
   ],
   "errorCodes": [
     "unknown-method",

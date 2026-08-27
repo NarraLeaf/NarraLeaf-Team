@@ -122,6 +122,16 @@ export const TEAM_CAPABILITIES = [
   "password-sign-in",
   /** A project's revisions may be read a page at a time. */
   "project-history",
+  /**
+   * A live session's files may be put down on this server and collected from it.
+   *
+   * The one capability that is about bytes rather than about a call, and the one
+   * address on this server that is not a document: a file a session carries is
+   * streamed to `/api/team/v1/blobs/{project}/{transfer}` and streamed back out
+   * of it, because the socket carries sixteen kilobytes a message and a file is
+   * not a message.
+   */
+  "blobs",
 ] as const;
 
 export type TeamCapability = (typeof TEAM_CAPABILITIES)[number];

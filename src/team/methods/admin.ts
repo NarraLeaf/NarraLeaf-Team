@@ -53,10 +53,12 @@ import { defaultPasswordHasher } from "../../identity/passwords.js";
 import {
   InvalidServerNameError,
   InvalidSettingError,
+  isLifetimeKey,
+  PUBLISH_LINEAGE_KEY,
   SERVER_NAME_KEY,
+  setPublishLineage,
   setServerName,
   setTokenLifetime,
-  type LifetimeKey,
 } from "../../identity/settings.js";
 import { DisabledAccountError, mintToken } from "../../identity/tokens.js";
 import {
@@ -608,7 +610,13 @@ export function adminMethods(): TeamMethod[] {
           // Not every setting is a duration. A name is stored as it was typed,
           // and reading it as one would refuse every name that is not a number.
           setServerName(context.options.database, value);
-        } else {
+        } else if (key === PUBLISH_LINEAGE_KEY) {
+          // Nor is every setting free text. This one is a word out of a closed
+          // set, and the set is checked where it is stored rather than here, so
+          // that "is that a rule" has one answer wherever the question arrives
+          // from.
+          setPublishLineage(context.options.database, value);
+        } else if (isLifetimeKey(key)) {
           // The words this server wrote, taken back: a lifetime is shown as
           // "30 days" and a caller sending that back means it. `7d` and bare
           // seconds are taken too, the second being what a panel holding the
@@ -617,7 +625,17 @@ export function adminMethods(): TeamMethod[] {
           if (typeof seconds === "string") {
             throw new MethodError("bad-params", seconds);
           }
-          setTokenLifetime(context.options.database, key as LifetimeKey, seconds);
+          setTokenLifetime(context.options.database, key, seconds);
+        } else {
+          // Asked rather than assumed, and refused rather than guessed at. A
+          // setting added to this server without a branch here would otherwise
+          // be read as a duration and refuse every value that is not a number,
+          // which reads to a caller as its value being wrong rather than as
+          // this server not knowing what to do with the row it just offered.
+          throw new MethodError(
+            "internal",
+            `this server offers the ${label} setting but does not know how to write it`,
+          );
         }
       } catch (error) {
         if (error instanceof MethodError) {

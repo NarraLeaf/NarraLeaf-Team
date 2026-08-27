@@ -67,6 +67,7 @@ const DISCOVERY: DiscoveryDocument = {
   name: "127.0.0.1",
   auth: { required: true, url: "https://127.0.0.1:41402" },
   data: { url: "lore://127.0.0.1:41337" },
+  policy: { publishLineage: "merge" },
   capabilities: ["projects", "project-detail", "members"],
   authority: { sha256: "" },
   version: "0.0.0-test",

@@ -76,6 +76,15 @@ export interface TeamSocket {
   readonly hub: TeamHub;
   readonly capabilities: readonly TeamCapability[];
   /**
+   * Who is connected and what each has open.
+   *
+   * Returned for the same reason the hub is: something outside this file needs
+   * it. The blob addresses (src/web/blobs.ts) admit a request from an
+   * installation this server currently knows to have that project open, and
+   * that fact lives here rather than in the database.
+   */
+  readonly presence: TeamPresence;
+  /**
    * Take one upgrade request, and say whether it was ours.
    *
    * False means the path was not this endpoint's, so whoever is listening may go
@@ -172,5 +181,5 @@ export function createTeamSocket(options: TeamSocketOptions): TeamSocket {
     return true;
   };
 
-  return { hub, capabilities, handleUpgrade };
+  return { hub, capabilities, presence, handleUpgrade };
 }
