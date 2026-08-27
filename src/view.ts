@@ -1,19 +1,17 @@
 /**
- * Gathering one whole account of this server, from the database and the disk.
+ * The settings surface, and the two measurements of this server's disk that
+ * everything else here is built out of.
  *
- * This is the half that owns the database, the certificate authority and the
- * health check. It hands over a finished {@link TeamView} and nothing else, so
- * that whatever answers a question out of one is a thing that reads rather than
- * a second implementation of the rules.
+ * What a person may change about a running Team server is decided in one place —
+ * {@link settingRows} — and so is which row stands for which stored setting.
+ * Both a command line and a management panel find a row by its position and
+ * write it by its key, and two answers to "which setting is this row" would put
+ * a new value in the wrong place the first time a row was added above another.
  *
- * Everything gathered here is read from the database or from a file, and
- * nothing here waits on the network. What a project's revision history and its
- * project file say is not in the database at all: it is inside a repository,
- * which is read by a client over the network — see src/projects/cache.ts for
- * why it must be, and src/projects/refresh.ts for how it arrives. Whatever has
- * been read is handed in and used; whatever has not is absent and reported as
- * "unknown", which is the same thing this says about a project written by a
- * newer Studio.
+ * Everything here reads the database or the disk and nothing here waits on the
+ * network. What a Team server *is* — whether the server beside it is answering,
+ * how much it is holding — is asked for rather than gathered on a schedule, and
+ * that lives in src/team/status.ts, which reads the two measurements below.
  *
  * What Team cannot work out is left out, not guessed at.
  */
@@ -21,16 +19,7 @@ import { stat, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { describeDuration } from "./duration.js";
-import { listDecisions } from "./identity/audit.js";
-import {
-  audienceHosts,
-  authUrl,
-  dataRemoteUrl,
-  hostOf,
-  type IdentityConfig,
-} from "./identity/config.js";
-import { KeyStore } from "./identity/keys.js";
-import { identityLayout } from "./identity/layout.js";
+import { audienceHosts, hostOf, type IdentityConfig } from "./identity/config.js";
 import {
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
@@ -40,65 +29,29 @@ import {
   storedTokenLifetimes,
   type SettingKey,
 } from "./identity/settings.js";
-import { findUserById, listUsers } from "./identity/users.js";
-import { checkHealth } from "./loreserver/health.js";
 import { instanceLayout } from "./loreserver/layout.js";
 import { LORESERVER_VERSION, resolveArtifact } from "./loreserver/pin.js";
-import { listProjects } from "./projects/registry.js";
-import { NOT_READ_YET } from "./teamview.js";
-import type {
-  TeamView,
-  ProjectFileView,
-  ProjectView,
-  RevisionView,
-  SettingView,
-  UserView,
-} from "./teamview.js";
-import { VERSION } from "./version.js";
+import type { SettingView } from "./teamview.js";
 
 import type { DatabaseSync } from "node:sqlite";
 
-/** What a view is gathered from. */
+/** What the settings surface is read from. */
 export interface ViewContext {
   readonly root: string;
   readonly database: DatabaseSync;
   readonly config: IdentityConfig;
-  readonly healthPort: number;
   /** The fingerprint of this Team server's authority, absent until one exists. */
   readonly fingerprint: string | undefined;
-  /**
-   * What has been read out of the repositories so far.
-   *
-   * Deliberately only a lookup, and deliberately optional. Gathering a view
-   * must not start a read, wait for one, or be able to: a command that prints
-   * a view and a screen that refreshes itself are both callers here, and
-   * neither should stop on a loreserver that is not answering.
-   */
-  readonly readings?: ProjectReadingLookup;
-}
-
-/** Whatever holds what the repositories last said. */
-export interface ProjectReadingLookup {
-  get(projectId: string): { history: RevisionView; file: ProjectFileView } | undefined;
 }
 
 /**
  * How many files a storage measurement will stat before giving up on it.
  *
- * A size is worth having and not worth waiting for: past this the view says
- * "unknown" rather than holding up the screen while it walks a store with
+ * A size is worth having and not worth waiting for: past this the answer is
+ * "unknown" rather than holding up whoever asked while it walks a store with
  * half a million objects in it.
  */
 const STORAGE_FILE_LIMIT = 50_000;
-
-/**
- * How many decisions a view carries.
- *
- * Far fewer than the database keeps. Enough to say what this server has been
- * asked lately, which is the question a view is gathered to answer — not the
- * whole bound, which is a different question with an answer of its own.
- */
-const AUDIT_LIMIT = 100;
 
 /**
  * The labels of the three rows Team has somewhere to write.
@@ -178,43 +131,6 @@ export function storageRootOf(root: string): string {
   return dirname(instanceLayout(root, binaryName()).immutableStoreDir);
 }
 
-function userView(database: DatabaseSync, user: ReturnType<typeof listUsers>[number]): UserView {
-  return {
-    username: user.username,
-    displayName: user.displayName,
-    ...(user.email === undefined ? {} : { email: user.email }),
-    role: user.groups.length === 0 ? "none" : user.groups.join(","),
-    disabled: user.disabledAt !== undefined,
-    serviceAccount: user.isServiceAccount,
-    createdAt: user.createdAt,
-    // When somebody was last seen is still not written down anywhere, so it
-    // stays absent and the interface draws it as unknown. When their tokens
-    // were last refused is: it is absent only for an account whose tokens have
-    // never been refused, or one whose last refusal was before Team kept the
-    // moment.
-    ...(user.tokensInvalidatedAt === undefined
-      ? {}
-      : { tokensInvalidatedAt: user.tokensInvalidatedAt }),
-  };
-}
-
-function projectView(
-  context: ViewContext,
-  project: ReturnType<typeof listProjects>[number],
-): ProjectView {
-  const { database } = context;
-  const nameOf = (id: string): string => findUserById(database, id)?.username ?? "unknown";
-  const read = context.readings?.get(project.id) ?? NOT_READ_YET;
-  return {
-    name: project.name,
-    description: project.description,
-    owner: nameOf(project.createdBy),
-    createdAt: project.createdAt,
-    history: read.history,
-    file: read.file,
-  };
-}
-
 /**
  * The settings surface, and the one place that decides what may be changed
  * from it.
@@ -277,61 +193,4 @@ export function settingRows(context: ViewContext): SettingView[] {
       editable: false,
     },
   ];
-}
-
-/** Read everything the interface draws, and answer with it. */
-export async function gatherTeamView(context: ViewContext): Promise<TeamView> {
-  const { database, config } = context;
-  const identity = identityLayout(context.root);
-  const storageRoot = storageRootOf(context.root);
-
-  const healthy = await checkHealth(context.healthPort);
-  const now = Date.now();
-  const storageBytes = await directoryBytes(storageRoot);
-
-  let signingKeys = 0;
-  try {
-    signingKeys = (await KeyStore.open(identity.keysDir)).published.length;
-  } catch {
-    // A Team server that has not run `up` yet has no keys directory. Nought is the
-    // truth about it, not a failure to read one.
-  }
-
-  return {
-    teamVersion: VERSION,
-    root: identity.root,
-    now,
-    server: {
-      version: LORESERVER_VERSION,
-      // From outside the process that supervises it, a loreserver that does
-      // not answer its health check cannot be told from one that is not
-      // running, and the pid, the start and the restarts belong to that
-      // process. What is here is what a second program can see.
-      running: healthy,
-      restarts: 0,
-      healthy,
-      healthCheckedAt: now,
-      ...(storageBytes === undefined ? {} : { storageBytes }),
-      storageRoot,
-    },
-    reach: {
-      signIn: authUrl(config),
-      data: dataRemoteUrl(audienceHosts(config)[0] ?? "127.0.0.1", config.dataPort),
-      fingerprint: context.fingerprint ?? UNKNOWN_FINGERPRINT,
-      loopback: [
-        { port: context.healthPort, what: "health" },
-        { port: config.teamPort, what: "jwks" },
-        { port: config.authPort, what: "authz" },
-      ],
-    },
-    users: listUsers(database).map((user) => userView(database, user)),
-    projects: listProjects(database).map((project) => projectView(context, project)),
-    // The decisions themselves, as src/identity/audit.ts kept them. Empty here
-    // now means a Team server that has genuinely not been asked anything — a Team server with
-    // no `up` running, or one nobody has reached yet — rather than a Team server that
-    // makes decisions and keeps none.
-    audit: listDecisions(database, AUDIT_LIMIT),
-    settings: settingRows(context),
-    signingKeys,
-  };
 }
