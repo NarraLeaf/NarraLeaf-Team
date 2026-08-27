@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseArgs } from "../src/args.js";
+import { DEFAULT_AUDIT_LIMIT } from "../src/audit.js";
 import {
   REPOSITORY_LIFETIME_KEY,
   SERVER_NAME_KEY,
@@ -711,5 +712,70 @@ describe("parseArgs, login and logout", () => {
       kind: "logout",
       server: "team.example.lan:41402",
     });
+  });
+});
+
+describe("parseArgs, status and audit", () => {
+  // An empty environment rather than this machine's, on every line that asserts
+  // a default: NLTEAM_HEALTH_PORT stands in for the flag, and a test reading it
+  // would pass or fail on what the shell it was run from happened to hold.
+  const nothing = {};
+
+  it("describes a server on either path, and takes the health port on one", () => {
+    expect(parseArgs(["status", "--root", "/srv/team"], nothing)).toEqual({
+      kind: "status",
+      target: { kind: "root", root: "/srv/team" },
+      healthPort: DEFAULT_PORTS.healthPort,
+    });
+    expect(
+      parseArgs(["status", "--root", "/srv/team", "--health-port", "9000"], nothing),
+    ).toMatchObject({ healthPort: 9000 });
+    expect(parseArgs(["status", "--server", "team.example.lan:41402"], nothing)).toEqual({
+      kind: "status",
+      target: { kind: "server", server: "team.example.lan:41402" },
+      healthPort: DEFAULT_PORTS.healthPort,
+    });
+  });
+
+  it("refuses a health port written beside an address rather than dropping it", () => {
+    const message = messageFor([
+      "status",
+      "--server",
+      "team.example.lan:41402",
+      "--health-port",
+      "9000",
+    ]);
+
+    expect(message).toContain("--health-port");
+    expect(message).toContain("--root");
+  });
+
+  it("reads the decisions, with a limit and a filter of its own", () => {
+    expect(parseArgs(["audit", "--root", "/srv/team"], nothing)).toEqual({
+      kind: "audit",
+      target: { kind: "root", root: "/srv/team" },
+      limit: DEFAULT_AUDIT_LIMIT,
+      refused: false,
+    });
+    expect(
+      parseArgs(
+        ["audit", "--server", "team.example.lan:41402", "--limit", "5", "--refused"],
+        nothing,
+      ),
+    ).toEqual({
+      kind: "audit",
+      target: { kind: "server", server: "team.example.lan:41402" },
+      limit: 5,
+      refused: true,
+    });
+  });
+
+  it("refuses a limit that is not a count, where the command line is read", () => {
+    expect(messageFor(["audit", "--root", "/srv/team", "--limit", "a few"])).toContain(
+      "whole number",
+    );
+    expect(messageFor(["audit", "--root", "/srv/team", "--limit", "0"])).toContain(
+      "at least one",
+    );
   });
 });

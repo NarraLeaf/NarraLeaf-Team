@@ -1,4 +1,5 @@
 import { parseArgs } from "./args.js";
+import { audit, auditOverProtocol, DEFAULT_AUDIT_LIMIT } from "./audit.js";
 import { describeDuration } from "./duration.js";
 import { DEFAULT_IDENTITY } from "./identity/config.js";
 import {
@@ -26,6 +27,7 @@ import {
   settingsSet,
   settingsSetOverProtocol,
 } from "./settings.js";
+import { status, statusOverProtocol } from "./status.js";
 import { tokenMint, tokenMintOverProtocol } from "./token.js";
 import { trust } from "./trust.js";
 import { up } from "./up.js";
@@ -108,6 +110,12 @@ Commands:
                             Change one of them
   key list                  Show the signing keys
   key rotate                Generate a key and sign with it from now on
+  status                    Say what this server is: its versions, whether
+                            loreserver is answering, what it holds, where it is
+                            reached and its fingerprint. The answer says when it
+                            was gathered rather than pretending to be live
+  audit                     Show the decisions this server has made about who
+                            may reach what, newest first
   trust                     Show this server's certificate authority and its
                             fingerprint, and change nothing
 
@@ -132,12 +140,12 @@ One command asks for different things on the two paths, and it is deliberate:
   operator's session, and minting for somebody whose password nobody knows is
   the whole point of asking a server to do it.
 
-Every option below has an environment variable that stands in for it, named for
-the option: --root is NLTEAM_ROOT, --server is NLTEAM_SERVER, --data-port is
-NLTEAM_DATA_PORT, --hostname is NLTEAM_HOSTNAME (comma-separated), and so on. A
-flag on the line beats its variable, the variable beats what this server has
-stored, and that beats the built-in default. It is what lets a container be
-configured without composing a command line.
+Every option below that describes a deployment has an environment variable that
+stands in for it, named for the option: --root is NLTEAM_ROOT, --server is
+NLTEAM_SERVER, --data-port is NLTEAM_DATA_PORT, --hostname is NLTEAM_HOSTNAME
+(comma-separated), and so on. A flag on the line beats its variable, the
+variable beats what this server has stored, and that beats the built-in default.
+It is what lets a container be configured without composing a command line.
 
 Options for up:
       --health-port <port>  loreserver's HTTP health check port (default ${DEFAULT_PORTS.healthPort})
@@ -185,6 +193,26 @@ Options for project create:
                             server has more than one. --root only: over the
                             protocol the account that asked is the one it
                             belongs to
+
+Options for status:
+      --health-port <port>  loreserver's HTTP health check port (default ${DEFAULT_PORTS.healthPort}).
+                            The one thing a status has to be told, because a
+                            storage root does not record it. --root only: a
+                            server checks the loreserver it started, on the port
+                            it was started with
+
+Options for audit:
+      --limit <count>       How many rows to print (default ${DEFAULT_AUDIT_LIMIT}). Rows are read
+                            back through until it has that many, however many
+                            that took; a server keeps a couple of thousand
+                            decisions, and that is the only ceiling
+      --refused             Print the refusals and nothing else. A refusal is the
+                            rare outcome, so an ordinary screenful holds none;
+                            with this, an empty listing means nothing on record
+                            was refused
+
+Neither of those two has an environment variable, because they describe one
+reading of a log rather than a deployment.
 
 
 Identity options, taken by up, token mint and project create with --root. A
@@ -464,6 +492,34 @@ export async function run(
       return invocation.target.kind === "server"
         ? await keyRotateOverProtocol({ server: invocation.target.server }, stdout, stderr)
         : await keyRotate({ root: invocation.target.root }, stdout, stderr);
+    case "status":
+      return invocation.target.kind === "server"
+        ? await statusOverProtocol({ server: invocation.target.server }, stdout, stderr)
+        : await status(
+            { root: invocation.target.root, healthPort: invocation.healthPort },
+            stdout,
+            stderr,
+          );
+    case "audit":
+      return invocation.target.kind === "server"
+        ? await auditOverProtocol(
+            {
+              server: invocation.target.server,
+              limit: invocation.limit,
+              refused: invocation.refused,
+            },
+            stdout,
+            stderr,
+          )
+        : await audit(
+            {
+              root: invocation.target.root,
+              limit: invocation.limit,
+              refused: invocation.refused,
+            },
+            stdout,
+            stderr,
+          );
     case "trust":
       return await trust(
         { root: invocation.root, install: invocation.install, remove: invocation.remove },

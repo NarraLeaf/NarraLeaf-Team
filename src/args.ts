@@ -6,6 +6,7 @@
  */
 import { isIP } from "node:net";
 
+import { DEFAULT_AUDIT_LIMIT } from "./audit.js";
 import { parseServerAddress } from "./client/config.js";
 import { DEFAULT_IDENTITY } from "./identity/config.js";
 import {
@@ -203,6 +204,29 @@ export type Invocation =
       readonly change: SettingChange;
     }
   /** Show the signing keys. */
+  /** Say what this server is: its versions, what it holds, and where it is reached. */
+  | {
+      readonly kind: "status";
+      readonly target: CommandTarget;
+      /**
+       * The port loreserver answers its health check on.
+       *
+       * Read on the `--root` path alone, and refused beside `--server` rather
+       * than dropped: a server asked what it is answers about the port it was
+       * started with, and a number written here that looked like it had been
+       * honoured would be the worse of the two failures.
+       */
+      readonly healthPort: number;
+    }
+  /** Print the decisions this server has made, newest first. */
+  | {
+      readonly kind: "audit";
+      readonly target: CommandTarget;
+      /** How many rows to print, whatever it took to find them. */
+      readonly limit: number;
+      /** Print the refusals and nothing else. */
+      readonly refused: boolean;
+    }
   | { readonly kind: "key-list"; readonly target: CommandTarget }
   /** Generate a key and sign with it from now on. */
   | { readonly kind: "key-rotate"; readonly target: CommandTarget }
@@ -478,6 +502,25 @@ function parsePort(option: string, text: string): number | string {
     return `${option} must be between 1 and ${MAXIMUM_PORT}, not ${port}`;
   }
   return port;
+}
+
+/**
+ * Read a count written on the command line.
+ *
+ * Returns the number, or a sentence saying what was wrong with it. Bounded
+ * below at one and not bounded above: what caps `audit --limit` is how many
+ * decisions a server keeps, which is the server's number rather than this
+ * program's, and a ceiling written here would be a second one to keep in step.
+ */
+function parseCount(option: string, text: string): number | string {
+  if (!/^\d+$/.test(text)) {
+    return `${option} needs a whole number, not "${text}"`;
+  }
+  const count = Number(text);
+  if (count < 1) {
+    return `${option} must be at least one`;
+  }
+  return count;
 }
 
 /** Milliseconds in each unit a duration may be written with. */
@@ -1313,6 +1356,82 @@ function parseKey(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   return verb === "list" ? { kind: "key-list", target } : { kind: "key-rotate", target };
 }
 
+/** Parse the arguments that follow `status`. */
+function parseStatus(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
+  const result = readTokens(argv, ["--root", "--server", "--health-port"]);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  const { tokens } = result;
+
+  const extra = tokens.positionals[0];
+  if (extra !== undefined) {
+    return error(`unexpected argument: ${extra}`);
+  }
+  const target = targetOf(tokens, env, "status");
+  if (typeof target === "string") {
+    return error(target);
+  }
+  if (target.kind === "server") {
+    const refusal = refuseWithServer(
+      tokens,
+      "status",
+      ["--health-port"],
+      "a server checks the loreserver it started, on the port it was started with",
+    );
+    if (refusal !== undefined) {
+      return error(refusal);
+    }
+  }
+
+  // The one port a status has to be told, because it is the one nothing writes
+  // down: the identity settings are stored by `up` and read back from the
+  // database, and this is not one of them.
+  let healthPort = DEFAULT_PORTS.healthPort;
+  const written = optionValue(tokens, env, "--health-port");
+  if (written !== undefined) {
+    const port = parsePort("--health-port", written);
+    if (typeof port === "string") {
+      return error(port);
+    }
+    healthPort = port;
+  }
+  return { kind: "status", target, healthPort };
+}
+
+/** Parse the arguments that follow `audit`. */
+function parseAudit(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
+  const result = readTokens(argv, ["--root", "--server", "--limit"], ["--refused"]);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  const { tokens } = result;
+
+  const extra = tokens.positionals[0];
+  if (extra !== undefined) {
+    return error(`unexpected argument: ${extra}`);
+  }
+  const target = targetOf(tokens, env, "audit");
+  if (typeof target === "string") {
+    return error(target);
+  }
+
+  // Off the line alone, with no variable standing in for it. Every option that
+  // has one describes a deployment, which is the thing a container is
+  // configured with; this describes one reading of a log, and there is nobody
+  // to configure it for.
+  let limit = DEFAULT_AUDIT_LIMIT;
+  const written = tokens.values.get("--limit");
+  if (written !== undefined) {
+    const count = parseCount("--limit", written);
+    if (typeof count === "string") {
+      return error(count);
+    }
+    limit = count;
+  }
+  return { kind: "audit", target, limit, refused: tokens.flags.has("--refused") };
+}
+
 /** Parse the arguments that follow `trust`. */
 function parseTrust(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const result = readTokens(argv, ["--root"], ["--install", "--remove"]);
@@ -1387,6 +1506,10 @@ export function parseArgs(
       return parseSettings(rest, env);
     case "key":
       return parseKey(rest, env);
+    case "status":
+      return parseStatus(rest, env);
+    case "audit":
+      return parseAudit(rest, env);
     case "trust":
       return parseTrust(rest, env);
     default:

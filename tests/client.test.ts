@@ -32,6 +32,7 @@ import {
   type ServerCredential,
 } from "../src/client/config.js";
 import { TeamCallError, TeamSessionClient, UnservedMethodError } from "../src/client/session.js";
+import { recordDecision, type NewDecision } from "../src/identity/audit.js";
 import { identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { discoveryDocument } from "../src/identity/discovery.js";
@@ -52,6 +53,7 @@ import {
   insertUser,
   listUsers,
   prepareUser,
+  requireUser,
 } from "../src/identity/users.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
 import { createTeamSocket } from "../src/team/endpoint.js";
@@ -116,6 +118,15 @@ interface Harness {
   readonly fingerprint: string;
   readonly root: string;
   readonly database: DatabaseSync;
+  /**
+   * The port this server would check loreserver on, which nothing answers.
+   *
+   * Handed back so that `nlteam status --root` can be given the same one. A
+   * storage root does not record it, so the two halves of that command would
+   * otherwise probe different ports — and on a machine with a Team server
+   * running, the default is a port that answers.
+   */
+  readonly healthPort: number;
 }
 
 /**
@@ -152,17 +163,18 @@ async function harness(): Promise<Harness> {
   // be describing a server that had never been brought up and one that had.
   persistIdentity(database, config);
 
+  // A port this process held long enough to learn the number of and then let go
+  // of. Not the port loreserver ordinarily uses: a test naming that one passes
+  // only on a machine with no Team server running, which is not the machine of
+  // anybody working on this.
+  const healthPort = await unusedPort();
+
   const service: TeamService = {
     database,
     keys,
     config,
     root,
-    // Nothing here asks this server what it is, so this names a port this
-    // process held long enough to learn the number of and then let go of. Not
-    // the port loreserver ordinarily uses: a test naming that one passes only
-    // on a machine with no Team server running, which is not the machine of
-    // anybody working on this.
-    healthPort: await unusedPort(),
+    healthPort,
     dataPort,
     fingerprint: certificates.authority.fingerprint256,
     // One per harness, so that a test cannot spend what the next one counts on.
@@ -213,6 +225,7 @@ async function harness(): Promise<Harness> {
     fingerprint: certificates.authority.fingerprint256,
     root,
     database,
+    healthPort,
   };
 }
 
@@ -223,6 +236,20 @@ async function account(
   groups: readonly string[] = [],
 ): Promise<void> {
   await createUser(server.database, hasher, { username, password: PASSWORD, groups });
+}
+
+/**
+ * A run of decisions on one server, at the moments this test names.
+ *
+ * Through the function that answers a repository access rather than by
+ * inserting rows, so that what is being read back is what a working server
+ * would have written. Each carries its own `at`, which is what makes the order
+ * something the test decided rather than something a clock did.
+ */
+function decisions(server: Harness, rows: readonly NewDecision[]): void {
+  for (const row of rows) {
+    recordDecision(server.database, row);
+  }
 }
 
 /** A fresh directory for this test's credentials, and nobody else's. */
@@ -613,6 +640,18 @@ describe("a session", () => {
 /** The same line with whichever key it named taken out; a kid differs per server. */
 function withoutKid(text: string): string {
   return text.replace(/signing with \S+/, "signing with <kid>");
+}
+
+/**
+ * The same description with the moment it was gathered taken out.
+ *
+ * A status carries when it was worked out, and two of them worked out a
+ * fraction of a second apart carry different moments. That is the field doing
+ * its job rather than the two paths disagreeing, so it is the one thing lifted
+ * out before they are compared.
+ */
+function withoutMoment(text: string): string {
+  return text.replace(/as of \S+/, "as of <moment>");
 }
 
 describe("user list", () => {
@@ -1026,6 +1065,201 @@ describe("signing keys", () => {
     expect(listed.out).toContain(
       (overProtocol.out.split("\n")[0] ?? "").replace("signing with ", ""),
     );
+  });
+});
+
+describe("status", () => {
+  it("describes the same server from a storage root and from a session", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+
+    const onDisk = await invoke([
+      "status",
+      "--root",
+      server.root,
+      // The one thing a storage root does not record, so both halves are aimed
+      // at the port this harness would have checked. Nothing answers on it,
+      // which is what makes the two agree that loreserver is absent.
+      "--health-port",
+      String(server.healthPort),
+    ]);
+    const overProtocol = await invoke(["status", "--server", server.address]);
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.code).toBe(0);
+    // Everything but the moment, which is the one line that cannot agree: the
+    // two were gathered a fraction of a second apart, and saying so is the
+    // point of printing it at all.
+    expect(withoutMoment(overProtocol.out)).toBe(withoutMoment(onDisk.out));
+    expect(overProtocol.out).toContain(server.fingerprint);
+    expect(overProtocol.out).toContain("not answering");
+    // A store that is not there yet has no size rather than a size of nought.
+    expect(overProtocol.out).toContain("unknown");
+    expect(overProtocol.out).toContain("accounts      1");
+    // Said rather than implied, because the answer is worked out when somebody
+    // asks and then kept for a stated moment.
+    expect(overProtocol.out).toContain("as of ");
+    expect(overProtocol.out).toContain("kept for 10 seconds");
+  });
+
+  it("counts what the server holds now, not what it held when it started", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await account(server, "bob");
+    createProject(server.database, {
+      id: newProjectId(),
+      name: "harbour",
+      // A project's creator is an account id rather than a name, which is what
+      // makes this row one the server would have written itself.
+      createdBy: requireUser(server.database, "ada").id,
+    });
+    recordDecision(server.database, {
+      username: "bob",
+      resource: "harbour",
+      allowed: false,
+      detail: "no grant",
+    });
+    await signedIn(server);
+
+    const { code, out, err } = await invoke(["status", "--server", server.address]);
+
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    expect(out).toContain("accounts      2");
+    expect(out).toContain("projects      1");
+    expect(out).toContain("decisions     1");
+  });
+
+  it("refuses a health port written beside an address rather than dropping it", async () => {
+    const { code, err } = await invoke([
+      "status",
+      "--server",
+      "team.example.lan:41402",
+      "--health-port",
+      "41339",
+    ]);
+
+    expect(code).toBe(2);
+    expect(err).toContain("--health-port");
+    expect(err).toContain("--root");
+  });
+});
+
+describe("audit", () => {
+  it("reads the same decisions from a storage root and from a session", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    // A fixed clock, so the rows are in a known order and the two paths are
+    // compared on the same three decisions rather than on whatever a
+    // millisecond boundary did to them.
+    decisions(server, [
+      { at: 1_000, username: "ada", resource: "harbour", allowed: true, detail: "owner" },
+      { at: 2_000, username: "bob", resource: "harbour", allowed: false, detail: "no grant" },
+      { at: 3_000, username: "ada", resource: "lighthouse", allowed: true, detail: "owner" },
+    ]);
+    await signedIn(server);
+
+    const onDisk = await invoke(["audit", "--root", server.root]);
+    const overProtocol = await invoke(["audit", "--server", server.address]);
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.code).toBe(0);
+    expect(overProtocol.out).toBe(onDisk.out);
+    // Newest first, which is the order somebody looking for a refusal reads in.
+    expect(overProtocol.out.split("\n")[0]).toContain("lighthouse");
+    expect(overProtocol.out).toContain("refused");
+    expect(overProtocol.out).toContain("no grant");
+  });
+
+  it("says so rather than printing nothing when no decision has been made", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+
+    const onDisk = await invoke(["audit", "--root", server.root]);
+    const overProtocol = await invoke(["audit", "--server", server.address]);
+
+    expect(onDisk.code).toBe(0);
+    expect(overProtocol.code).toBe(0);
+    expect(overProtocol.out).toBe(onDisk.out);
+    expect(overProtocol.out).toContain("no decisions yet");
+  });
+
+  it("prints as many rows as were asked for, paging past what one answer holds", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    // More than the two hundred a server will answer with at once, so a command
+    // that asked once and printed what it was given comes back short here — and
+    // comes back short only on the path that goes over the wire, which is the
+    // failure this is watching for.
+    decisions(
+      server,
+      Array.from({ length: 300 }, (_, index) => ({
+        at: 1_000 + index,
+        username: "ada",
+        resource: "harbour",
+        allowed: true,
+        detail: "owner",
+      })),
+    );
+    await signedIn(server);
+
+    const onDisk = await invoke(["audit", "--root", server.root, "--limit", "250"]);
+    const overProtocol = await invoke(["audit", "--server", server.address, "--limit", "250"]);
+
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.code).toBe(0);
+    expect(onDisk.out.trimEnd().split("\n")).toHaveLength(250);
+    expect(overProtocol.out).toBe(onDisk.out);
+  });
+
+  it("reads back past a screenful of allowances to find a refusal", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    // One refusal, older than two hundred and fifty allowances. It is what
+    // somebody opening this is looking for and it is nowhere near the first
+    // page, which is the whole argument for the flag.
+    decisions(server, [
+      { at: 1_000, username: "bob", resource: "harbour", allowed: false, detail: "expired" },
+      ...Array.from({ length: 250 }, (_, index) => ({
+        at: 2_000 + index,
+        username: "ada",
+        resource: "harbour",
+        allowed: true,
+        detail: "owner",
+      })),
+    ]);
+    await signedIn(server);
+
+    const onDisk = await invoke(["audit", "--root", server.root, "--refused"]);
+    const overProtocol = await invoke(["audit", "--server", server.address, "--refused"]);
+
+    expect(overProtocol.err).toBe("");
+    expect(overProtocol.code).toBe(0);
+    expect(overProtocol.out).toBe(onDisk.out);
+    expect(overProtocol.out.trimEnd().split("\n")).toHaveLength(1);
+    expect(overProtocol.out).toContain("expired");
+  });
+
+  it("says nothing was refused rather than that nothing happened", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    decisions(server, [
+      { at: 1_000, username: "ada", resource: "harbour", allowed: true, detail: "owner" },
+    ]);
+    await signedIn(server);
+
+    const onDisk = await invoke(["audit", "--root", server.root, "--refused"]);
+    const overProtocol = await invoke(["audit", "--server", server.address, "--refused"]);
+
+    expect(overProtocol.code).toBe(0);
+    expect(overProtocol.out).toBe(onDisk.out);
+    // The stronger of the two empty sentences: the whole of what is kept was
+    // read, so this is a fact about the server rather than about the page.
+    expect(overProtocol.out).toContain("nothing on record was refused");
   });
 });
 

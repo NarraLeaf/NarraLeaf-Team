@@ -19,7 +19,13 @@
  * missing one leaves behind, is the command's business — see the renderers in
  * src/user.ts and its neighbours, which are called from both paths.
  */
-import { TEAM_METHODS } from "@narraleaf/team-protocol";
+import {
+  TEAM_METHODS,
+  type TeamAdminDecision,
+  type TeamAdminLoreserver,
+  type TeamAdminReach,
+  type TeamAdminStatus,
+} from "@narraleaf/team-protocol";
 
 /** An answer as a record, or an empty one when it was not even an object. */
 function objectOf(value: unknown): Record<string, unknown> {
@@ -37,6 +43,12 @@ function malformed(method: string, what: string): Error {
 function optionalText(row: Record<string, unknown>, name: string): string | undefined {
   const value = row[name];
   return typeof value === "string" ? value : undefined;
+}
+
+/** A number field, or undefined where it is absent or is something else. */
+function optionalNumber(row: Record<string, unknown>, name: string): number | undefined {
+  const value = row[name];
+  return typeof value === "number" ? value : undefined;
 }
 
 /** A boolean field, false where it is absent. Every flag on this wire is one or the other. */
@@ -259,4 +271,164 @@ export function readKeys(method: string, answer: unknown): readonly ListedKey[] 
     }
     return { kid, retired: flag(key, "retired"), signing: flag(key, "signing") };
   });
+}
+
+/**
+ * What loreserver is, out of a status.
+ *
+ * `healthy` is read as a flag rather than insisted on, for the reason every
+ * other flag here is: an answer that omits it is an answer saying no, and
+ * "loreserver did not answer" is what a server says when it did not answer.
+ */
+function readLoreserver(method: string, value: unknown): TeamAdminLoreserver {
+  const lore = objectOf(value);
+  const version = optionalText(lore, "version");
+  const storageRoot = optionalText(lore, "storageRoot");
+  if (version === undefined || storageRoot === undefined) {
+    throw malformed(method, "without loreserver's version and where it keeps what it holds");
+  }
+  const storageBytes = optionalNumber(lore, "storageBytes");
+  return {
+    version,
+    healthy: flag(lore, "healthy"),
+    storageRoot,
+    // Left out rather than carried as undefined, because the two are different
+    // facts on this field: a store that could not be added up has no size, and
+    // one written in as undefined is a size somebody would go looking for.
+    ...(storageBytes === undefined ? {} : { storageBytes }),
+  };
+}
+
+/** The addresses out of a status, and the ports that server is holding locally. */
+function readReach(method: string, value: unknown): TeamAdminReach {
+  const reach = objectOf(value);
+  const signIn = optionalText(reach, "signIn");
+  const data = optionalText(reach, "data");
+  const fingerprint = optionalText(reach, "fingerprint");
+  if (signIn === undefined || data === undefined || fingerprint === undefined) {
+    throw malformed(method, "without the addresses somebody reaches it at");
+  }
+  const listed = reach["loopback"];
+  if (!Array.isArray(listed)) {
+    throw malformed(method, "without the ports it holds on the loopback");
+  }
+  return {
+    signIn,
+    data,
+    fingerprint,
+    loopback: listed.map((row: unknown) => {
+      const entry = objectOf(row);
+      const port = optionalNumber(entry, "port");
+      const what = optionalText(entry, "what");
+      if (port === undefined || what === undefined) {
+        throw malformed(method, "with a loopback port that has no number or no name");
+      }
+      return { port, what };
+    }),
+  };
+}
+
+/**
+ * What `admin.server.status` answers with, read as the type the server built it.
+ *
+ * The wire type rather than a shape declared again here, which is the opposite
+ * of what the listings above do and is deliberate. A listing is narrowed on the
+ * way in, so that a server too old to carry a field and a row that has none read
+ * alike. A status is not narrowed at all, because the other half of
+ * `nlteam status` produces one of these by running the same collection the
+ * server runs, and both are handed to one renderer. Two spellings of this struct
+ * would be the two paths agreeing for exactly as long as nobody edited either.
+ *
+ * Every field the contract calls required is checked. An answer missing one
+ * would otherwise be a blank where a version should be, or the word "undefined"
+ * in the middle of a description of a server, which is the reading an operator
+ * is least able to check.
+ */
+export function readServerStatus(answer: unknown): TeamAdminStatus {
+  const method = TEAM_METHODS.adminServerStatus;
+  const status = objectOf(answer);
+  const gatheredAt = optionalNumber(status, "gatheredAt");
+  const freshnessMs = optionalNumber(status, "freshnessMs");
+  const version = optionalText(status, "version");
+  const root = optionalText(status, "root");
+  if (
+    gatheredAt === undefined ||
+    freshnessMs === undefined ||
+    version === undefined ||
+    root === undefined
+  ) {
+    throw malformed(method, "without its version, its storage root and when it was gathered");
+  }
+  const accounts = optionalNumber(status, "accounts");
+  const projects = optionalNumber(status, "projects");
+  const decisions = optionalNumber(status, "decisions");
+  const signingKeys = optionalNumber(status, "signingKeys");
+  if (
+    accounts === undefined ||
+    projects === undefined ||
+    decisions === undefined ||
+    signingKeys === undefined
+  ) {
+    throw malformed(method, "without the counts of what it holds");
+  }
+  return {
+    gatheredAt,
+    freshnessMs,
+    version,
+    root,
+    loreserver: readLoreserver(method, status["loreserver"]),
+    reach: readReach(method, status["reach"]),
+    accounts,
+    projects,
+    decisions,
+    signingKeys,
+  };
+}
+
+/** One page of the decisions, and where the next one carries on from. */
+export interface ListedDecisionPage {
+  readonly decisions: readonly TeamAdminDecision[];
+  /** Opaque, and absent when this page is the end of the log. */
+  readonly cursor: string | undefined;
+}
+
+/**
+ * A page of `admin.audit.list`, newest first as the method sends them.
+ *
+ * The rows are the wire type, for the reason a status is: the other half of
+ * `nlteam audit` reads the same rows out of the table beside the server and the
+ * two are printed by one function.
+ */
+export function readDecisionPage(answer: unknown): ListedDecisionPage {
+  const method = TEAM_METHODS.adminAuditList;
+  const value = objectOf(answer);
+  const listed = value["decisions"];
+  if (!Array.isArray(listed)) {
+    throw malformed(method, "without a list of decisions");
+  }
+  return {
+    decisions: listed.map((row: unknown) => {
+      const decision = objectOf(row);
+      const id = optionalNumber(decision, "id");
+      const at = optionalNumber(decision, "at");
+      const username = optionalText(decision, "username");
+      const resource = optionalText(decision, "resource");
+      const detail = optionalText(decision, "detail");
+      if (
+        id === undefined ||
+        at === undefined ||
+        username === undefined ||
+        resource === undefined ||
+        detail === undefined
+      ) {
+        throw malformed(method, "with a decision that is missing when, who or about what");
+      }
+      // Read as a flag, so that an answer which omits it is a refusal rather
+      // than an allowance. Of the two ways to be wrong about a decision nobody
+      // can check any more, showing a refusal that was an allowance is the one
+      // somebody investigates; the other is the one nobody ever sees.
+      return { id, at, username, resource, allowed: flag(decision, "allowed"), detail };
+    }),
+    cursor: optionalText(value, "cursor"),
+  };
 }
