@@ -120,6 +120,8 @@ between programs on the server machine and are bound to the loopback.
 | `nlteam up` | Install and run `loreserver`, and serve the sign-in endpoint |
 | `nlteam trust` | Show this server's certificate authority, or install it |
 | `nlteam init <name>` | Make the first account, on a server with none |
+| `nlteam login <server> <name>` | Sign in to a server, so this machine can administer it |
+| `nlteam logout <server>` | Forget one server's token and its authority |
 | `nlteam user create <name>` | Make an account |
 | `nlteam user list` | List the accounts |
 | `nlteam user disable\|enable <name>` | Stop an account, or let it back in |
@@ -130,6 +132,29 @@ between programs on the server machine and are bound to the loopback.
 | `nlteam project list` | List the projects |
 | `nlteam settings list\|set <key> <value>` | Show or change the token lifetimes and this server's name |
 | `nlteam key list\|rotate` | Show the signing keys, or sign with a new one |
+
+Most of them take `--root <path>`, the directory this server keeps its files in,
+which means being logged into the machine it runs on. `login` is how that stops
+being the only way:
+
+```sh
+printf '%s' 'the password' | nlteam login team.example.com:41402 ada
+nlteam project list --server team.example.com:41402
+```
+
+`login` exchanges a password for a token over TLS, pins the certificate
+authority the server presented — printing its fingerprint to be compared against
+`nlteam trust` run on the server itself — and keeps both under this account's own
+configuration directory rather than under any storage root. `--fingerprint` names
+what to expect instead, for a deployment that must trust nothing it was not told
+to. `project list` takes `--server` today and the rest of the administrative
+commands will follow; each of them is a method the protocol already has, because
+a command line that grew a verb the protocol does not have would be one Studio's
+own management surface could never catch up with.
+
+`up`, `init` and `trust` take `--root` alone and always will. They are what a
+server is rescued with, and a rescue that worked only over the thing being
+rescued would not be one.
 
 `nlteam --help` prints the options for each.
 [operations.md](docs/operations.md) is the same ground at length.

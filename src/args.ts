@@ -6,6 +6,7 @@
  */
 import { isIP } from "node:net";
 
+import { parseServerAddress } from "./client/config.js";
 import { DEFAULT_IDENTITY } from "./identity/config.js";
 import {
   isLifetimeKey,
@@ -39,6 +40,24 @@ export interface IdentityOverrides {
   readonly dataPort?: number;
   readonly hostnames?: readonly string[];
 }
+
+/**
+ * Where a command does its work.
+ *
+ * The two hosts of this system divide by who is asking rather than by what is
+ * asked, and this is where that division reaches the command line. A **root** is
+ * a storage root on this machine, opened directly: it is how a server is rescued
+ * when the protocol is not answering, and it is the only thing `init`, `up` and
+ * `trust` will ever take. A **server** is an address and a session: it is how a
+ * server is administered from anywhere else, by somebody who has logged in.
+ *
+ * They do not fall back to one another in either direction. A command given an
+ * address it has no credentials for says to log in; it does not quietly read
+ * whatever database happens to be under the current directory.
+ */
+export type CommandTarget =
+  | { readonly kind: "root"; readonly root: string }
+  | { readonly kind: "server"; readonly server: string };
 
 /** What a command line asked the program to do. */
 export type Invocation =
@@ -114,8 +133,24 @@ export type Invocation =
       readonly dataPort: number;
       readonly overrides: IdentityOverrides;
     }
-  /** List the projects this server holds. */
-  | { readonly kind: "project-list"; readonly root: string }
+  /** List the projects a server holds, over the protocol or off its own disk. */
+  | { readonly kind: "project-list"; readonly target: CommandTarget }
+  /**
+   * Exchange a password for a token on one server, and keep what reaching it takes.
+   *
+   * The address is the one an author is given, which is also the one whose
+   * certificate authority is pinned. The username is a positional for the reason
+   * every other account name in this program is one.
+   */
+  | {
+      readonly kind: "login";
+      readonly server: string;
+      readonly username: string;
+      /** The authority this run was told to expect, and nothing else will do. */
+      readonly fingerprint: string | undefined;
+    }
+  /** Forget one server's token and the authority it was obtained under. */
+  | { readonly kind: "logout"; readonly server: string }
   /** Show the settings this Team server keeps in its database. */
   | { readonly kind: "settings-list"; readonly root: string }
   /**
@@ -178,6 +213,14 @@ function missingRoot(command: string): Invocation {
  */
 const ENVIRONMENT: Readonly<Record<string, string>> = {
   "--root": "NLTEAM_ROOT",
+  // The other half of where a command works. A deployment that administers a
+  // server from a container sets this and never writes --server, exactly as one
+  // that runs the server sets NLTEAM_ROOT and never writes --root.
+  "--server": "NLTEAM_SERVER",
+  // What an automated sign-in was told to trust. It is here rather than left to
+  // the command line because the deployment that most needs to name a
+  // fingerprint is the one that composes no command line at all.
+  "--fingerprint": "NLTEAM_FINGERPRINT",
   "--issuer": "NLTEAM_ISSUER",
   "--audience": "NLTEAM_AUDIENCE",
   "--auth-origin": "NLTEAM_AUTH_ORIGIN",
@@ -229,6 +272,63 @@ function optionValue(tokens: Tokens, env: NodeJS.ProcessEnv, option: string): st
 /** The storage root a command was given, on the line or in the environment. */
 function rootOf(tokens: Tokens, env: NodeJS.ProcessEnv): string | undefined {
   return optionValue(tokens, env, "--root");
+}
+
+/**
+ * An address, in the one spelling everything files it under.
+ *
+ * Returns a sentence instead when it was not one, so that a mistyped address is
+ * refused where the command line is read rather than by whatever tried to dial
+ * it.
+ */
+function addressOf(text: string): string | { message: string } {
+  try {
+    return parseServerAddress(text);
+  } catch (error) {
+    return { message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Where one command is to do its work: a storage root, or a server.
+ *
+ * A flag beats a variable, which is the rule every option in this file is read
+ * by. What is not that rule is the pair of refusals: naming both is refused
+ * rather than settled, because the two do entirely different things and there is
+ * no reading of `--root /srv/team --server team.example.lan` that is obviously
+ * what somebody meant. The same goes for a container with both variables set —
+ * choosing one silently is how an operator comes to administer the wrong server.
+ *
+ * Returns a sentence instead when the command line named neither, or both.
+ */
+function targetOf(tokens: Tokens, env: NodeJS.ProcessEnv, command: string): CommandTarget | string {
+  const namedRoot = tokens.values.get("--root");
+  const namedServer = tokens.values.get("--server");
+  if (namedRoot !== undefined && namedServer !== undefined) {
+    return (
+      `${command} takes --root or --server, not both: --root works on a storage root on ` +
+      "this machine, and --server speaks to a server over the network"
+    );
+  }
+  const chosen = namedServer ?? envValue(env, "--server");
+  const root = namedRoot ?? envValue(env, "--root");
+  if (namedServer === undefined && namedRoot === undefined && chosen !== undefined && root !== undefined) {
+    return (
+      `NLTEAM_SERVER and NLTEAM_ROOT are both set, so ${command} cannot tell which was ` +
+      "meant. Name one of them with --server or --root."
+    );
+  }
+  if (namedServer !== undefined || (namedRoot === undefined && chosen !== undefined)) {
+    const address = addressOf(chosen as string);
+    return typeof address === "string" ? { kind: "server", server: address } : address.message;
+  }
+  if (root !== undefined) {
+    return { kind: "root", root };
+  }
+  return (
+    `${command} needs --root <path> or NLTEAM_ROOT, the directory Team keeps its files in, ` +
+    "or --server <host:port> to reach a server this account has logged in to"
+  );
 }
 
 /**
@@ -882,7 +982,10 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
   }
 
   if (verb === "list") {
-    const result = readTokens(rest, ["--root"]);
+    // The first command that takes either half of the command line. What it
+    // asks for is the same question on both paths — every project this server
+    // holds — which is why it is the one that proves the seam.
+    const result = readTokens(rest, ["--root", "--server"]);
     if (result.kind !== "tokens") {
       return result.kind === "help" ? { kind: "help" } : error(result.message);
     }
@@ -891,14 +994,63 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
     if (extra !== undefined) {
       return error(`unexpected argument: ${extra}`);
     }
-    const root = rootOf(tokens, env);
-    if (root === undefined) {
-      return missingRoot("project list");
-    }
-    return { kind: "project-list", root };
+    const target = targetOf(tokens, env, "project list");
+    return typeof target === "string" ? error(target) : { kind: "project-list", target };
   }
 
   return error(`unknown project command: ${verb}`);
+}
+
+/** Parse the arguments that follow `login`. */
+function parseLogin(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
+  const result = readTokens(argv, ["--fingerprint"]);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  const { tokens } = result;
+
+  const [server, username, extra] = tokens.positionals;
+  if (server === undefined) {
+    return error(
+      "login needs the address of a server, for example team.example.lan:41402, and the " +
+        "username to sign in as",
+    );
+  }
+  if (username === undefined) {
+    return error("login needs the username to sign in as, after the address");
+  }
+  if (extra !== undefined) {
+    return error(`unexpected argument: ${extra}`);
+  }
+  const address = addressOf(server);
+  if (typeof address !== "string") {
+    return error(address.message);
+  }
+  return {
+    kind: "login",
+    server: address,
+    username,
+    fingerprint: optionValue(tokens, env, "--fingerprint"),
+  };
+}
+
+/** Parse the arguments that follow `logout`. */
+function parseLogout(argv: readonly string[]): Invocation {
+  const result = readTokens(argv, []);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  const { tokens } = result;
+
+  const [server, extra] = tokens.positionals;
+  if (server === undefined) {
+    return error("logout needs the address of a server this account is signed in to");
+  }
+  if (extra !== undefined) {
+    return error(`unexpected argument: ${extra}`);
+  }
+  const address = addressOf(server);
+  return typeof address === "string" ? { kind: "logout", server: address } : error(address.message);
 }
 
 /** Parse the arguments that follow `settings`. */
@@ -1060,6 +1212,10 @@ export function parseArgs(
       return parseUp(rest, env);
     case "init":
       return parseInit(rest, env);
+    case "login":
+      return parseLogin(rest, env);
+    case "logout":
+      return parseLogout(rest);
     case "user":
       return parseUser(rest, env);
     case "token":

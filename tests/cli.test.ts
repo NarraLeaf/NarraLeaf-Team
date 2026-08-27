@@ -77,6 +77,29 @@ describe("run", () => {
     expect(out).toContain("--health-port");
   });
 
+  it("documents signing in to a server, and where the credentials go", async () => {
+    const { out } = await invoke(["--help"]);
+
+    // Where a token is kept is not a detail: it is what somebody has to back
+    // up, mount into a container, or delete when they leave a machine.
+    expect(out).toContain("login <server> <username>");
+    expect(out).toContain("logout <server>");
+    expect(out).toContain("--fingerprint <sha256>");
+    expect(out).toContain("NLTEAM_CONFIG_DIR");
+    expect(out).toContain("%APPDATA%\\nlteam");
+    expect(out).toContain("~/.config/nlteam");
+  });
+
+  it("documents --server beside --root, and which commands take only one", async () => {
+    const { out } = await invoke(["--help"]);
+
+    expect(out).toContain("--server <host:port>");
+    expect(out).toContain("NLTEAM_SERVER");
+    // The rescue commands are named as such, because a reader deciding how to
+    // administer a server from elsewhere needs to know what still cannot be.
+    expect(out).toContain("up, init and trust take --root alone");
+  });
+
   it("fails with one line on stderr for an unknown argument", async () => {
     const { code, out, err } = await invoke(["--nonsense"]);
 

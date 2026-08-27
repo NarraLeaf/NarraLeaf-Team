@@ -5,10 +5,21 @@
  * rows in Team's database. There is nothing here about who may reach what,
  * because every account of this server reaches every project on it — see
  * ./projects/registry.ts.
+ *
+ * `project list` has two paths and one output. Given `--root` it opens the
+ * database beside the server, which is what somebody logged into that machine
+ * has and what still works when nothing is answering. Given `--server` it calls
+ * `projects.list` on a session, which is what everybody else has. **The method
+ * already exists**: this command was wired to it rather than given a route of
+ * its own, because a command line that grew a verb the protocol does not have
+ * would be one Studio's management surface could never catch up with.
  */
 import type { DatabaseSync } from "node:sqlite";
 
+import { TEAM_METHODS } from "@narraleaf/team-protocol";
+
 import type { WriteText } from "./cli.js";
+import { withSession } from "./client/server.js";
 import { identityConfig, type IdentityConfig } from "./identity/config.js";
 import { openMigratedDatabase } from "./identity/database.js";
 import { KeyStore } from "./identity/keys.js";
@@ -41,6 +52,40 @@ export interface ProjectCreateOptions {
 
 export interface ProjectListOptions {
   readonly root: string;
+}
+
+export interface ProjectListOnServerOptions {
+  /** The address, as src/client/config.ts writes one. */
+  readonly server: string;
+}
+
+/** One row of the list, whichever path it was read by. */
+interface ProjectRow {
+  readonly name: string;
+  readonly id: string;
+  /** Who made it, or undefined for an account the server no longer has. */
+  readonly madeBy: string | undefined;
+}
+
+/**
+ * The list, or the sentence that stands in for an empty one.
+ *
+ * Written once and called from both paths, so that a person who administers one
+ * server over ssh and another over the protocol is reading the same thing. An
+ * account that no longer exists leaves the column blank rather than showing an
+ * id: over the protocol there is no id to show, and a list that said different
+ * things on the two paths would be worse than one that says less on both.
+ */
+function renderProjects(rows: readonly ProjectRow[], stdout: WriteText): void {
+  if (rows.length === 0) {
+    stdout("no projects yet. Make one with project create <name>.\n");
+    return;
+  }
+  const width = Math.max(...rows.map((row) => row.name.length));
+  for (const row of rows) {
+    const line = `${row.name.padEnd(width)}  ${row.id}  ${row.madeBy ?? ""}`;
+    stdout(`${line.trimEnd()}\n`);
+  }
 }
 
 /**
@@ -142,7 +187,7 @@ export async function projectCreate(
   }
 }
 
-/** Every project, or every project one person can reach. */
+/** Every project, read out of the database beside the server. */
 export async function projectList(
   options: ProjectListOptions,
   stdout: WriteText,
@@ -152,18 +197,18 @@ export async function projectList(
   const database = await openMigratedDatabase(layout.databasePath);
 
   try {
-    const projects = listProjects(database);
-    if (projects.length === 0) {
-      stdout("no projects yet. Make one with project create <name>.\n");
-      return 0;
-    }
     const names = new Map(listUsers(database).map((user) => [user.id, user.username]));
-    const width = Math.max(...projects.map((project) => project.name.length));
-    for (const project of projects) {
-      const madeBy = names.get(project.createdBy) ?? project.createdBy;
-      stdout(`${project.name.padEnd(width)}  ${project.id}  ${madeBy}
-`);
-    }
+    renderProjects(
+      listProjects(database).map((project) => ({
+        name: project.name,
+        id: project.id,
+        // The username where there is one, and the id where the account has
+        // gone: this side has an id to fall back on, and printing it is better
+        // than printing nothing to somebody who can look it up.
+        madeBy: names.get(project.createdBy) ?? project.createdBy,
+      })),
+      stdout,
+    );
     return 0;
   } catch (error) {
     stderr(`nlteam: ${describeError(error)}\n`);
@@ -171,4 +216,79 @@ export async function projectList(
   } finally {
     database.close();
   }
+}
+
+/**
+ * Every project, asked for over a session.
+ *
+ * The same question the other path asks a database, asked of the server that
+ * owns it. Nothing here knows how a session is opened, what a token is or which
+ * certificate authority it was verified against — that is all one call into
+ * src/client/server.ts, which is the seam the rest of the administrative
+ * commands will be wired through.
+ */
+export async function projectListOverProtocol(
+  options: ProjectListOnServerOptions,
+  stdout: WriteText,
+  stderr: WriteText,
+): Promise<number> {
+  try {
+    const answer = await withSession(options.server, async (session) => {
+      return await session.call(TEAM_METHODS.projectsList);
+    });
+    const projects = readProjectList(answer);
+    renderProjects(
+      projects.map((project) => ({
+        name: project.name,
+        id: project.id,
+        // Absent means the account that made it is gone. There is no id on this
+        // side to fall back on, and inventing one would be a claim.
+        madeBy: project.createdBy,
+      })),
+      stdout,
+    );
+    return 0;
+  } catch (error) {
+    // Every refusal that can arrive here — a token no longer good, a method this
+    // build does not answer, a certificate that no longer chains — carries the
+    // sentence somebody has to read. None of them is a stack trace.
+    stderr(`nlteam: ${describeError(error)}\n`);
+    return 1;
+  }
+}
+
+/** What one row of the answer has to be for this to print it. */
+interface ListedProject {
+  readonly id: string;
+  readonly name: string;
+  readonly createdBy: string | undefined;
+}
+
+/**
+ * Read the answer, refusing one that is not the shape the contract describes.
+ *
+ * Checked rather than cast. A server is a peer over a network, and a client that
+ * assumed the shape of an answer would report a protocol that had moved as a row
+ * of the word "undefined".
+ */
+function readProjectList(answer: unknown): readonly ListedProject[] {
+  const value =
+    typeof answer === "object" && answer !== null ? (answer as Record<string, unknown>) : {};
+  const listed = value["projects"];
+  if (!Array.isArray(listed)) {
+    throw new Error(`that server answered ${TEAM_METHODS.projectsList} without a list of projects`);
+  }
+  return listed.map((row: unknown) => {
+    const project =
+      typeof row === "object" && row !== null ? (row as Record<string, unknown>) : {};
+    const id = project["id"];
+    const name = project["name"];
+    if (typeof id !== "string" || typeof name !== "string") {
+      throw new Error(
+        `that server answered ${TEAM_METHODS.projectsList} with a project that has no id or name`,
+      );
+    }
+    const createdBy = project["createdBy"];
+    return { id, name, createdBy: typeof createdBy === "string" ? createdBy : undefined };
+  });
 }

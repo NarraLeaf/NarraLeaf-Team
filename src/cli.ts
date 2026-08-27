@@ -5,8 +5,9 @@ import { SERVER_NAME_KEY, SETTING_KEYS } from "./identity/settings.js";
 import { DEFAULT_ROLE } from "./identity/users.js";
 import { init } from "./init.js";
 import { keyList, keyRotate } from "./key.js";
+import { login, logout } from "./login.js";
 import { DEFAULT_PORTS } from "./loreserver/layout.js";
-import { projectCreate, projectList } from "./project.js";
+import { projectCreate, projectList, projectListOverProtocol } from "./project.js";
 import { settingsList, settingsSet } from "./settings.js";
 import { tokenMint } from "./token.js";
 import { trust } from "./trust.js";
@@ -58,6 +59,10 @@ Commands:
   up                        Install and run loreserver, and serve the
                             sign-in endpoint
   init <username>           Make the first account, on a server with none
+  login <server> <username>
+                            Sign in to a server and keep what reaching it takes,
+                            so that this machine can administer it
+  logout <server>           Forget one server's token and its authority
   user list                 List the accounts
   user create <username>    Make an account
   user disable <username>   Stop an account being issued anything new
@@ -84,14 +89,23 @@ Commands:
                             fingerprint, and change nothing
 
 Every command takes --root <path>, the directory Team keeps its files in, or
-reads it from NLTEAM_ROOT when the flag is not given.
+reads it from NLTEAM_ROOT when the flag is not given. That is the storage root
+on the machine the server runs on, opened directly.
+
+project list also takes --server <host:port>, or NLTEAM_SERVER: the address of a
+server this account has logged in to, administered over the protocol from any
+machine. The two do not stand in for one another. A command given an address it
+holds no token for says to log in; it does not quietly read whatever database is
+nearby. up, init and trust take --root alone, because they are what a server is
+rescued with, and a rescue that worked only over the thing being rescued would
+not be one.
 
 Every option below has an environment variable that stands in for it, named for
-the option: --root is NLTEAM_ROOT, --data-port is NLTEAM_DATA_PORT, --hostname
-is NLTEAM_HOSTNAME (comma-separated), and so on. A flag on the line beats its
-variable, the variable beats what this server has stored, and that beats the
-built-in default. It is what lets a container be configured without composing a
-command line.
+the option: --root is NLTEAM_ROOT, --server is NLTEAM_SERVER, --data-port is
+NLTEAM_DATA_PORT, --hostname is NLTEAM_HOSTNAME (comma-separated), and so on. A
+flag on the line beats its variable, the variable beats what this server has
+stored, and that beats the built-in default. It is what lets a container be
+configured without composing a command line.
 
 Options for up:
       --health-port <port>  loreserver's HTTP health check port (default ${DEFAULT_PORTS.healthPort})
@@ -111,6 +125,15 @@ Options for trust:
 Options for init:
       --display-name <name> Name shown to other people
       --email <address>
+
+Options for login:
+      --fingerprint <sha256>
+                            The certificate authority that server must present,
+                            written as nlteam trust prints it or without the
+                            colons. Given, nothing else is accepted and nothing
+                            is printed about it, which is the path an automated
+                            deployment takes. Left out, whatever is presented is
+                            pinned and its fingerprint printed for comparing
 
 Options for user create:
       --role <name>         Group the account joins (default ${DEFAULT_ROLE}).
@@ -163,7 +186,16 @@ ${SERVER_NAME_KEY} takes the name this deployment is called in Studio, which is
 its host until somebody chooses one. The keys are
 ${SETTING_KEYS.map((key) => `  ${key}`).join("\n")}
 
-init, user create and token mint read the password from standard input.
+init, user create, token mint and login read the password from standard input.
+
+login keeps a token, the server's address and the certificate authority it
+verified against under this account's own configuration directory, never under a
+server's storage root: the token belongs to whoever signed in rather than to the
+deployment. That directory is %APPDATA%\\nlteam on Windows, ~/Library/Application
+Support/nlteam on macOS, and $XDG_CONFIG_HOME/nlteam or ~/.config/nlteam
+elsewhere; NLTEAM_CONFIG_DIR names another outright. The file is created 0600 and
+the directory 0700 where the platform has such things. More than one server may
+be signed in to at once, and logout forgets one of them.
 
 up runs until it is interrupted, and stops loreserver on its way out.`;
 
@@ -275,7 +307,23 @@ export async function run(
         stderr,
       );
     case "project-list":
-      return await projectList({ root: invocation.root }, stdout, stderr);
+      // The one command wired to both halves of the command line. Which it is
+      // was settled where the arguments were read; nothing is decided here.
+      return invocation.target.kind === "server"
+        ? await projectListOverProtocol({ server: invocation.target.server }, stdout, stderr)
+        : await projectList({ root: invocation.target.root }, stdout, stderr);
+    case "login":
+      return await login(
+        {
+          server: invocation.server,
+          username: invocation.username,
+          fingerprint: invocation.fingerprint,
+        },
+        stdout,
+        stderr,
+      );
+    case "logout":
+      return await logout({ server: invocation.server }, stdout, stderr);
     case "settings-list":
       return await settingsList({ root: invocation.root }, stdout, stderr);
     case "settings-set":
