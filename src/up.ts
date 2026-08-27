@@ -294,12 +294,17 @@ export async function up(
       database,
       keys,
       config,
+      // The root as the layout resolved it rather than as it was typed, so that
+      // what this server says about where it keeps things is the path it is
+      // actually reading and writing.
+      root: identity.root,
       // What --token-lifetime named on this command line, so that the sign-in
       // route hands out the same lifetime the exchange does. Everything else
       // about the two lifetimes is read from the database as each token is
       // minted, so changing a stored one reaches this process without a restart.
       namedLifetimes: namedTokenLifetimes(options.overrides ?? {}),
       dataPort: ports.dataPort,
+      healthPort: ports.healthPort,
       // For the token the sign-in route hands out, which travels to a machine
       // that may not yet trust this server — the same claim `nlteam token mint`
       // writes, for the same reason.

@@ -33,6 +33,7 @@ import {
   requireUser,
   revokeUserTokens,
 } from "../src/identity/users.js";
+import { DEFAULT_PORTS } from "../src/loreserver/layout.js";
 import { ProjectReadings } from "../src/projects/refresh.js";
 import {
   createProject,
@@ -118,7 +119,12 @@ async function harness(extra: ServiceFor = {}): Promise<Harness> {
     database,
     keys,
     config,
+    root,
     dataPort: config.dataPort,
+    // Nothing listens on it, so a status gathered here reports a loreserver
+    // that is not answering - which is the truth about a harness that never
+    // started one.
+    healthPort: DEFAULT_PORTS.healthPort,
     // Whatever a test wants this server to have read out of a repository. Most
     // want none, which is a server that has not got round to one yet - a state
     // the overlay methods have to answer honestly rather than as "empty".

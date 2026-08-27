@@ -38,6 +38,7 @@ import {
   SIGN_IN_REFUSED_MESSAGE,
 } from "../src/identity/users.js";
 import { DISCOVERY_PATH, type DiscoveryDocument } from "../src/identity/discovery.js";
+import { DEFAULT_PORTS } from "../src/loreserver/layout.js";
 import { ProjectReadings } from "../src/projects/refresh.js";
 import { webHandler } from "../src/web/router.js";
 import {
@@ -125,8 +126,10 @@ async function harness(
     database,
     keys,
     config,
+    root,
     ...(namedLifetimes === undefined ? {} : { namedLifetimes }),
     dataPort: config.dataPort,
+    healthPort: DEFAULT_PORTS.healthPort,
     fingerprint: FINGERPRINT,
     // One per harness. The limiter a running server uses is shared by every
     // door of one process, and two harnesses in one test run are two servers:
@@ -213,7 +216,14 @@ async function anyOptions(): Promise<TeamService> {
   const database = await openMigratedDatabase(layout.databasePath);
   openDatabases.push(database);
   const config = identityConfig({});
-  return { database, keys: await KeyStore.open(layout.keysDir), config, dataPort: config.dataPort };
+  return {
+    database,
+    keys: await KeyStore.open(layout.keysDir),
+    config,
+    root,
+    dataPort: config.dataPort,
+    healthPort: DEFAULT_PORTS.healthPort,
+  };
 }
 
 describe("what this build says it can do", () => {

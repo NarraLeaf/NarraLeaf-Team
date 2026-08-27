@@ -62,6 +62,17 @@ export interface TeamService {
   readonly keys: KeyStore;
   readonly config: IdentityConfig;
   /**
+   * The storage root this server was brought up with.
+   *
+   * Everything Team writes is underneath it — the database, the signing keys,
+   * the certificates, and the store loreserver keeps its repositories in. It is
+   * named on the command line that started `up` and derived from nothing, so
+   * anything here that has to say where this server keeps what it keeps has to
+   * be handed it: there is no port, host name or setting it can be worked out
+   * from.
+   */
+  readonly root: string;
+  /**
    * Token lifetimes named on the command line this server was started with.
    *
    * Absent is the ordinary case, and then the stored settings decide. What an
@@ -73,6 +84,16 @@ export interface TeamService {
   readonly namedLifetimes?: Partial<TokenLifetimes>;
   /** The port loreserver serves gRPC on, for creating a repository. */
   readonly dataPort: number;
+  /**
+   * The port loreserver answers its health check on.
+   *
+   * Beside {@link dataPort} because between them they are the whole of how this
+   * process reaches the one it supervises: one for the work, one for the
+   * question "are you there". Asking it is a request over the loopback rather
+   * than a lookup, which is why nothing here asks it on a schedule — see
+   * src/team/status.ts.
+   */
+  readonly healthPort: number;
   /**
    * The fingerprint of this server's authority, absent until one exists.
    *
