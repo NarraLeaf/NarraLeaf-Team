@@ -46,9 +46,11 @@ import {
   setServerName,
   setTokenLifetime,
   SETTING_KEYS,
+  SIGN_IN_LIFETIME_KEY,
   storedPublishLineage,
   storedServerName,
   storedTokenLifetimes,
+  type LifetimeKey,
   type SettingChange,
   type SettingKey,
 } from "./identity/settings.js";
@@ -102,23 +104,49 @@ const MINIMUM_VALUE_WIDTH = 12;
  */
 const THE_SERVERS_HOST = "the server's host";
 
-/** One setting as it stands, in the words somebody would have typed. */
+/**
+ * One setting as it stands, in the words somebody would have typed.
+ *
+ * A branch per kind of setting and a refusal for a key that has none, which is
+ * the shape `admin.settings.set` is written to and the shape everything here
+ * that reads or writes one keeps. The settings are not all of a kind — a name,
+ * a word out of a closed set, a duration — and a fall-through would read a new
+ * one as a duration: `lifetimeUnder` answers with the repository lifetime for
+ * any key that is not the sign-in one, so a setting added to this server and
+ * not to this function would print a plausible wrong number rather than say
+ * anything was amiss.
+ *
+ * The last branch is unreachable while the union is what it is, and the type
+ * checker says so. It is written out anyway because the type checker is not who
+ * this has to be legible to, and because the failure it stands in the way of is
+ * a value nobody can tell is wrong.
+ */
 function settingValue(database: DatabaseSync, key: SettingKey): string {
-  if (key === SERVER_NAME_KEY) {
-    // The host this deployment was brought up as, which `up` writes and every
-    // command that mints a token already reads — the same host the discovery
-    // document names and the same one this server's own settings surface falls
-    // back to. It was described rather than read while nothing stored it.
-    const origin = storedIdentity(database).authOrigin;
-    return storedServerName(database, origin === undefined ? THE_SERVERS_HOST : hostOf(origin));
+  switch (key) {
+    case SERVER_NAME_KEY: {
+      // The host this deployment was brought up as, which `up` writes and every
+      // command that mints a token already reads — the same host the discovery
+      // document names and the same one this server's own settings surface falls
+      // back to. It was described rather than read while nothing stored it.
+      const origin = storedIdentity(database).authOrigin;
+      return storedServerName(database, origin === undefined ? THE_SERVERS_HOST : hostOf(origin));
+    }
+    case PUBLISH_LINEAGE_KEY:
+      return storedPublishLineage(database);
+    case SIGN_IN_LIFETIME_KEY:
+    case REPOSITORY_LIFETIME_KEY:
+      // The duration in the words somebody would have typed, not the seconds
+      // the key names: 2592000 is correct and nobody can hold it up against
+      // what they set.
+      return describeDuration(lifetimeUnder(storedTokenLifetimes(database), key));
+    default: {
+      // `key` is `never` here, which is the type checker saying the branches
+      // above cover every setting there is today. The cast is what lets this
+      // sentence name the one they do not, on the day there is one.
+      const unreadable = key as SettingKey;
+      throw new Error(`this nlteam lists the ${unreadable} setting but cannot read it`);
+    }
   }
-  if (key === PUBLISH_LINEAGE_KEY) {
-    return storedPublishLineage(database);
-  }
-  // The duration in the words somebody would have typed, not the seconds
-  // the key names: 2592000 is correct and nobody can hold it up against
-  // what they set.
-  return describeDuration(lifetimeUnder(storedTokenLifetimes(database), key));
 }
 
 /** One setting on its way to a terminal, whichever path read it. */
@@ -289,9 +317,46 @@ function renderSettingChange(
     );
     return;
   }
+  // Not a fall-through but the last kind there is, and this line is what makes
+  // the type checker say so: a setting added with no sentence of its own here
+  // would refuse to compile rather than be told something untrue about tokens.
+  const lifetime: LifetimeKey = key;
   stdout("Tokens already minted keep the lifetime they were given.\n");
-  if (key === REPOSITORY_LIFETIME_KEY) {
+  if (lifetime === REPOSITORY_LIFETIME_KEY) {
     stdout(`${REPOSITORY_LIFETIME_CAUTION}\n`);
+  }
+}
+
+/**
+ * Write one setting into the database beside the server, and answer with what
+ * it now is in the words this command prints.
+ *
+ * A branch per kind of setting, and a refusal for a change this program cannot
+ * write, which is the shape {@link settingValue} reads with and the shape
+ * `admin.settings.set` writes with on the other path. A fall-through would send
+ * a new setting to `setTokenLifetime`, and what an operator would then be told
+ * is that their value was not a whole number of seconds — which reads as their
+ * value being wrong rather than as this program not knowing what to do with the
+ * setting it just offered them.
+ */
+function writtenValue(database: DatabaseSync, change: SettingChange): string {
+  switch (change.key) {
+    case SERVER_NAME_KEY:
+      return setServerName(database, change.name);
+    case PUBLISH_LINEAGE_KEY:
+      return setPublishLineage(database, change.rule);
+    case SIGN_IN_LIFETIME_KEY:
+    case REPOSITORY_LIFETIME_KEY:
+      return describeDuration(
+        lifetimeUnder(setTokenLifetime(database, change.key, change.seconds), change.key),
+      );
+    default: {
+      // `change` is `never` here, which is the type checker saying the branches
+      // above cover every kind of setting there is today. The cast is what lets
+      // this sentence name the setting on the day they no longer do.
+      const unwritable = change as SettingChange;
+      throw new Error(`this nlteam offers the ${unwritable.key} setting but cannot write it`);
+    }
   }
 }
 
@@ -306,14 +371,7 @@ export async function settingsSet(
   const { change } = options;
   try {
     const before = settingValue(database, change.key);
-    const after =
-      change.key === SERVER_NAME_KEY
-        ? setServerName(database, change.name)
-        : change.key === PUBLISH_LINEAGE_KEY
-          ? setPublishLineage(database, change.rule)
-          : describeDuration(
-              lifetimeUnder(setTokenLifetime(database, change.key, change.seconds), change.key),
-            );
+    const after = writtenValue(database, change);
     renderSettingChange(change.key, before, after, stdout);
     return 0;
   } catch (error) {
@@ -321,6 +379,35 @@ export async function settingsSet(
     return 1;
   } finally {
     database.close();
+  }
+}
+
+/**
+ * The text one change is sent as, which is a different kind of thing for each
+ * kind of setting: a name as it was typed, one word out of a closed set, or a
+ * count of seconds.
+ *
+ * A branch apiece and a refusal for a change that has none, for
+ * {@link writtenValue}'s reason. A fall-through here sends `undefined` written
+ * out as a word, and the server refuses it as a value that is not what that
+ * setting takes — a refusal about the operator's typing, arriving from a
+ * machine they have no way to look at, over a mistake that is entirely this
+ * program's.
+ */
+function sentValue(change: SettingChange): string {
+  switch (change.key) {
+    case SERVER_NAME_KEY:
+      return change.name;
+    case PUBLISH_LINEAGE_KEY:
+      return change.rule;
+    case SIGN_IN_LIFETIME_KEY:
+    case REPOSITORY_LIFETIME_KEY:
+      return String(change.seconds);
+    default: {
+      // Cast for the reason the same branch in {@link writtenValue} is.
+      const unsendable = change as SettingChange;
+      throw new Error(`this nlteam cannot say what it would write to ${unsendable.key}`);
+    }
   }
 }
 
@@ -356,15 +443,7 @@ export async function settingsSetOverProtocol(
       const written = readSetting(
         await session.call(TEAM_METHODS.adminSettingsSet, {
           label: row.label,
-          // What this setting is written as, which is a different kind of
-          // thing for each of the three: a name as it was typed, one word out
-          // of a closed set, or a count of seconds.
-          value:
-            change.key === SERVER_NAME_KEY
-              ? change.name
-              : change.key === PUBLISH_LINEAGE_KEY
-                ? change.rule
-                : String(change.seconds),
+          value: sentValue(change),
         }),
       );
       return {
