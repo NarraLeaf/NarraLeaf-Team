@@ -45,6 +45,7 @@
     "live.join",
     "live.leave",
     "live.close",
+    "live.rule",
     "live.say",
     "overlay.list",
     "overlay.put",

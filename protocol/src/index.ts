@@ -561,7 +561,29 @@ export interface TeamLiveSession {
   readonly openedAt: number;
   /** Who is in it now. Never empty: the last one out closes it. */
   readonly members: readonly TeamLiveMember[];
+  /**
+   * How somebody gets into it. Absent from a room opened by a client older than
+   * the rule, which behaves as `open` and always did.
+   */
+  readonly rule?: TeamLiveJoinRule;
 }
+
+/**
+ * How a room may be joined.
+ *
+ * ⚠ **The passcode is not in the room record and must never be put there.** A
+ * record is broadcast on the project's topic, which everybody on the project is
+ * watching, and a passcode broadcast to everybody is a passcode that has said
+ * nothing. It is answered to the window that opened the room and to nobody else -
+ * see `live.open`.
+ *
+ *  - `open` - listed on the project, and anybody who can see it may join. What
+ *    every room was before there was a rule.
+ *  - `code` - not listed to anybody who is not already in it, and joinable only
+ *    by the four digits minted when it opened. **Checked here rather than by the
+ *    client**: a client checks nothing an operator can rely on.
+ */
+export type TeamLiveJoinRule = "open" | "code";
 
 export interface TeamLiveMember {
   readonly instance: string;
@@ -1101,6 +1123,8 @@ export const TEAM_METHODS = {
   liveLeave: "live.leave",
   /** Close one outright, which only its opener may do. */
   liveClose: "live.close",
+  /** Change how one may be joined, which only its opener may do. */
+  liveRule: "live.rule",
   /** Say something to everybody in one. Kept by nobody. */
   liveSay: "live.say",
   /** What is attached to one project, and what this server last read its head to be. */
