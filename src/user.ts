@@ -30,13 +30,10 @@ import { identityLayout } from "./identity/layout.js";
 import { defaultPasswordHasher } from "./identity/passwords.js";
 import { storedTokenLifetimes } from "./identity/settings.js";
 import {
-  ADMIN_ROLE,
-  countAdmins,
   createUser,
   disableUser,
   enableUser,
   listUsers,
-  requireUser,
   revokeUserTokens,
   setAdmin,
   type UserRecord,
@@ -513,10 +510,24 @@ export async function userRevokeTokensOverProtocol(
 /**
  * Put an account in the admin group, or take it out. Returns the exit code.
  *
- * The last account in the group cannot be taken out of it. A server with no
- * admin has nobody who can put one back, and the way out of that would be to
- * edit the database by hand — so the refusal happens here, where there is
- * somebody to read it.
+ * **The last account in the group can be taken out of it here, and there is no
+ * guard against doing so.** That is deliberate, and it is written down because
+ * it reads like an omission and somebody will otherwise put one back.
+ *
+ * "This server must not be left with nobody who can administer it" is a rule of
+ * the management plane, and the management plane enforces it — see
+ * `refuseIfLastOperator` in src/team/methods/admin.ts, which refuses the same
+ * change over the protocol and names this command as the way back. Whoever runs
+ * `nlteam` holds the storage root. They are not a member of the admin group's
+ * world and are not subject to its rules: they are the plane that repairs a
+ * server the protocol can no longer reach, and a rescue plane that would not do
+ * what nothing else can do would be no rescue at all.
+ *
+ * A guard here was also an inconsistency rather than a safeguard. `user disable
+ * --root` has always disabled the only operator without a word, which leaves
+ * exactly the same server as demoting them does — so refusing one and allowing
+ * the other was two answers to one question, and the answer the command line
+ * gives is that it does as it is told.
  */
 export async function userSetAdmin(
   options: UserStateOptions & { readonly admin: boolean },
@@ -526,16 +537,6 @@ export async function userSetAdmin(
   const layout = identityLayout(options.root);
   const database = await openMigratedDatabase(layout.databasePath);
   try {
-    if (!options.admin) {
-      const user = requireUser(database, options.username);
-      if (user.groups.includes(ADMIN_ROLE) && countAdmins(database) <= 1) {
-        stderr(
-          `nlteam: ${user.username} is the only admin on this server, and a server with none ` +
-            "has nobody who can make one. Make somebody else an admin first.\n",
-        );
-        return 1;
-      }
-    }
     const user = setAdmin(database, options.username, options.admin);
     renderAdminChange(user.username, options.admin, stdout);
     return 0;
@@ -550,11 +551,12 @@ export async function userSetAdmin(
 /**
  * Put an account in the admin group, or take it out, over a session.
  *
- * The refusal that guards the last operator is the server's, not this
- * command's, and it is worded differently on purpose: the one over the protocol
- * names the command to run on the machine that holds the storage root, because
- * a person reading it in a panel is exactly the person who needs to know there
- * is a way back. It is printed as it arrived — see the note on TeamCallError.
+ * The refusal that guards the last operator lives here and nowhere else on this
+ * command: it is the server's, and this path is the only one that can meet it.
+ * It names the command to run on the machine that holds the storage root,
+ * because a person reading it in a panel is exactly the person who needs to know
+ * there is a way back — and {@link userSetAdmin} is that way back, which is why
+ * it refuses nothing. Printed as it arrived, see the note on TeamCallError.
  */
 export async function userSetAdminOverProtocol(
   options: UserOnServerOptions & { readonly admin: boolean },

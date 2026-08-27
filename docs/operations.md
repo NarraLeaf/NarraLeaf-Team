@@ -796,12 +796,14 @@ being exact about which command does what:
   could administer over the protocol and nobody who could put that right over it
   either. The refusal names the command to run on the machine that holds the
   storage root.
-- `user revoke-admin --root` refuses the last account in the group as well, and
-  says to make somebody else an admin first. That refusal is a guard against a
-  slip rather than a wall: `user grant-admin ... --root` is one line away.
-- `user disable --root` will disable the last operator, and says nothing about
-  it. `user enable ... --root` is what undoes it.
+- `user revoke-admin --root` and `user disable --root` will both do it, and say
+  nothing about it. `user grant-admin ... --root` and `user enable ... --root`
+  are what undo them.
 
-That asymmetry is the rescue plane doing its job. A server whose only operator is
-disabled or demoted is repaired from its own disk, and there is nowhere else it
+That asymmetry is the rescue plane doing its job. "This server must not be left
+with nobody who can administer it" is a rule of the management plane, enforced by
+the management plane over the protocol. Whoever runs `nlteam` holds the storage
+root, is not a member of the admin group's world, and is not subject to its
+rules — so the rescue plane does as it is told, and a server whose only operator
+is disabled or demoted is repaired from its own disk, which is the only place it
 could be repaired from.

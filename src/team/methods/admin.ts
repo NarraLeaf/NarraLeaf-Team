@@ -335,8 +335,11 @@ function password(read: Record<string, unknown>, name: string): string {
  * whole of the design. `nlteam` runs on the machine that holds the storage root:
  * it is the rescue plane, it is how a server in this state is repaired, and a
  * rescue plane that would not do what nothing else can do would be no rescue at
- * all. So the refusal names the command, because a person reading it in a panel
- * is exactly the person who needs to know there is a way back.
+ * all. Neither `user revoke-admin --root` nor `user disable --root` refuses
+ * anything — both do as they are told, because the rule this function enforces
+ * is the management plane's and whoever holds the disk is not inside it. So the
+ * refusal names the command, because a person reading it in a panel is exactly
+ * the person who needs to know there is a way back.
  */
 function refuseIfLastOperator(context: MethodContext, user: UserRecord, rescue: string): void {
   if (!isOperator(user.groups)) {

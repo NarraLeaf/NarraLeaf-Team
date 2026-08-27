@@ -47,6 +47,7 @@ import {
 import { SignInLimiter } from "../src/identity/signin.js";
 import {
   ADMIN_ROLE,
+  countEnabledAdmins,
   createUser,
   insertUser,
   listUsers,
@@ -1132,5 +1133,22 @@ describe("what a server refuses", () => {
     // exactly the person who needs to know there is one.
     expect(err).toContain("nlteam user grant-admin ada");
     expect(err).toContain("storage root");
+  });
+
+  it("refuses none of that on the machine that holds the storage root", async () => {
+    // The very change the test above will not make over the protocol, made here
+    // without a word about it. "This server must not be left with nobody who can
+    // administer it" is the management plane's rule and the management plane
+    // enforces it; whoever holds the disk is not inside that world, and is how a
+    // server left in this state is repaired.
+    const server = await harness();
+    await credentialDirectory();
+
+    const { code, out, err } = await invoke(["user", "revoke-admin", "ada", "--root", server.root]);
+
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    expect(out).toContain("no longer an admin");
+    expect(countEnabledAdmins(server.database)).toBe(0);
   });
 });

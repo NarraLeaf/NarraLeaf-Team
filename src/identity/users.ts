@@ -500,26 +500,19 @@ export function setAdmin(
   return requireUser(database, user.username);
 }
 
-/** How many accounts are in the admin group. */
-export function countAdmins(database: DatabaseSync): number {
-  const row = database
-    .prepare("SELECT COUNT(*) AS count FROM user_groups WHERE group_name = ?")
-    .get(ADMIN_ROLE);
-  return row === undefined ? 0 : integerColumn(row, "count");
-}
-
 /**
  * How many accounts are in the admin group and can still sign in.
  *
- * Beside {@link countAdmins} rather than instead of it, because the two answer
- * different questions and both are asked. The command line asks whether
- * anybody is in the group at all: it runs on the machine that holds the storage
- * root, so an operator whose account is disabled is one `nlteam user enable`
- * away from being useful again, and refusing on their account would be refusing
- * over nothing. Anything reached over the network asks whether anybody in the
- * group could still reach it, and a disabled account cannot — it is refused a
- * sign-in and every token it holds is refused too, so counting it would let the
- * last usable operator be taken away by a check that said one was left.
+ * Asked by the management plane and by nothing else: it is the one place that
+ * has to refuse a change leaving this server with no operator who can reach it,
+ * because it is the one place that would then have no way of putting that right.
+ * The command line asks nothing of the sort — it runs on the machine that holds
+ * the storage root, which is the way back from every state this count is about.
+ *
+ * Enabled rather than merely present, and that is the whole point of the join. A
+ * disabled account is refused a sign-in and every token it holds is refused too,
+ * so counting it would let the last usable operator be taken away by a check
+ * that said one was left.
  */
 export function countEnabledAdmins(database: DatabaseSync): number {
   const row = database
