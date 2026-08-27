@@ -129,7 +129,13 @@ async function harness(extra: ServiceFor = {}): Promise<Harness> {
     keys,
     config,
     root,
-    dataPort: config.dataPort,
+    // Borrowed and given back, like the health port below and for a sharper
+    // reason: several tests here assert that adopting a repository asks
+    // loreserver for nothing, and the whole of that assertion is that nothing
+    // answers on this port. Naming loreserver's usual one would leave those
+    // tests green and meaningless on any machine with a Team server running,
+    // which is where a regression would most want to hide.
+    dataPort: await unusedPort(),
     // A port this process held just long enough to learn its number and then
     // let go of, so a status gathered here reports a loreserver that is not
     // answering - which is the truth about a harness that never started one.
@@ -795,8 +801,9 @@ describe("making a project over the socket", () => {
       description: "eight months of it",
       repositoryId,
     });
-    // Adopting asks loreserver for nothing - nothing listens on the data port in
-    // these tests, so an answer at all is the assertion that none was asked for.
+    // Adopting asks loreserver for nothing - the harness dials a port it made
+    // sure nothing answers on, so an answer at all is the assertion that none
+    // was asked for.
     const project = answer["project"] as { id: string; name: string };
     expect(project).toMatchObject({ id: repositoryId, name: "driftwood" });
 
