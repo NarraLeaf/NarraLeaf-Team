@@ -13,7 +13,7 @@
  *     authorization model: every account reaches every project - see
  *     src/projects/registry.ts. The `admin/*` topics are the exception, and the
  *     reason this question is asked at all: they carry the accounts, the
- *     settings and the keys, and they are an operator's business.
+ *     settings, the keys and the refusals, and they are an operator's business.
  *
  * A topic that names a project checks the project exists. Not for secrecy - the
  * list is the same list for everybody - but because a subscription to a project
@@ -27,6 +27,7 @@ import { isOperator, type UserRecord } from "../identity/users.js";
 import type { TeamPresence } from "./presence.js";
 import {
   TOPIC_ADMIN_KEYS,
+  TOPIC_ADMIN_REFUSALS,
   TOPIC_ADMIN_SETTINGS,
   TOPIC_ADMIN_USERS,
   TOPIC_PROJECTS,
@@ -60,6 +61,7 @@ const ADMIN_TOPICS: readonly string[] = [
   TOPIC_ADMIN_USERS,
   TOPIC_ADMIN_SETTINGS,
   TOPIC_ADMIN_KEYS,
+  TOPIC_ADMIN_REFUSALS,
 ];
 
 /** Whether `topic` is one of this server's own, whoever is asking for it. */

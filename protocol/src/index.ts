@@ -341,7 +341,7 @@ export function liveTopic(sessionId: string): string {
 }
 
 /**
- * The three topics a management surface listens on.
+ * The four topics a management surface listens on.
  *
  * **Every one of them is refused to anybody who is not an operator**, which no
  * other topic on this server is: the rest are about projects, and every account
@@ -356,6 +356,25 @@ export const TOPIC_ADMIN_SETTINGS = "admin/settings";
 
 /** This server rotated its signing keys. */
 export const TOPIC_ADMIN_KEYS = "admin/keys";
+
+/**
+ * A decision this server was asked to make was **refused**.
+ *
+ * Named for what it publishes rather than for the collection it belongs to, and
+ * that is the whole design rather than a shortening. A decision is recorded on
+ * the path that answers every repository access — an afternoon of one team
+ * working is thousands of them — so a topic that fired per decision would push
+ * more frames than the rest of this protocol together, to tell a panel
+ * something it could only act on by re-reading a page it already holds. A
+ * refusal is the rare outcome and the one an operator wants put in front of
+ * them, so a refusal is what this carries.
+ *
+ * The consequence, said plainly so that nobody later reads this as a
+ * list-changed topic with events missing: **an allowed decision is published
+ * nowhere.** A client that wants the whole log pages `admin.audit.list`, and it
+ * has to, because the sequence on this topic counts refusals and not rows.
+ */
+export const TOPIC_ADMIN_REFUSALS = "admin/refusals";
 
 /* ----------------------------------------------------------------- anchors */
 
@@ -989,6 +1008,12 @@ export type TeamAdminSettingsEvent =
 export type TeamAdminKeysEvent =
   | { readonly kind: "keys-rotated"; readonly keys: readonly TeamAdminKey[] };
 
+/** What happened on the `admin/refusals` topic. Read what that topic is named for. */
+export type TeamAdminRefusalsEvent = {
+  readonly kind: "decision-refused";
+  readonly decision: TeamAdminDecision;
+};
+
 /* -------------------------------------------------------- method names */
 
 /**
@@ -1109,6 +1134,7 @@ export const CONTRACT = {
     adminUsers: TOPIC_ADMIN_USERS,
     adminSettings: TOPIC_ADMIN_SETTINGS,
     adminKeys: TOPIC_ADMIN_KEYS,
+    adminRefusals: TOPIC_ADMIN_REFUSALS,
   },
   frames: {
     fromServer: TEAM_SERVER_FRAME_KINDS,

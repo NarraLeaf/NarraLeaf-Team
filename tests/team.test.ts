@@ -54,6 +54,7 @@ import {
   projectOverlayTopic,
   projectThreadsTopic,
   TOPIC_ADMIN_KEYS,
+  TOPIC_ADMIN_REFUSALS,
   TOPIC_ADMIN_SETTINGS,
   TOPIC_ADMIN_USERS,
   TOPIC_PROJECTS,
@@ -3164,11 +3165,19 @@ describe("rotating the signing keys over the session", () => {
   });
 });
 
+/** Every topic this server publishes about itself, named once. */
+const MANAGEMENT_TOPICS = [
+  TOPIC_ADMIN_USERS,
+  TOPIC_ADMIN_SETTINGS,
+  TOPIC_ADMIN_KEYS,
+  TOPIC_ADMIN_REFUSALS,
+];
+
 describe("who may be told what this server is doing", () => {
   it("refuses a management topic to somebody who is not an operator", async () => {
     const { bob } = await administered();
 
-    for (const topic of [TOPIC_ADMIN_USERS, TOPIC_ADMIN_SETTINGS, TOPIC_ADMIN_KEYS]) {
+    for (const topic of MANAGEMENT_TOPICS) {
       expect((await bob.send("subscribe", { topic })).code, topic).toBe("refused");
     }
   });
@@ -3176,7 +3185,7 @@ describe("who may be told what this server is doing", () => {
   it("lets an operator hold every one of them", async () => {
     const { ada } = await administered();
 
-    for (const topic of [TOPIC_ADMIN_USERS, TOPIC_ADMIN_SETTINGS, TOPIC_ADMIN_KEYS]) {
+    for (const topic of MANAGEMENT_TOPICS) {
       const answer = await ada.send("subscribe", { topic });
       expect(answer.code, topic).toBeUndefined();
       expect(answer.seq, topic).toBeTypeOf("number");
@@ -3191,5 +3200,34 @@ describe("who may be told what this server is doing", () => {
 
     expect((await ada.send("subscribe", { topic: "admin/nonsense" })).code).toBe("not-found");
     expect((await bob.send("subscribe", { topic: "admin/nonsense" })).code).toBe("not-found");
+  });
+});
+
+describe("a refusal, as it reaches a session", () => {
+  it("arrives on the topic named for refusals, with the decision that was made", async () => {
+    // The authorization service pushes a refusal into this from the path that
+    // answers every repository access - see tests/authservice.test.ts for the
+    // half that decides which decisions go. What is asserted here is the other
+    // half: that a session holding the topic is handed one.
+    const { team, ada } = await administered();
+    await ada.send("subscribe", { topic: TOPIC_ADMIN_REFUSALS });
+
+    team.socket.hub.publish(TOPIC_ADMIN_REFUSALS, {
+      kind: "decision-refused",
+      decision: {
+        id: 1,
+        at: Date.now(),
+        username: "unknown",
+        resource: "harbour",
+        allowed: false,
+        detail: "expired",
+      },
+    });
+
+    await ada.until(() => ada.events.length > 0);
+    const event = ada.events[0]?.payload as { kind: string; decision: { detail: string } };
+    expect(ada.events[0]?.topic).toBe(TOPIC_ADMIN_REFUSALS);
+    expect(event.kind).toBe("decision-refused");
+    expect(event.decision.detail).toBe("expired");
   });
 });

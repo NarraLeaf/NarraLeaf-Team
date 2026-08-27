@@ -45,7 +45,8 @@ import { Supervisor, describeExit } from "./loreserver/supervisor.js";
 import { ProjectReadings } from "./projects/refresh.js";
 import { startAuthorizationService } from "./projects/service.js";
 import { createTeamSocket, type TeamSocket } from "./team/endpoint.js";
-import { projectTopic } from "./team/protocol.js";
+import { projectTopic, TOPIC_ADMIN_REFUSALS } from "./team/protocol.js";
+import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
 import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
 import { trustCommandFor } from "./tls/trust.js";
@@ -223,6 +224,15 @@ export async function up(
       // restart.
       namedLifetimes: namedTokenLifetimes(options.overrides ?? {}),
       log: (line: string) => stdout(`${line}\n`),
+      // The one way the path that answers every repository access reaches the
+      // sessions this process is holding. `team` is made further down and is
+      // read through the optional call, exactly as the reader's `onChange`
+      // below is: a refusal decided before the socket exists, or in a build
+      // that has no socket, goes to the log and to the decisions table and is
+      // told to nobody, which is what happened to every one of them until now.
+      refused: (decision: RecordedDecision) => {
+        team?.hub.publish(TOPIC_ADMIN_REFUSALS, { kind: "decision-refused", decision });
+      },
       onError: (error: Error) => stderr(`nlteam: authorization service: ${error.message}\n`),
     };
     authorization = await startAuthorizationService({ ...service, port: config.authPort });

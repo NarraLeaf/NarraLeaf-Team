@@ -73,7 +73,8 @@
     "live": "live:{session}",
     "adminUsers": "admin/users",
     "adminSettings": "admin/settings",
-    "adminKeys": "admin/keys"
+    "adminKeys": "admin/keys",
+    "adminRefusals": "admin/refusals"
   },
   "frames": {
     "fromServer": [

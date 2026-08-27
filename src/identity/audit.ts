@@ -184,31 +184,40 @@ export function trimDecisions(database: DatabaseSync): number {
 }
 
 /**
- * Keep one decision.
+ * Keep one decision, and answer with the row it became.
  *
  * This is called on the path that answers every repository access, so it is one
  * insert and, once in {@link DECISION_TRIM_SLACK} decisions, one delete —
  * neither of which waits for the disk, for the reason set out above
  * {@link withoutWaitingForTheDisk}.
  *
+ * The row rather than nothing, because a caller that wants to say a refusal
+ * happened has to say *which* refusal, and the key is what tells one from the
+ * rows around it that are otherwise identical. It costs nothing to hand back:
+ * the insert already knows it.
+ *
  * A failure is not swallowed. A Team server that cannot write to its own database has a
  * larger problem than the access it is about to refuse, and quietly carrying on
  * would put back exactly the gap this table exists to close: decisions made and
  * kept nowhere.
  */
-export function recordDecision(database: DatabaseSync, decision: NewDecision): void {
+export function recordDecision(
+  database: DatabaseSync,
+  decision: NewDecision,
+): RecordedDecision {
+  const at = decision.at ?? Date.now();
+  let id = 0;
   withoutWaitingForTheDisk(database, () => {
-    database
+    const written = database
       .prepare(
         "INSERT INTO decisions (at, username, resource, allowed, detail) VALUES (?, ?, ?, ?, ?)",
       )
-      .run(
-        decision.at ?? Date.now(),
-        decision.username,
-        decision.resource,
-        decision.allowed ? 1 : 0,
-        decision.detail,
-      );
+      .run(at, decision.username, decision.resource, decision.allowed ? 1 : 0, decision.detail);
+    // node:sqlite hands a row id back as a bigint once it is past what a double
+    // holds exactly. This table is bounded at a couple of thousand rows and the
+    // key is a running count, so that is not a number this can reach; narrowed
+    // rather than propagated, as every other integer read out of this file is.
+    id = Number(written.lastInsertRowid);
 
     const since = (writesSinceTrim.get(database) ?? DECISION_TRIM_SLACK) + 1;
     if (since > DECISION_TRIM_SLACK) {
@@ -218,6 +227,14 @@ export function recordDecision(database: DatabaseSync, decision: NewDecision): v
     }
     writesSinceTrim.set(database, since);
   });
+  return {
+    id,
+    at,
+    username: decision.username,
+    resource: decision.resource,
+    allowed: decision.allowed,
+    detail: decision.detail,
+  };
 }
 
 /**
