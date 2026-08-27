@@ -263,6 +263,11 @@ export class TeamSessionClient {
     let hello: TeamHelloFrame | undefined;
     let deliverHello: (() => void) | undefined;
     let refuseHello: ((error: Error) => void) | undefined;
+    // A socket can close before the wait below has been set up — a server that
+    // shuts down between the handshake and its opening frame does exactly that.
+    // Remembered rather than announced, so the wait finds out immediately
+    // instead of sitting out the whole timeout for something already over.
+    let closedBecause: string | undefined;
 
     const socket = await openWebSocket({
       address: options.address,
@@ -272,7 +277,15 @@ export class TeamSessionClient {
       maximumMessageBytes: MAXIMUM_MESSAGE_BYTES,
       onMessage: (text) => {
         if (hello === undefined) {
-          const parsed: unknown = JSON.parse(text);
+          // Guarded, because this runs inside the socket's data handler: a
+          // server sending something that is not JSON must be a refusal rather
+          // than an exception nobody is positioned to catch.
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            return;
+          }
           if (
             typeof parsed === "object" &&
             parsed !== null &&
@@ -286,8 +299,9 @@ export class TeamSessionClient {
         client?.receive(text);
       },
       onClose: (reason) => {
-        refuseHello?.(new Error(`${options.address} closed the session: ${reason}`));
-        client?.abandon(`${options.address} closed the session: ${reason}`);
+        closedBecause = `${options.address} closed the session: ${reason}`;
+        refuseHello?.(new Error(closedBecause));
+        client?.abandon(closedBecause);
       },
     });
 
@@ -295,6 +309,10 @@ export class TeamSessionClient {
       await new Promise<void>((settle, fail) => {
         if (hello !== undefined) {
           settle();
+          return;
+        }
+        if (closedBecause !== undefined) {
+          fail(new Error(closedBecause));
           return;
         }
         const timer = setTimeout(() => {
