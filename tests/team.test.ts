@@ -35,7 +35,6 @@ import {
   revokeUserTokens,
   setAdmin,
 } from "../src/identity/users.js";
-import { DEFAULT_PORTS } from "../src/loreserver/layout.js";
 import { ProjectReadings } from "../src/projects/refresh.js";
 import {
   createProject,
@@ -124,10 +123,14 @@ async function harness(extra: ServiceFor = {}): Promise<Harness> {
     config,
     root,
     dataPort: config.dataPort,
-    // Nothing listens on it, so a status gathered here reports a loreserver
-    // that is not answering - which is the truth about a harness that never
-    // started one.
-    healthPort: DEFAULT_PORTS.healthPort,
+    // A port this process held just long enough to learn its number and then
+    // let go of, so a status gathered here reports a loreserver that is not
+    // answering - which is the truth about a harness that never started one.
+    // Not the port loreserver ordinarily uses: anybody running a Team server on
+    // the machine the tests run on would have one answering there, and a test
+    // that passes only where nothing else is running is a test that fails for
+    // the person most likely to be running one.
+    healthPort: await unusedPort(),
     // Whatever a test wants this server to have read out of a repository. Most
     // want none, which is a server that has not got round to one yet - a state
     // the overlay methods have to answer honestly rather than as "empty".
@@ -2087,6 +2090,29 @@ async function healthCheck(): Promise<{ port: number; asked: () => number }> {
   return { port, asked: () => asked };
 }
 
+/**
+ * A port number nothing is listening on.
+ *
+ * Taken by binding to whatever the system offers and letting go of it again, so
+ * that the number is one this machine had free a moment ago rather than one the
+ * test hopes is free. Naming a fixed port would make every test that wants a
+ * closed one fail on a machine that happens to be running the thing that
+ * ordinarily listens there - which, for a Team server's own suite, is the
+ * machine of anybody working on it.
+ *
+ * There is a moment between letting go and using it in which something else
+ * could take it. Nothing can close that window, and this is the narrow version
+ * of it: the alternative is a constant that is wrong for a whole class of
+ * machines rather than for an instant.
+ */
+async function unusedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 /** A server with an operator and somebody who is not one, both connected. */
 async function administered(extra: Partial<TeamService> = {}): Promise<{
   team: Harness;
@@ -2482,7 +2508,8 @@ describe("what this server is", () => {
   it("says a loreserver that is not answering is not answering", async () => {
     // Nothing listens on the harness health port, and from outside the process
     // that supervises it a server which does not answer cannot be told from one
-    // that is not running.
+    // that is not running. See unusedPort for why the harness does not simply
+    // point at the port loreserver ordinarily uses.
     const { ada } = await administered();
 
     const status = await ada.value(TEAM_METHODS.adminServerStatus);

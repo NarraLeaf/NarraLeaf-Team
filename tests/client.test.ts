@@ -104,6 +104,20 @@ interface Harness {
   readonly database: DatabaseSync;
 }
 
+/**
+ * A port number nothing is listening on, borrowed and given straight back.
+ *
+ * The same reasoning as its twin in team.test.ts: a fixed number would be one
+ * this suite hopes is free rather than one this machine said was.
+ */
+async function unusedPort(): Promise<number> {
+  const server = createHttpsServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 async function harness(): Promise<Harness> {
   const root = await temporaryRoot();
   const certificates = await ensureCertificates(root);
@@ -117,6 +131,13 @@ async function harness(): Promise<Harness> {
     database,
     keys,
     config,
+    root,
+    // Nothing here asks this server what it is, so this names a port this
+    // process held long enough to learn the number of and then let go of. Not
+    // the port loreserver ordinarily uses: a test naming that one passes only
+    // on a machine with no Team server running, which is not the machine of
+    // anybody working on this.
+    healthPort: await unusedPort(),
     dataPort: config.dataPort,
     fingerprint: certificates.authority.fingerprint256,
     // One per harness, so that a test cannot spend what the next one counts on.
