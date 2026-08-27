@@ -18,6 +18,7 @@ import { defaultPasswordHasher } from "../src/identity/passwords.js";
 import {
   REPOSITORY_LIFETIME_KEY,
   SERVER_NAME_KEY,
+  setServerName,
   SIGN_IN_LIFETIME_KEY,
 } from "../src/identity/settings.js";
 import { createUser } from "../src/identity/users.js";
@@ -113,6 +114,31 @@ describe("the settings surface", () => {
       .map((row) => row.label);
 
     expect(withSeconds).toEqual(["sign-in token", "repository token"]);
+  });
+
+  it("says of each writable row whether its value was chosen or is the default", async () => {
+    // The fact a reader cannot recover from the value: a name that happens to
+    // equal the host and a name nobody set look the same, and only the second
+    // follows a later version of Team when the default moves.
+    const context = await team();
+
+    const before = settingRows(context).find((row) => row.label === "name");
+    setServerName(context.database, "Winterlight");
+    const after = settingRows(context).find((row) => row.label === "name");
+
+    expect(before?.stored).toBe(false);
+    expect(after?.stored).toBe(true);
+  });
+
+  it("says nothing of the sort about a row with no default behind it", async () => {
+    // The identity settings and the ports are named on the command line that
+    // started up. There is no default answering for them, so there is no
+    // question to answer, and an answer would be one made up.
+    const rows = settingRows(await team());
+
+    expect(rows.filter((row) => row.stored !== undefined).map((row) => row.label)).toEqual(
+      rows.filter((row) => row.editable).map((row) => row.label),
+    );
   });
 
   it("shows a server nobody has named as the address people already reach it at", async () => {

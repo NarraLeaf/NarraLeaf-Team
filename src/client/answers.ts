@@ -189,6 +189,15 @@ export interface ListedSetting {
    * them in. Absent on every other row, which have no number behind them.
    */
   readonly seconds: number | undefined;
+  /**
+   * Whether somebody chose this value or a default is answering for it.
+   *
+   * Undefined where the server did not say — either a row that has no such
+   * distinction, or a server older than the field. Both come out as a blank
+   * column rather than a guess, for the reason the field exists: whether a value
+   * was chosen is exactly the fact a reader cannot recover from the value.
+   */
+  readonly stored: boolean | undefined;
 }
 
 /** One setting out of an answer. */
@@ -200,10 +209,12 @@ function readSettingBody(method: string, value: unknown): ListedSetting {
     throw malformed(method, "with a setting that has no label or value");
   }
   const seconds = setting["seconds"];
+  const stored = setting["stored"];
   return {
     label,
     value: shown,
     seconds: typeof seconds === "number" ? seconds : undefined,
+    stored: typeof stored === "boolean" ? stored : undefined,
   };
 }
 

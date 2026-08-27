@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { describeDuration } from "./duration.js";
 import { audienceHosts, hostOf, type IdentityConfig } from "./identity/config.js";
 import {
+  isSettingStored,
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
   PUBLISH_LINEAGE_KEY,
@@ -148,11 +149,20 @@ export function storageRootOf(root: string): string {
  * identity settings and the ports are named on the command line that started
  * `up`, so they are shown and marked read-only: offering to change a value that
  * would be thrown away is worse than refusing, because it looks like it worked.
+ *
+ * Those same four rows carry `stored`, which says whether somebody chose the
+ * value or a default is answering for a setting nobody has touched. It is read
+ * from {@link isSettingStored} — the one function that knows whether there is a
+ * row in the table — rather than worked out again from the value, because a
+ * value that happens to equal the default is not the same fact as a value
+ * nobody set: the second follows a later version of Team when the default
+ * moves, and the first does not. The read-only rows carry nothing, having no
+ * default to be answered by.
  */
 export function settingRows(context: ViewContext): TeamAdminSetting[] {
   const lifetimes = storedTokenLifetimes(context.database);
   const storageRoot = storageRootOf(context.root);
-  const { config } = context;
+  const { config, database } = context;
   return [
     {
       group: "server",
@@ -161,7 +171,8 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       // document says too. The row shows what is in effect rather than what is
       // stored, so a server nobody has named reads as the address people
       // already reach it at rather than as a blank.
-      value: storedServerName(context.database, hostOf(config.authOrigin)),
+      value: storedServerName(database, hostOf(config.authOrigin)),
+      stored: isSettingStored(database, SERVER_NAME_KEY),
       editable: true,
     },
     {
@@ -171,7 +182,8 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       // again under a name of somebody's choosing. Shown in the server group
       // rather than with the tokens because it is about how this deployment is
       // used, not about what it lets anybody do.
-      value: storedPublishLineage(context.database),
+      value: storedPublishLineage(database),
+      stored: isSettingStored(database, PUBLISH_LINEAGE_KEY),
       editable: true,
     },
     {
@@ -179,6 +191,7 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       label: SIGN_IN_SETTING,
       value: describeDuration(lifetimes.signInTokenLifetimeSeconds),
       seconds: lifetimes.signInTokenLifetimeSeconds,
+      stored: isSettingStored(database, SIGN_IN_LIFETIME_KEY),
       editable: true,
     },
     {
@@ -186,6 +199,7 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       label: REPOSITORY_SETTING,
       value: describeDuration(lifetimes.repositoryTokenLifetimeSeconds),
       seconds: lifetimes.repositoryTokenLifetimeSeconds,
+      stored: isSettingStored(database, REPOSITORY_LIFETIME_KEY),
       editable: true,
       caution: REPOSITORY_LIFETIME_CAUTION,
     },

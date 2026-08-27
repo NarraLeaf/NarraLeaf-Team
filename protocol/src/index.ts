@@ -846,6 +846,22 @@ export interface TeamAdminSetting {
    * is cheaper than making everybody parse one.
    */
   readonly seconds?: number;
+  /**
+   * Whether somebody chose this value, or a default is answering for a setting
+   * nobody has touched.
+   *
+   * The difference is real rather than cosmetic, which is why it is on the wire
+   * and not worked out from the value: a server that never chose follows a
+   * later version of Team when the default moves, and one that chose keeps what
+   * it was given. It is what a panel shows beside a value, and it is the word a
+   * person needs before deciding whether a number is theirs.
+   *
+   * Absent on a row that has no such distinction - the identity settings, the
+   * ports, the fingerprint - which are named on the command line the server was
+   * started with and have no default answering for them. Those are the rows
+   * `editable` is false on.
+   */
+  readonly stored?: boolean;
   readonly editable: boolean;
   /**
    * The change is written now and takes effect when loreserver is next started.

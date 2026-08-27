@@ -458,7 +458,7 @@ storage root. `nlteam user grant-admin ... --root` and `nlteam user enable ...
 ### What differs between the two, and what does not
 
 What a command prints does not depend on which of the two it took, wherever both
-have the same facts. Two places they genuinely do not, and both are stated by
+have the same facts. One place they genuinely do not, and it is stated by
 `nlteam --help` as well:
 
 - **`token mint` reads a password with `--root` and none with `--server`.** On
@@ -469,12 +469,14 @@ have the same facts. Two places they genuinely do not, and both are stated by
   knows is the whole point of asking a server to do it. A command demanding a
   password it does not need would be asking for something the operator may not
   have.
-- **`settings list --server` leaves the last column blank.** A server says what
-  each setting is; it does not say whether the value was chosen there or is the
-  default answering for it. That column is left empty rather than filled in with
-  a guess, because the difference it carries is real — a server that never chose
-  follows a later version of Team if the default moves, and one that chose keeps
-  its number.
+
+`settings list` prints the same three columns on both paths, the last of them
+included. Each row a server carries says whether its value was chosen or a
+default is answering for it, because the difference is real — a server that
+never chose follows a later version of Team if the default moves, and one that
+chose keeps its number — and it is exactly the fact a reader cannot recover from
+the value. That column is blank only against a server too old to carry it, where
+a blank means "not said" rather than "nobody chose".
 
 Three options are refused beside `--server` rather than quietly dropped, because
 something that looks like it worked is worse than something that says it cannot:

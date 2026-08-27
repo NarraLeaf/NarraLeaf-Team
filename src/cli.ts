@@ -122,17 +122,13 @@ database is nearby. up, init and trust take --root alone, because they are what
 a server is rescued with, and a rescue that worked only over the thing being
 rescued would not be one.
 
-Two commands ask for different things on the two paths, and both are deliberate:
+One command asks for different things on the two paths, and it is deliberate:
 
   token mint --root reads a password, because on that machine the password is
   how the operator shows the account is theirs to mint for. token mint --server
   reads none: the caller has already proved who they are by holding an
   operator's session, and minting for somebody whose password nobody knows is
   the whole point of asking a server to do it.
-
-  settings list --server leaves the last column blank. A server says what each
-  setting is; it does not say whether the value was chosen there or is the
-  default answering, and that is not a thing to guess at.
 
 Every option below has an environment variable that stands in for it, named for
 the option: --root is NLTEAM_ROOT, --server is NLTEAM_SERVER, --data-port is

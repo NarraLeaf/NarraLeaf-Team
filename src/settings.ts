@@ -9,16 +9,15 @@
  * used — a lifetime as each token is minted, the name as each discovery
  * document is answered — rather than held from the moment `up` started.
  *
- * Both verbs have two paths and one output, and this is the one place where the
- * protocol carries less than the disk does. `admin.settings.list` says what
- * every setting is; it does not say whether a value was chosen here or is the
- * default answering for a setting nobody has touched. So over the protocol that
- * last column is **blank** rather than filled in with a guess: a row that said
- * "default" because this program could not tell would be a claim about what
- * happens when a later version of Team moves the default, and that is exactly
- * the fact the column exists to carry.
+ * Both verbs have two paths and one output, this listing's third column
+ * included. `admin.settings.list` carries `stored` beside each value it can be
+ * asked about, so a server answers the same question the disk does: was this
+ * chosen, or is a default answering for a setting nobody has touched. The
+ * column is only ever **blank** for a server too old to say — which is a blank
+ * meaning "not said", where either word would be a claim about what happens
+ * when a later version of Team moves the default.
  *
- * The rows themselves are the three settings a person may change, on both paths.
+ * The rows themselves are the four settings a person may change, on both paths.
  * The server's surface has seven more on it — the issuer, the ports, the
  * authority's fingerprint — which it marks read-only and shows for a panel to
  * draw. They are left out here rather than shown on one path only, because a
@@ -129,10 +128,24 @@ interface SettingRow {
   /**
    * Whether somebody chose this value or a default is answering for it.
    *
-   * Undefined on the path that cannot tell, which leaves the column blank. See
-   * the note at the top of this file for why blank and not a guess.
+   * Undefined where nothing said, which leaves the column blank. See the note
+   * at the top of this file for why blank and not a guess.
    */
   readonly source: string | undefined;
+}
+
+/**
+ * The word that column carries, written once so both paths write the same one.
+ *
+ * Undefined in, undefined out: only a server too old to carry the fact answers
+ * without it, and a blank is the honest thing to print for a question nothing
+ * answered.
+ */
+function describeSource(stored: boolean | undefined): string | undefined {
+  if (stored === undefined) {
+    return undefined;
+  }
+  return stored ? "set here" : "default";
 }
 
 /** The settings, laid out the same way whichever path read them. */
@@ -161,7 +174,7 @@ export async function settingsList(
       SETTING_KEYS.map((key) => ({
         key,
         value: settingValue(database, key),
-        source: isSettingStored(database, key) ? "set here" : "default",
+        source: describeSource(isSettingStored(database, key)),
       })),
       stdout,
     );
@@ -209,8 +222,9 @@ function rowFor(
 /**
  * Every setting, asked for over a session.
  *
- * The three a person may change, in the order the other path prints them, with
- * the source column left blank because this answer does not carry it.
+ * The ones a person may change, in the order the other path prints them, and
+ * with the same third column: a row carries whether its value was chosen, so
+ * this prints the word rather than leaving a gap where the other path has one.
  */
 export async function settingsListOverProtocol(
   options: SettingsListOnServerOptions,
@@ -230,7 +244,7 @@ export async function settingsListOverProtocol(
           `that server answered ${TEAM_METHODS.adminSettingsList} without a row for ${key}`,
         );
       }
-      rows.push({ key, value: valueOfListed(key, row), source: undefined });
+      rows.push({ key, value: valueOfListed(key, row), source: describeSource(row.stored) });
     }
     renderSettings(rows, stdout);
     return 0;

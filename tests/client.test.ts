@@ -610,14 +610,6 @@ describe("a session", () => {
  * and why it is not a defect.
  */
 
-/** What a command wrote with the trailing "set here" or "default" taken off. */
-function withoutSource(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => line.replace(/(?:set here|default)$/, "").trimEnd())
-    .join("\n");
-}
-
 /** The same line with whichever key it named taken out; a kid differs per server. */
 function withoutKid(text: string): string {
   return text.replace(/signing with \S+/, "signing with <kid>");
@@ -925,7 +917,7 @@ describe("token mint", () => {
 });
 
 describe("settings", () => {
-  it("reads the same settings both ways, with nothing invented in the last column", async () => {
+  it("reads the same settings both ways, the last column included", async () => {
     const server = await harness();
     await credentialDirectory();
     await invoke(["settings", "set", SERVER_NAME_KEY, "Winterlight", "--root", server.root]);
@@ -937,13 +929,15 @@ describe("settings", () => {
     expect(onDisk.code).toBe(0);
     expect(overProtocol.err).toBe("");
     expect(overProtocol.code).toBe(0);
-    // The keys and the values agree. The column after them does not, and that is
-    // the point: a server says what a setting is, never whether the value was
-    // chosen there, so this path leaves it blank rather than guessing.
-    expect(overProtocol.out).toBe(withoutSource(onDisk.out));
+    // Every column agrees, the third one now among them: a server says whether
+    // each value was chosen or is a default answering for it, so this path has
+    // nothing left to leave blank.
+    expect(overProtocol.out).toBe(onDisk.out);
     expect(overProtocol.out).toContain("Winterlight");
-    expect(overProtocol.out).not.toContain("default");
-    expect(onDisk.out).toContain("set here");
+    // The name was set a moment ago and nothing else was, so both words are on
+    // this listing — which is what makes it worth comparing the two.
+    expect(overProtocol.out).toContain("set here");
+    expect(overProtocol.out).toContain("default");
   });
 
   it("changes one, says what it was and what it is, and reaches the running server", async () => {

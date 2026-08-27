@@ -101,16 +101,17 @@ describe("run", () => {
     expect(out).toContain("Every command above except up, init and trust");
   });
 
-  it("names the two places the two paths ask for different things", async () => {
+  it("names the one place the two paths ask for different things", async () => {
     const { out } = await invoke(["--help"]);
 
-    // Neither is a defect, and neither is discoverable by trying it: a person
-    // scripting token mint has to know before they pipe a password at it, and a
-    // person reading a settings listing has to know the blank column is a thing
-    // this path cannot say rather than a value nobody chose.
+    // Not a defect, and not discoverable by trying it: a person scripting token
+    // mint has to know before they pipe a password at it.
     expect(out).toContain("token mint --server");
     expect(out).toContain("reads none");
-    expect(out).toContain("settings list --server leaves the last column blank");
+    // The listing used to be the second of these, and is not any more: a server
+    // says whether a value was chosen, so both paths print the same third
+    // column and there is nothing left to warn anybody about.
+    expect(out).not.toContain("leaves the last column blank");
   });
 
   it("says where a password goes on the path that sends one over a session", async () => {
