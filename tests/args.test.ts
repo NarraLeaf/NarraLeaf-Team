@@ -204,14 +204,14 @@ describe("parseArgs, the root from the environment", () => {
     });
     expect(parseArgs(["settings", "list"], { NLTEAM_ROOT: "/var/lib/nlteam" })).toEqual({
       kind: "settings-list",
-      root: "/var/lib/nlteam",
+      target: { kind: "root", root: "/var/lib/nlteam" },
     });
   });
 
   it("lets an explicit --root win over the environment", () => {
     expect(
       parseArgs(["settings", "list", "--root", "/srv/team"], { NLTEAM_ROOT: "/var/lib/nlteam" }),
-    ).toEqual({ kind: "settings-list", root: "/srv/team" });
+    ).toEqual({ kind: "settings-list", target: { kind: "root", root: "/srv/team" } });
   });
 
   it("treats an empty NLTEAM_ROOT as no root at all", () => {
@@ -369,17 +369,17 @@ describe("parseArgs, the identity commands", () => {
   it("takes a username as the word after the verb", () => {
     expect(parseArgs(["user", "disable", "ada", "--root", "/srv/team"])).toEqual({
       kind: "user-disable",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
       username: "ada",
     });
     expect(parseArgs(["user", "enable", "--root", "/srv/team", "ada"])).toEqual({
       kind: "user-enable",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
       username: "ada",
     });
     expect(parseArgs(["user", "revoke-tokens", "ada", "--root", "/srv/team"])).toEqual({
       kind: "user-revoke-tokens",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
       username: "ada",
     });
     expect(messageFor(["user", "disable", "--root", "/srv/team"])).toContain("needs a username");
@@ -391,7 +391,7 @@ describe("parseArgs, the identity commands", () => {
   it("makes an account, in the default group unless told another", () => {
     expect(parseArgs(["user", "create", "ada", "--root", "/srv/team"])).toEqual({
       kind: "user-create",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
       username: "ada",
       role: "member",
       displayName: undefined,
@@ -424,7 +424,7 @@ describe("parseArgs, the identity commands", () => {
       parseArgs(["token", "mint", "ada", "--root", "/srv/team", "--env", "staging"]),
     ).toEqual({
       kind: "token-mint",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
       username: "ada",
       overrides: { env: "staging" },
     });
@@ -433,11 +433,11 @@ describe("parseArgs, the identity commands", () => {
   it("rotates and lists keys", () => {
     expect(parseArgs(["key", "rotate", "--root", "/srv/team"])).toEqual({
       kind: "key-rotate",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
     });
     expect(parseArgs(["key", "list", "--root", "/srv/team"])).toEqual({
       kind: "key-list",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
     });
   });
 
@@ -469,7 +469,7 @@ describe("parseArgs, the settings commands", () => {
   it("lists them", () => {
     expect(parseArgs(["settings", "list", "--root", "/srv/team"])).toEqual({
       kind: "settings-list",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
     });
   });
 
@@ -477,7 +477,7 @@ describe("parseArgs, the settings commands", () => {
     expect(parseArgs(["settings", "set", SIGN_IN_LIFETIME_KEY, "7d", "--root", "/srv/team"])).toEqual(
       {
         kind: "settings-set",
-        root: "/srv/team",
+        target: { kind: "root", root: "/srv/team" },
         change: { key: SIGN_IN_LIFETIME_KEY, seconds: 7 * 24 * 60 * 60 },
       },
     );
@@ -498,7 +498,7 @@ describe("parseArgs, the settings commands", () => {
     expect(parseArgs(["settings", "set", SERVER_NAME_KEY, "Winterlight", "--root", "/srv/team"])).toEqual(
       {
         kind: "settings-set",
-        root: "/srv/team",
+        target: { kind: "root", root: "/srv/team" },
         change: { key: SERVER_NAME_KEY, name: "Winterlight" },
       },
     );
@@ -533,7 +533,7 @@ describe("parseArgs, the project commands", () => {
   it("creates a project, with the default loreserver port and no owner named", () => {
     expect(parseArgs(["project", "create", "harbour", "--root", "/srv/team"])).toEqual({
       kind: "project-create",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
       name: "harbour",
       description: undefined,
       // Absent means the account is worked out from the Team server, which only has an
@@ -581,7 +581,7 @@ describe("parseArgs, the project commands", () => {
   it("puts an account in the admin group, and takes it out", () => {
     expect(parseArgs(["user", "grant-admin", "ada", "--root", "/srv/team"])).toEqual({
       kind: "user-set-admin",
-      root: "/srv/team",
+      target: { kind: "root", root: "/srv/team" },
       username: "ada",
       admin: true,
     });
