@@ -1,10 +1,10 @@
 /**
  * The seam every command that speaks to a server goes through.
  *
- * One command is wired through it today — `project list` — and the rest are a
- * later piece of work. What that work must not have to do is reshape this: a
- * command names an address, is handed an open session, and calls a method on it.
- * Nothing about which command it is reaches this file, and nothing about
+ * One command goes through it — `project list` — and the rest of the
+ * administrative commands are meant to. Wiring one must not mean reshaping this:
+ * a command names an address, is handed an open session, and calls a method on
+ * it. Nothing about which command it is reaches this file, and nothing about
  * credentials, certificates or framing reaches the command.
  *
  * The two halves of the command line stay apart on purpose. `--root` opens a
@@ -14,9 +14,8 @@
  * fallback here: an address with no credentials is a sentence saying to log in,
  * not a quiet read of some local directory.
  */
-import type { TeamSessionClient } from "./session.js";
-import { TeamSessionClient as Session } from "./session.js";
 import { configDirectory, readCredentials, type ServerCredential } from "./config.js";
+import { TeamSessionClient } from "./session.js";
 
 /** Raised when a command names a server this account has no token for. */
 export class NotSignedInError extends Error {
@@ -61,7 +60,7 @@ export async function withSession<T>(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<T> {
   const credential = await credentialFor(address, env);
-  const session = await Session.open({
+  const session = await TeamSessionClient.open({
     address: credential.address,
     ca: credential.authority.pem,
     token: credential.token,
