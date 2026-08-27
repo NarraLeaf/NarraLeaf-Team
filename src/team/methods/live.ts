@@ -36,6 +36,7 @@ import {
 import {
   NoSuchLiveSessionError,
   TooManyLiveSessionsError,
+  WrongLiveCodeError,
   type TeamPresence,
 } from "../presence.js";
 import {
@@ -43,6 +44,7 @@ import {
   INSTANCE_FIELD_LIMIT,
   LIVE_PAYLOAD_LIMIT,
   TEAM_METHODS,
+  type TeamLiveJoinRule,
   type TeamLiveMessage,
 } from "../protocol.js";
 
@@ -73,10 +75,47 @@ function room(presence: TeamPresence, id: string): { project: string } {
   return session;
 }
 
+/**
+ * The room one code belongs to, insisting there is one.
+ *
+ * ⚠ **The same answer a code that is simply wrong gets**, and that is deliberate:
+ * "there is no room with those digits" and "there is a room and this is not its
+ * code" are the same sentence to whoever typed them, and telling the two apart
+ * would turn ten thousand guesses into a map of which rooms exist.
+ */
+function byCode(presence: TeamPresence, code: string): string {
+  const session = presence.liveByCode(code);
+  if (session === undefined) {
+    throw new MethodError("not-found", "there is no live session with that code on this server");
+  }
+  return session.id;
+}
+
+/**
+ * The rule a call asked for, or undefined where it said nothing.
+ *
+ * A word out of a closed set rather than free text, checked here because a client
+ * may say anything: a rule this server does not know would be stored and then
+ * govern nothing, which is worse than a refusal in the one direction that matters.
+ */
+function joinRule(read: Record<string, unknown>): TeamLiveJoinRule | undefined {
+  const rule = read["rule"];
+  if (rule === undefined || rule === null) {
+    return undefined;
+  }
+  if (rule !== "open" && rule !== "code") {
+    throw new MethodError("bad-params", "a live session's rule is open or code");
+  }
+  return rule;
+}
+
 /** Turn the registry's own refusals into ones the protocol carries. */
 function translate(error: unknown): never {
   if (error instanceof NoSuchLiveSessionError) {
     throw new MethodError("not-found", error.message);
+  }
+  if (error instanceof WrongLiveCodeError) {
+    throw new MethodError("refused", error.message);
   }
   if (error instanceof TooManyLiveSessionsError) {
     throw new MethodError("refused", error.message);
@@ -89,9 +128,15 @@ export function liveMethods(): TeamMethod[] {
     {
       name: TEAM_METHODS.liveList,
       capability: "live",
-      handle: (params: unknown, context: MethodContext) => ({
-        sessions: context.presence.live(project(context, paramsObject(params))),
-      }),
+      handle: (params: unknown, context: MethodContext) => {
+        const id = project(context, paramsObject(params));
+        // Asked on behalf of this window, because what it may see depends on which
+        // rooms it is in: a `code` room is not listed to anybody else. `undefined`
+        // for a connection that never announced, which sees only the open ones -
+        // it is in nothing, so there is nothing it is being kept out of.
+        const instance = context.presence.instanceOn(context.connection.id, id);
+        return { sessions: context.presence.live(id, instance?.id) };
+      },
     },
     {
       name: TEAM_METHODS.liveOpen,
@@ -120,15 +165,21 @@ export function liveMethods(): TeamMethod[] {
         // everything anchor-shaped on this server is.
         const story = requiredText(read, "story", ANCHOR_FIELD_LIMIT);
         const title = optionalText(read, "title", INSTANCE_FIELD_LIMIT);
+        // How people get in, defaulting to the way every room worked before there
+        // was a choice - so a client that says nothing opens the room it always did.
+        const rule = joinRule(read);
         try {
-          return {
-            session: context.presence.open(instance, {
-              project: id,
-              revision,
-              story,
-              ...(title === undefined ? {} : { title }),
-            }),
-          };
+          // ⚠ The code is answered HERE and nowhere else. It is not on the room
+          // record, because that record goes out on the project's topic to
+          // everybody watching the project.
+          const opened = context.presence.open(instance, {
+            project: id,
+            revision,
+            story,
+            ...(title === undefined ? {} : { title }),
+            ...(rule === undefined ? {} : { rule }),
+          });
+          return { session: opened.session, code: opened.code };
         } catch (error) {
           translate(error);
         }
@@ -138,13 +189,49 @@ export function liveMethods(): TeamMethod[] {
       name: TEAM_METHODS.liveJoin,
       capability: "live",
       handle: (params: unknown, context: MethodContext) => {
-        const id = requiredText(paramsObject(params), "session", ID_LIMIT);
+        const read = paramsObject(params);
+        // Two ways to say which room, because a code exists to be used by somebody
+        // who has neither the id nor the project: they were read four digits. The
+        // id remains the ordinary way in for a room anybody can see.
+        const code = optionalText(read, "code", ID_LIMIT);
+        const id = code === undefined
+          ? requiredText(read, "session", ID_LIMIT)
+          : byCode(context.presence, code);
         const instance = callingInstance(context, room(context.presence, id).project);
         try {
-          return { session: context.presence.join(instance, id) };
+          return { session: context.presence.join(instance, id, code) };
         } catch (error) {
           translate(error);
         }
+      },
+    },
+    {
+      name: TEAM_METHODS.liveRule,
+      capability: "live",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const id = requiredText(read, "session", ID_LIMIT);
+        const rule = joinRule(read);
+        if (rule === undefined) {
+          throw new MethodError("bad-params", "live.rule needs a rule of open or code");
+        }
+        const instance = callingInstance(context, room(context.presence, id).project);
+        let changed: boolean;
+        try {
+          changed = context.presence.setRule(instance.id, id, rule);
+        } catch (error) {
+          translate(error);
+        }
+        if (!changed) {
+          // The same answer closing somebody else's room gets, and for the same
+          // reason: a room belongs to whoever opened it, and how people get into
+          // it is not something a passer-by decides.
+          throw new MethodError("refused", "only the window that opened a live session may change how it is joined");
+        }
+        // Nothing about the room that the caller did not already have. What
+        // changed is public on the project's topic; the code is not, and is not
+        // re-issued - one room, one code.
+        return { rule };
       },
     },
     {

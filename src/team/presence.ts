@@ -26,13 +26,14 @@
  * will one day be a client that crashed instead, and a room full of people who
  * are not there is worse than no room at all.
  */
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 
 import {
   projectClientsTopic,
   projectLiveTopic,
   liveTopic,
   type TeamClientInstance,
+  type TeamLiveJoinRule,
   type TeamLiveMember,
   type TeamLiveSession,
 } from "./protocol.js";
@@ -74,6 +75,21 @@ interface LiveEntry {
   readonly openedAt: number;
   /** Instance id to membership, in join order because a Map keeps insertion order. */
   readonly members: Map<string, TeamLiveMember>;
+  /** How it may be joined. Changed by its opener; see {@link Presence.setRule}. */
+  rule: TeamLiveJoinRule;
+  /**
+   * The four digits somebody joins by, minted when the room opened.
+   *
+   * **Minted for every room and not only for the ones that need it**, because the
+   * rule can be changed while the room is running and a code minted at that moment
+   * would be a different code each time somebody flipped the switch. One room, one
+   * code, for as long as the room lasts.
+   *
+   * ⚠ **Never in {@link view}.** It is answered to the window that opened the room
+   * and to nobody else: the record goes out on the project's topic, and a code
+   * everybody on the project is told is a code that has said nothing.
+   */
+  readonly code: string;
 }
 
 /** Raised where a caller asked for a room that is not there. */
@@ -81,6 +97,14 @@ export class NoSuchLiveSessionError extends Error {
   constructor() {
     super("there is no live session of that id on this server");
     this.name = "NoSuchLiveSessionError";
+  }
+}
+
+/** Raised where a room may only be joined by its code and the caller gave none, or gave a wrong one. */
+export class WrongLiveCodeError extends Error {
+  constructor() {
+    super("that live session is joined by its code, and this is not it");
+    this.name = "WrongLiveCodeError";
   }
 }
 
@@ -289,10 +313,22 @@ export class TeamPresence {
 
   /* ----------------------------------------------------------------- rooms */
 
-  /** The rooms open on one project, oldest first. */
-  live(project: string): TeamLiveSession[] {
+  /**
+   * The rooms open on one project, oldest first, as one instance may see them.
+   *
+   * ⚠ **A `code` room is not in the list for anybody who is not in it**, and that
+   * is the whole of what "not discoverable" means here - the filter is on this
+   * server rather than in whatever draws the list, because a list drawn from an
+   * answer that carried the room is a list one client build chooses not to show.
+   * It stays in the list for its own members: a window that reloads finds the room
+   * it is still in by asking for this, and a member hidden from its own room would
+   * be a member who cannot resume.
+   */
+  live(project: string, forInstance?: string): TeamLiveSession[] {
     return [...this.sessions.values()]
       .filter((session) => session.project === project)
+      .filter((session) => session.rule !== "code"
+        || (forInstance !== undefined && session.members.has(forInstance)))
       .map((session) => view(session));
   }
 
@@ -316,8 +352,14 @@ export class TeamPresence {
    */
   open(
     instance: TeamClientInstance,
-    input: { project: string; revision: string; story: string; title?: string },
-  ): TeamLiveSession {
+    input: {
+      project: string;
+      revision: string;
+      story: string;
+      title?: string;
+      rule?: TeamLiveJoinRule;
+    },
+  ): { session: TeamLiveSession; code: string } {
     const open = [...this.sessions.values()].filter((each) => each.project === input.project);
     if (open.length >= LIVE_SESSION_LIMIT) {
       throw new TooManyLiveSessionsError();
@@ -333,18 +375,104 @@ export class TeamPresence {
       openedByInstance: instance.id,
       openedAt: now,
       members: new Map([[instance.id, memberOf(instance, now)]]),
+      rule: input.rule ?? "open",
+      code: this.mintCode(),
     };
     this.sessions.set(session.id, session);
     const seen = view(session);
     this.publish(projectLiveTopic(session.project), { kind: "live-opened", session: seen });
-    return seen;
+    // The code goes back to the opener and travels no further. Everything else
+    // about the room is public to the project; this is the one thing that is not.
+    return { session: seen, code: session.code };
   }
 
-  /** Join one. Joining twice is the room one is already in, not a refusal. */
-  join(instance: TeamClientInstance, id: string): TeamLiveSession {
+  /**
+   * Four digits no other room on this server is using.
+   *
+   * **Unique rather than merely random**, because a code is an address: somebody
+   * types four digits without knowing whose room they are looking for, and two
+   * rooms answering to one number is a question this server cannot answer. Ten
+   * thousand against a server's worth of rooms leaves the retry loop finishing on
+   * its first pass in every deployment anybody runs.
+   *
+   * ⚠ **Not a secret, and deliberately short enough to read aloud.** Ten thousand
+   * values is a number an account on this server could work through, and that is
+   * the accepted shape rather than an oversight: every account here already
+   * reaches every project, so what the code buys is not keeping people out - it is
+   * letting somebody in without having to know whose room it is or find it in a
+   * list. Making it longer, hashing it or expiring it would cost exactly that and
+   * buy nothing this server's own permissions do not already decide.
+   */
+  private mintCode(): string {
+    const taken = new Set([...this.sessions.values()].map((session) => session.code));
+    if (taken.size >= 10_000) {
+      throw new TooManyLiveSessionsError();
+    }
+    for (;;) {
+      const code = String(randomInt(0, 10_000)).padStart(4, "0");
+      if (!taken.has(code)) {
+        return code;
+      }
+    }
+  }
+
+  /**
+   * Change how a running room may be joined, which its opener may do and nobody else.
+   *
+   * ⚠ **The code does not change with it.** One room, one code: a host who flips to
+   * `code` and back has not invalidated what they read out to somebody a minute ago,
+   * and a host who wanted a new one wanted a new room.
+   */
+  setRule(instanceId: string, id: string, rule: TeamLiveJoinRule): boolean {
     const session = this.sessions.get(id);
     if (session === undefined) {
       throw new NoSuchLiveSessionError();
+    }
+    if (session.openedByInstance !== instanceId) {
+      return false;
+    }
+    if (session.rule !== rule) {
+      session.rule = rule;
+      this.announceChange(session);
+    }
+    return true;
+  }
+
+  /**
+   * The room one code belongs to, or undefined.
+   *
+   * Server-wide rather than per project, because that is what a code is for:
+   * somebody types four digits without knowing whose room they are looking for, or
+   * even which project it is about. See {@link Presence.mintCode} for why that is
+   * safe to answer and what it is not.
+   */
+  liveByCode(code: string): TeamLiveSession | undefined {
+    const session = [...this.sessions.values()].find((each) => each.code === code);
+    return session === undefined ? undefined : view(session);
+  }
+
+  /**
+   * Join one. Joining twice is the room one is already in, not a refusal.
+   *
+   * ⚠ **A `code` room is joined by its code and by nothing else**, including by a
+   * caller who has its id. Hiding it from the list is what stops it being stumbled
+   * upon; this is what stops the id being enough, and without it the rule would be
+   * a rule about listings rather than about joining.
+   *
+   * A member is let back in whatever the rule says: it is in the room already, and
+   * refusing it would be refusing a window that reloaded.
+   */
+  join(instance: TeamClientInstance, id: string, code?: string): TeamLiveSession {
+    const session = this.sessions.get(id);
+    if (session === undefined) {
+      throw new NoSuchLiveSessionError();
+    }
+    if (
+      session.rule === "code"
+      && !session.members.has(instance.id)
+      && code !== session.code
+    ) {
+      throw new WrongLiveCodeError();
     }
     if (!session.members.has(instance.id)) {
       session.members.set(instance.id, memberOf(instance, Date.now()));
@@ -451,5 +579,8 @@ function view(session: LiveEntry): TeamLiveSession {
     openedByInstance: session.openedByInstance,
     openedAt: session.openedAt,
     members: [...session.members.values()],
+    rule: session.rule,
+    // ⚠ And never `code`. This value is published on the project's topic, which
+    // everybody on the project is watching - see `LiveEntry.code`.
   };
 }
