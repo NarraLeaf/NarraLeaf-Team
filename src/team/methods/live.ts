@@ -34,6 +34,7 @@ import {
   type TeamMethod,
 } from "../methods.js";
 import {
+  LiveJoinNeedsAskingError,
   NoSuchLiveSessionError,
   TooManyLiveSessionsError,
   WrongLiveCodeError,
@@ -103,8 +104,8 @@ function joinRule(read: Record<string, unknown>): TeamLiveJoinRule | undefined {
   if (rule === undefined || rule === null) {
     return undefined;
   }
-  if (rule !== "open" && rule !== "code") {
-    throw new MethodError("bad-params", "a live session's rule is open or code");
+  if (rule !== "open" && rule !== "code" && rule !== "request") {
+    throw new MethodError("bad-params", "a live session's rule is open, code or request");
   }
   return rule;
 }
@@ -115,6 +116,9 @@ function translate(error: unknown): never {
     throw new MethodError("not-found", error.message);
   }
   if (error instanceof WrongLiveCodeError) {
+    throw new MethodError("refused", error.message);
+  }
+  if (error instanceof LiveJoinNeedsAskingError) {
     throw new MethodError("refused", error.message);
   }
   if (error instanceof TooManyLiveSessionsError) {
@@ -213,7 +217,7 @@ export function liveMethods(): TeamMethod[] {
         const id = requiredText(read, "session", ID_LIMIT);
         const rule = joinRule(read);
         if (rule === undefined) {
-          throw new MethodError("bad-params", "live.rule needs a rule of open or code");
+          throw new MethodError("bad-params", "live.rule needs a rule of open, code or request");
         }
         const instance = callingInstance(context, room(context.presence, id).project);
         let changed: boolean;
@@ -232,6 +236,64 @@ export function liveMethods(): TeamMethod[] {
         // changed is public on the project's topic; the code is not, and is not
         // re-issued - one room, one code.
         return { rule };
+      },
+    },
+    {
+      name: TEAM_METHODS.liveByCode,
+      capability: "live",
+      handle: (params: unknown, context: MethodContext) => {
+        // ⚠ **No `callingInstance`, and that is the point of this method.** Somebody
+        // who was read four digits may not have the project - may never have had it -
+        // and every other live method resolves the caller by the project it is about.
+        // Without this they could not find out which project to go and get, so the
+        // one way in that does not need a list would need a list after all.
+        const code = requiredText(paramsObject(params), "code", ID_LIMIT);
+        const session = context.presence.liveByCode(code);
+        if (session === undefined) {
+          // The same answer a code nobody is using gets - see `byCode`.
+          throw new MethodError("not-found", "there is no live session with that code on this server");
+        }
+        return { session };
+      },
+    },
+    {
+      name: TEAM_METHODS.liveRequestJoin,
+      capability: "live",
+      handle: (params: unknown, context: MethodContext) => {
+        const id = requiredText(paramsObject(params), "session", ID_LIMIT);
+        const instance = callingInstance(context, room(context.presence, id).project);
+        try {
+          // The room as it stands, which is what the asker is waiting to see change.
+          return { session: context.presence.request(instance, id) };
+        } catch (error) {
+          translate(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.liveAnswerJoin,
+      capability: "live",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const id = requiredText(read, "session", ID_LIMIT);
+        const asked = requiredText(read, "instance", ID_LIMIT);
+        const admit = read["admit"];
+        if (typeof admit !== "boolean") {
+          throw new MethodError("bad-params", "live.answerJoin needs admit to be true or false");
+        }
+        const instance = callingInstance(context, room(context.presence, id).project);
+        let answered: boolean;
+        try {
+          answered = context.presence.answer(instance.id, id, asked, admit);
+        } catch (error) {
+          translate(error);
+        }
+        if (!answered) {
+          // The same answer closing somebody else's room gets: who comes into a
+          // room is the author's question, not a passer-by's.
+          throw new MethodError("refused", "only the window that opened a live session may answer for it");
+        }
+        return {};
       },
     },
     {

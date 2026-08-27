@@ -523,13 +523,23 @@ export interface TeamLiveSession {
  * nothing. It is answered to the window that opened the room and to nobody else -
  * see `live.open`.
  *
+ * **Two questions, not one, and the three answers are three of the four corners.**
+ * Whether the room can be found is one; whether a person decides who comes in is
+ * the other.
+ *
  *  - `open` - listed on the project, and anybody who can see it may join. What
  *    every room was before there was a rule.
  *  - `code` - not listed to anybody who is not already in it, and joinable only
  *    by the four digits minted when it opened. **Checked here rather than by the
  *    client**: a client checks nothing an operator can rely on.
+ *  - `request` - listed like `open`, and joined only after whoever opened it has
+ *    said yes. See `live.requestJoin`.
+ *
+ * The fourth corner - a code AND an answer - is deliberately not offered: a code
+ * is already a door, and a second one asks the host to decide something they know
+ * nothing more about than the code did.
  */
-export type TeamLiveJoinRule = "open" | "code";
+export type TeamLiveJoinRule = "open" | "code" | "request";
 
 export interface TeamLiveMember {
   readonly instance: string;
@@ -538,11 +548,40 @@ export interface TeamLiveMember {
   readonly joinedAt: number;
 }
 
-/** What happened on a project's live topic. */
+/**
+ * What happened on a project's live topic.
+ *
+ * ⚠ **The last two are seen by everybody watching the project, not only by the
+ * room.** A request and its refusal are addressed to one window each - the host
+ * and the person who asked - but they travel on the project's topic, because the
+ * person who asked is not in the room and has nothing else to listen to. What that
+ * costs is that everybody on the project can see who asked to join what, which is
+ * consistent with a deployment where every account already reaches every project.
+ * The alternative was a server-authored frame on the room's own topic, and that
+ * topic carries payloads this server does not read - see {@link TeamLiveMessage}.
+ */
 export type TeamLiveEvent =
   | { readonly kind: "live-opened"; readonly session: TeamLiveSession }
   | { readonly kind: "live-changed"; readonly session: TeamLiveSession }
-  | { readonly kind: "live-closed"; readonly session: string };
+  | { readonly kind: "live-closed"; readonly session: string }
+  /** Somebody wants into a `request` room. Acted on by whoever opened it, and by nobody else. */
+  | {
+      readonly kind: "live-requested";
+      readonly session: string;
+      readonly member: TeamLiveMember;
+    }
+  /**
+   * A request that was answered no, or that its room outlived.
+   *
+   * Admission has no event of its own: the member is added, which is a change to
+   * the room, and `live-changed` already says that - so whoever asked learns they
+   * are in by finding themselves in the roster.
+   */
+  | {
+      readonly kind: "live-refused";
+      readonly session: string;
+      readonly instance: string;
+    };
 
 /**
  * One thing said inside a live session, as it reaches the others.
@@ -759,6 +798,20 @@ export const TEAM_METHODS = {
   liveClose: "live.close",
   /** Change how one may be joined, which only its opener may do. */
   liveRule: "live.rule",
+  /**
+   * Which room a passcode names, without joining it.
+   *
+   * **The one live method that does not need the caller to have the project
+   * open**, and that is the whole reason it exists rather than being folded into
+   * `live.join`: somebody who was read four digits may not have the project at
+   * all, and what they need first is to learn which project it is so they can go
+   * and get it. Having the code is the entitlement; the room record is the answer.
+   */
+  liveByCode: "live.byCode",
+  /** Ask to be let into a `request` room. */
+  liveRequestJoin: "live.requestJoin",
+  /** Answer somebody who asked, which only the room's opener may do. */
+  liveAnswerJoin: "live.answerJoin",
   /** Say something to everybody in one. Kept by nobody. */
   liveSay: "live.say",
   /** What is attached to one project, and what this server last read its head to be. */

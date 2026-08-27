@@ -1743,6 +1743,46 @@ describe("a live session", () => {
     expect((joined["session"] as { id: string }).id).toBe(id);
   });
 
+  it("tells a machine with no project which project a code names", async () => {
+    // ⚠ The case the whole idea is for, and the one every other live method
+    // cannot serve: somebody was read four digits and has never had this project.
+    // Measured before this existed - `live.join` answered "this session has not
+    // said which installation has that project open", which is a true sentence
+    // about a step they could not take, because the step needs a project id they
+    // had no way to learn.
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, {
+      project,
+      revision: "rev-1",
+      story: "story-1",
+      rule: "code",
+    });
+
+    // bob announces nothing, and still gets an answer.
+    const found = await bob.value(TEAM_METHODS.liveByCode, { code: opened["code"] });
+    const session = found["session"] as { id: string; project: string; revision: string; story: string };
+    expect(session.project).toBe(project);
+    expect(session.revision).toBe("rev-1");
+    expect(session.story).toBe("story-1");
+    // And nothing it did not have to give away: the digits are not in the record.
+    expect(JSON.stringify(found["session"])).not.toContain(opened["code"] as string);
+
+    // With the project known, the ordinary steps work: say which installation has
+    // it, then join by the code.
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
+    const joined = await bob.value(TEAM_METHODS.liveJoin, { code: opened["code"] });
+    expect((joined["session"] as { id: string }).id).toBe(session.id);
+  });
+
+  it("says nothing about a code nobody is using, however it is asked", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1", rule: "code" });
+
+    expect((await bob.call(TEAM_METHODS.liveByCode, { code: "0000" })).code).toBe("not-found");
+  });
+
   it("answers a wrong code the way it answers a code nobody is using", async () => {
     // Telling the two apart would turn ten thousand guesses into a map of which
     // rooms exist, which is the one thing the shortness of a code would then cost.
@@ -1792,6 +1832,123 @@ describe("a live session", () => {
     expect((await bob.call(TEAM_METHODS.liveRule, { session: id, rule: "code" })).code).toBe("refused");
     expect((await ada.call(TEAM_METHODS.liveRule, { session: id, rule: "sideways" })).code)
       .toBe("bad-params");
+  });
+
+  it("keeps a room that is joined by asking out of nobody's list, and out of the room", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, {
+      project,
+      revision: "rev-1",
+      story: "story-1",
+      rule: "request",
+    });
+    const id = (opened["session"] as { id: string }).id;
+
+    // Listed, unlike a code room: being found is not the question this rule asks.
+    const listed = (await bob.value(TEAM_METHODS.liveList, { project }))["sessions"] as { id: string }[];
+    expect(listed.map((each) => each.id)).toEqual([id]);
+    // And still not walk-in-able, or the rule would be a decoration on a room
+    // anybody could join by pressing the same button.
+    expect((await bob.call(TEAM_METHODS.liveJoin, { session: id })).code).toBe("refused");
+  });
+
+  it("carries a request to whoever opened the room, and the answer back", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.send("subscribe", { topic: projectLiveTopic(project) });
+    await bob.send("subscribe", { topic: projectLiveTopic(project) });
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, {
+      project,
+      revision: "rev-1",
+      story: "story-1",
+      rule: "request",
+    });
+    const id = (opened["session"] as { id: string }).id;
+    ada.events.length = 0;
+
+    await bob.value(TEAM_METHODS.liveRequestJoin, { session: id });
+
+    await ada.until(() => ada.events.some((each) =>
+      (each.payload as { kind: string }).kind === "live-requested"));
+    const asked = ada.events.find((each) =>
+      (each.payload as { kind: string }).kind === "live-requested")?.payload as {
+        session: string;
+        member: { instance: string; account: string };
+      };
+    expect(asked.session).toBe(id);
+    // A person, not an id: what the host is about to decide about is somebody.
+    expect(asked.member).toMatchObject({ instance: "imac", account: "bob" });
+
+    bob.events.length = 0;
+    await ada.value(TEAM_METHODS.liveAnswerJoin, { session: id, instance: "imac", admit: true });
+
+    // Yes has no event of its own: being let in is a change to the roster, and a
+    // change to the roster is already announced.
+    await bob.until(() => bob.events.some((each) =>
+      (each.payload as { kind: string }).kind === "live-changed"));
+    const changed = bob.events.find((each) =>
+      (each.payload as { kind: string }).kind === "live-changed")?.payload as {
+        session: { members: { instance: string }[] };
+      };
+    expect(changed.session.members.map((each) => each.instance)).toContain("imac");
+  });
+
+  it("says no in a way the machine that asked can hear", async () => {
+    const { ada, bob, project } = await withTwo();
+    await bob.send("subscribe", { topic: projectLiveTopic(project) });
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, {
+      project,
+      revision: "rev-1",
+      story: "story-1",
+      rule: "request",
+    });
+    const id = (opened["session"] as { id: string }).id;
+    await bob.value(TEAM_METHODS.liveRequestJoin, { session: id });
+    bob.events.length = 0;
+
+    await ada.value(TEAM_METHODS.liveAnswerJoin, { session: id, instance: "imac", admit: false });
+
+    // On the project's topic, because the machine that asked is not in the room
+    // and has nothing else to listen to.
+    await bob.until(() => bob.events.some((each) =>
+      (each.payload as { kind: string }).kind === "live-refused"));
+    const refused = bob.events.find((each) =>
+      (each.payload as { kind: string }).kind === "live-refused")?.payload as {
+        session: string;
+        instance: string;
+      };
+    expect(refused).toMatchObject({ session: id, instance: "imac" });
+    // And still outside.
+    expect((await bob.call(TEAM_METHODS.liveJoin, { session: id })).code).toBe("refused");
+  });
+
+  it("lets nobody but the opener answer for a room, and takes no for an answer twice", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, {
+      project,
+      revision: "rev-1",
+      story: "story-1",
+      rule: "request",
+    });
+    const id = (opened["session"] as { id: string }).id;
+    await bob.value(TEAM_METHODS.liveRequestJoin, { session: id });
+
+    expect((await bob.call(TEAM_METHODS.liveAnswerJoin, { session: id, instance: "imac", admit: true })).code)
+      .toBe("refused");
+    expect((await ada.call(TEAM_METHODS.liveAnswerJoin, { session: id, instance: "imac" })).code)
+      .toBe("bad-params");
+
+    await ada.value(TEAM_METHODS.liveAnswerJoin, { session: id, instance: "imac", admit: true });
+    // Answering a request that is not outstanding is the state the caller wanted,
+    // which is the state there is - the same rule leaving an empty room follows.
+    await ada.value(TEAM_METHODS.liveAnswerJoin, { session: id, instance: "imac", admit: false });
   });
 
   it("is announced on the project it belongs to", async () => {
