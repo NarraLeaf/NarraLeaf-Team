@@ -14,10 +14,12 @@ import {
   findUser,
   InvalidUsernameError,
   listUsers,
+  pageUsers,
   revokeUserTokens,
   UnknownUserError,
   UsernameTakenError,
   WeakPasswordError,
+  type UserPage,
 } from "../src/identity/users.js";
 import { useTemporaryRoots } from "./temporary.js";
 
@@ -310,5 +312,87 @@ describe("authenticate", () => {
 
     expect(connection.prepare("SELECT password_hash AS hash FROM users").get()).toEqual(row);
     expect(before?.tokenEpoch).toBe(1);
+  });
+});
+
+describe("pageUsers", () => {
+  /**
+   * Accounts with the moments they were made written by hand.
+   *
+   * `createUser` stamps the clock, and a test that let it would be asserting on
+   * how long scrypt happened to take. Two of these share a moment, because two
+   * accounts made by one script do.
+   */
+  async function accountsMadeAt(
+    connection: DatabaseSync,
+    moments: Readonly<Record<string, number>>,
+  ): Promise<void> {
+    for (const [username, createdAt] of Object.entries(moments)) {
+      await createUser(connection, hasher, { username, password: PASSWORD });
+      connection
+        .prepare("UPDATE users SET created_at = ? WHERE username = ?")
+        .run(createdAt, username);
+    }
+  }
+
+  /** Every account a cursor walks to, in the order the pages handed them over. */
+  function walk(connection: DatabaseSync, limit: number): string[] {
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page: UserPage = pageUsers(connection, {
+        limit,
+        ...(cursor === undefined ? {} : { before: cursor }),
+      });
+      seen.push(...page.users.map((user) => user.username));
+      if (page.cursor === undefined) {
+        return seen;
+      }
+      cursor = page.cursor;
+    }
+  }
+
+  it("hands back a page at a time, newest first, and says where to carry on", async () => {
+    const connection = await database();
+    await accountsMadeAt(connection, { ada: 1000, bob: 2000, cleo: 3000 });
+
+    const page = pageUsers(connection, { limit: 2 });
+
+    expect(page.users.map((user) => user.username)).toEqual(["cleo", "bob"]);
+    expect(page.cursor).toBeDefined();
+  });
+
+  it("walks every account without repeating one or skipping one", async () => {
+    const connection = await database();
+    // ada and bob were made in the same millisecond, which is what the id in
+    // the cursor is there for: without it one of them is handed over twice and
+    // the other never.
+    await accountsMadeAt(connection, { ada: 1000, bob: 1000, cleo: 2000, dee: 3000 });
+
+    expect(walk(connection, 2).sort()).toEqual(["ada", "bob", "cleo", "dee"]);
+  });
+
+  it("says nothing follows the last page", async () => {
+    const connection = await database();
+    await accountsMadeAt(connection, { ada: 1000, bob: 2000 });
+
+    const page = pageUsers(connection, { limit: 2 });
+
+    expect(page.users).toHaveLength(2);
+    expect(page.cursor).toBeUndefined();
+  });
+
+  it("carries the groups an account is in, as every reader of a record does", async () => {
+    const connection = await database();
+    await createUser(connection, hasher, { username: "ada", password: PASSWORD, groups: ["admin"] });
+
+    expect(pageUsers(connection, { limit: 10 }).users[0]?.groups).toEqual(["admin"]);
+  });
+
+  it("starts again from the top for a cursor it cannot read", async () => {
+    const connection = await database();
+    await accountsMadeAt(connection, { ada: 1000, bob: 2000 });
+
+    expect(pageUsers(connection, { limit: 10, before: "not a cursor" }).users).toHaveLength(2);
   });
 });

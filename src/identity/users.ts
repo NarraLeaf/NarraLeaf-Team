@@ -172,6 +172,81 @@ export function listUsers(database: DatabaseSync): UserRecord[] {
     .map((row) => toUser(database, row));
 }
 
+export interface UserQuery {
+  readonly limit: number;
+  /**
+   * Where the previous page ended, as `<createdAt>:<id>`.
+   *
+   * The id is in it because `nlteam init` and a script that makes a team's
+   * accounts in one go write several within the same millisecond, and a cursor
+   * that was only a time would either repeat one of them or skip one. Opaque to
+   * whoever holds it, which passes back what it was given.
+   */
+  readonly before?: string;
+}
+
+export interface UserPage {
+  readonly users: UserRecord[];
+  /** Where to carry on from, absent when this is the end. */
+  readonly cursor?: string;
+}
+
+/**
+ * A page of the accounts, newest first.
+ *
+ * By when they were made rather than by name, which is what {@link listUsers}
+ * orders by, because a page has to be cut somewhere both sides agree on and a
+ * username can be neither compared across pages nor relied on to stay put — a
+ * list ordered by something that can change under a cursor repeats and skips
+ * rows as it is paged. Newest first because the accounts an operator is
+ * checking on are the ones that have just appeared.
+ *
+ * One row more than asked for is read, which is how "is there more" is answered
+ * without a second query.
+ */
+export function pageUsers(database: DatabaseSync, query: UserQuery): UserPage {
+  const conditions: string[] = [];
+  const values: (string | number)[] = [];
+  const cursor = parseUserCursor(query.before);
+  if (cursor !== undefined) {
+    conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
+    values.push(cursor.createdAt, cursor.createdAt, cursor.id);
+  }
+  const rows = database
+    .prepare(
+      `${SELECT_USER} ${conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")} `}` +
+        "ORDER BY created_at DESC, id DESC LIMIT ?",
+    )
+    .all(...values, query.limit + 1);
+
+  const users = rows.slice(0, query.limit).map((row) => toUser(database, row));
+  const last = users.at(-1);
+  return {
+    users,
+    ...(rows.length > query.limit && last !== undefined
+      ? { cursor: `${last.createdAt}:${last.id}` }
+      : {}),
+  };
+}
+
+function parseUserCursor(
+  value: string | undefined,
+): { readonly createdAt: number; readonly id: string } | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const separator = value.indexOf(":");
+  if (separator === -1) {
+    return undefined;
+  }
+  const createdAt = Number(value.slice(0, separator));
+  const id = value.slice(separator + 1);
+  // A cursor nobody can read is treated as no cursor rather than as a refusal:
+  // it came from this server, so one that does not parse is a caller that lost
+  // its place, and the first page is where somebody who lost their place is.
+  return Number.isInteger(createdAt) && id !== "" ? { createdAt, id } : undefined;
+}
+
 /** How many accounts exist. Zero is what makes a Team server need bootstrapping. */
 export function countUsers(database: DatabaseSync): number {
   const row = database.prepare("SELECT COUNT(*) AS count FROM users").get();

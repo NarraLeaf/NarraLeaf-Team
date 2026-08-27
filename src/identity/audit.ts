@@ -238,3 +238,93 @@ export function listDecisions(
     .all(limit)
     .map(toDecision);
 }
+
+/**
+ * One decision with the key of the row it was read from.
+ *
+ * Apart from {@link Decision} rather than folded into it, because the key is
+ * about the table and not about the decision: a caller that only wants to know
+ * what this server was asked has no use for it, and a reader that pages does —
+ * it is what a cursor is built from, and what a list of rows that are otherwise
+ * identical can be keyed on.
+ */
+export interface RecordedDecision extends Decision {
+  readonly id: number;
+}
+
+export interface DecisionQuery {
+  readonly limit: number;
+  /**
+   * Where the previous page ended, as `<at>:<id>`.
+   *
+   * The key is in it because this table takes a decision on every repository
+   * access, so several land in the same millisecond as a matter of course, and
+   * a cursor that was only a time would either repeat one of them or skip one.
+   * Opaque to whoever holds it, which passes back what it was given.
+   */
+  readonly before?: string;
+}
+
+export interface DecisionPage {
+  readonly decisions: RecordedDecision[];
+  /** Where to carry on from, absent when this is the end. */
+  readonly cursor?: string;
+}
+
+/**
+ * A page of the decisions, newest first.
+ *
+ * The same order {@link listDecisions} reads in and for the same reason, but
+ * bounded by a cursor rather than by a number that has to be raised every time
+ * somebody wants to look further back. One row more than asked for is read,
+ * which is how "is there more" is answered without counting a table that is
+ * being written to on every repository access.
+ */
+export function pageDecisions(database: DatabaseSync, query: DecisionQuery): DecisionPage {
+  const conditions: string[] = [];
+  const values: number[] = [];
+  const cursor = parseDecisionCursor(query.before);
+  if (cursor !== undefined) {
+    conditions.push("(at < ? OR (at = ? AND id < ?))");
+    values.push(cursor.at, cursor.at, cursor.id);
+  }
+  const rows = database
+    .prepare(
+      "SELECT id, at, username, resource, allowed, detail FROM decisions " +
+        `${conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")} `}` +
+        "ORDER BY at DESC, id DESC LIMIT ?",
+    )
+    .all(...values, query.limit + 1);
+
+  const decisions = rows
+    .slice(0, query.limit)
+    .map((row) => ({ id: integerColumn(row, "id"), ...toDecision(row) }));
+  const last = decisions.at(-1);
+  return {
+    decisions,
+    ...(rows.length > query.limit && last !== undefined
+      ? { cursor: `${last.at}:${last.id}` }
+      : {}),
+  };
+}
+
+function parseDecisionCursor(
+  value: string | undefined,
+): { readonly at: number; readonly id: number } | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const separator = value.indexOf(":");
+  if (separator === -1) {
+    return undefined;
+  }
+  const at = Number(value.slice(0, separator));
+  const key = value.slice(separator + 1);
+  const id = Number(key);
+  // A cursor nobody can read is treated as no cursor rather than as a refusal:
+  // it came from this server, so one that does not parse is a caller that lost
+  // its place, and the first page is where somebody who lost their place is.
+  // `key` is checked for being written at all, because an empty string reads as
+  // nought rather than as nothing.
+  return key !== "" && Number.isInteger(at) && Number.isInteger(id) ? { at, id } : undefined;
+}
