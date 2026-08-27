@@ -345,7 +345,9 @@ export function liveTopic(sessionId: string): string {
  *
  * **Every one of them is refused to anybody who is not an operator**, which no
  * other topic on this server is: the rest are about projects, and every account
- * reaches every project. See the note on `admin/*` in src/team/topics.ts.
+ * reaches every project. A subscription is judged when it is taken, so one held
+ * by an account that is demoted afterwards is taken back rather than kept until
+ * the socket closes - see {@link TeamSubscriptionWithdrawn}.
  */
 
 /** An account was made, disabled, enabled, given or denied administration, or had its tokens refused. */
@@ -987,6 +989,7 @@ export interface TeamAdminMintedToken {
  * strikes by answering with the record rather than with an acknowledgement.
  */
 export type TeamAdminUsersEvent =
+  | TeamSubscriptionWithdrawn
   | { readonly kind: "user-created"; readonly user: TeamAdminUser }
   | { readonly kind: "user-disabled"; readonly user: TeamAdminUser }
   | { readonly kind: "user-enabled"; readonly user: TeamAdminUser }
@@ -996,6 +999,7 @@ export type TeamAdminUsersEvent =
 
 /** What happened on the `admin/settings` topic. */
 export type TeamAdminSettingsEvent =
+  | TeamSubscriptionWithdrawn
   | { readonly kind: "setting-changed"; readonly setting: TeamAdminSetting };
 
 /**
@@ -1006,13 +1010,34 @@ export type TeamAdminSettingsEvent =
  * would leave a panel holding a list with two keys claiming to sign.
  */
 export type TeamAdminKeysEvent =
+  | TeamSubscriptionWithdrawn
   | { readonly kind: "keys-rotated"; readonly keys: readonly TeamAdminKey[] };
 
 /** What happened on the `admin/refusals` topic. Read what that topic is named for. */
-export type TeamAdminRefusalsEvent = {
-  readonly kind: "decision-refused";
-  readonly decision: TeamAdminDecision;
-};
+export type TeamAdminRefusalsEvent =
+  | TeamSubscriptionWithdrawn
+  | { readonly kind: "decision-refused"; readonly decision: TeamAdminDecision };
+
+/**
+ * A subscription this server has taken back, said on the topic it is taking.
+ *
+ * An ordinary event rather than a frame of its own, so that a client which has
+ * never heard of it does what it does with any event kind it does not know, and
+ * an older one is not left holding a frame it has no name for.
+ *
+ * Only the `admin/*` topics ever carry this, and only for one reason: the
+ * account holding the subscription stopped being an operator. A topic is judged
+ * when it is taken and a token stays perfectly valid across a demotion, so
+ * without this a demoted account would go on being told about the accounts
+ * until it happened to reconnect. The session itself stays open and keeps
+ * everything else it subscribed to.
+ */
+export interface TeamSubscriptionWithdrawn {
+  readonly kind: "subscription-withdrawn";
+  readonly topic: string;
+  /** Why, in English, for a log. What a person reads is written by the client. */
+  readonly why: string;
+}
 
 /* -------------------------------------------------------- method names */
 

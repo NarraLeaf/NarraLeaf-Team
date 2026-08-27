@@ -53,6 +53,7 @@ import {
   projectLiveTopic,
   projectOverlayTopic,
   projectThreadsTopic,
+  projectTopic,
   TOPIC_ADMIN_KEYS,
   TOPIC_ADMIN_REFUSALS,
   TOPIC_ADMIN_SETTINGS,
@@ -3229,5 +3230,98 @@ describe("a refusal, as it reaches a session", () => {
     expect(ada.events[0]?.topic).toBe(TOPIC_ADMIN_REFUSALS);
     expect(event.kind).toBe("decision-refused");
     expect(event.decision.detail).toBe("expired");
+  });
+});
+
+describe("a management subscription and the operator who took it", () => {
+  it("goes when the account stops being an operator, and says so on the topic", async () => {
+    const { team, ada } = await administered();
+    for (const topic of MANAGEMENT_TOPICS) {
+      await ada.send("subscribe", { topic });
+    }
+
+    setAdmin(team.database, "ada", false);
+    // Any call at all. Every one of them identifies its caller as it arrives, so
+    // this is where a session that is doing anything finds out; a session saying
+    // nothing is told within one revalidation interval instead.
+    await ada.call(TEAM_METHODS.projectsList);
+
+    await ada.until(() => ada.events.length >= MANAGEMENT_TOPICS.length);
+    expect(ada.events.map((event) => event.topic).sort()).toEqual([...MANAGEMENT_TOPICS].sort());
+    for (const event of ada.events) {
+      const payload = event.payload as { kind: string; topic: string; why: string };
+      expect(payload.kind).toBe("subscription-withdrawn");
+      expect(payload.topic).toBe(event.topic);
+      expect(payload.why).toContain("operator");
+    }
+  });
+
+  it("stops being delivered to, while everything else it holds carries on", async () => {
+    const { team, ada } = await administered();
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "harbour",
+      createdBy: requireUser(team.database, "ada").id,
+    });
+    await ada.send("subscribe", { topic: TOPIC_ADMIN_USERS });
+    await ada.send("subscribe", { topic: projectTopic(project.id) });
+
+    setAdmin(team.database, "ada", false);
+    await ada.call(TEAM_METHODS.projectsList);
+    await ada.until(() => ada.events.length > 0);
+
+    team.socket.hub.publish(TOPIC_ADMIN_USERS, { kind: "user-created" });
+    team.socket.hub.publish(projectTopic(project.id), {
+      kind: "project-read",
+      project: project.id,
+    });
+
+    // The project event arrives and the management one does not. A demotion is
+    // no reason to stop telling somebody about the work they are still doing.
+    await ada.until(() => ada.events.length > 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ada.events).toHaveLength(2);
+    expect(ada.events[1]?.topic).toBe(projectTopic(project.id));
+  });
+
+  it("leaves the session open rather than closing it", async () => {
+    const { team, ada } = await administered();
+    await ada.send("subscribe", { topic: TOPIC_ADMIN_USERS });
+
+    setAdmin(team.database, "ada", false);
+    await ada.call(TEAM_METHODS.projectsList);
+    await ada.until(() => ada.events.length > 0);
+
+    expect(ada.byes).toEqual([]);
+    expect(ada.closes).toEqual([]);
+    // Still an account of this server, and still reaches every project on it.
+    expect((await ada.call(TEAM_METHODS.projectsList)).code).toBeUndefined();
+  });
+
+  it("does not move the sequence for the operators who are still listening", async () => {
+    // The topic did not change; one session stopped holding it. A sequence that
+    // moved would tell every other panel to re-read a list nothing touched.
+    const { team, ada, bob } = await administered();
+    setAdmin(team.database, "bob", true);
+    const held = await bob.send("subscribe", { topic: TOPIC_ADMIN_USERS });
+    await ada.send("subscribe", { topic: TOPIC_ADMIN_USERS });
+
+    setAdmin(team.database, "ada", false);
+    await ada.call(TEAM_METHODS.projectsList);
+    await ada.until(() => ada.events.length > 0);
+
+    const again = await bob.send("subscribe", { topic: TOPIC_ADMIN_USERS });
+    expect(again.seq).toBe(held.seq);
+    expect(bob.events).toEqual([]);
+  });
+
+  it("takes nothing from an operator who is still one", async () => {
+    const { ada } = await administered();
+    await ada.send("subscribe", { topic: TOPIC_ADMIN_USERS });
+
+    await ada.call(TEAM_METHODS.projectsList);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(ada.events).toEqual([]);
   });
 });

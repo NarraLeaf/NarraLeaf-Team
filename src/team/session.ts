@@ -18,6 +18,12 @@
  *     session that makes no calls still receives events, and a disabled account
  *     that goes on being told what everybody is doing is the same hole with a
  *     longer lease.
+ *   - **May it still be told what it asked to be told?** A third question rather
+ *     than a rephrasing of the second. A topic is judged once, when it is
+ *     subscribed to, and an account demoted out of the operators goes on holding
+ *     a perfectly good token - so the token check alone would leave it receiving
+ *     the accounts, the settings and the keys until it happened to reconnect.
+ *     See {@link TeamSession.withdrawManagement}.
  *
  * Everything a handler throws that is not a {@link MethodError} is answered as
  * `internal` **with its message left off the wire**. A fault's message is a
@@ -39,10 +45,20 @@ import {
   type TeamErrorCode,
   type TeamServerFrame,
 } from "./protocol.js";
-import { judgeTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
+import { isAdminTopic, judgeTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
 import { CLOSE, type WebSocketConnection } from "./websocket.js";
 
-/** How often a session checks that the account behind it may still be here. */
+/**
+ * How often a session that is saying nothing checks that the account behind it
+ * may still be here, and may still be told what it asked to be told.
+ *
+ * **Thirty seconds is the whole of the window**, and it is worth saying in
+ * words rather than leaving to be worked out from a number: a session that has
+ * gone quiet goes on receiving what it subscribed to for at most one of these
+ * after the account behind it stops being an operator. A session that is doing
+ * anything at all has no window, because every call re-identifies its caller
+ * and asks the same question on the way through.
+ */
 const REVALIDATE_MS = 30_000;
 
 /**
@@ -147,8 +163,10 @@ export class TeamSession implements HubSession {
     });
 
     this.revalidation = setInterval(() => {
-      // The answer is thrown away: identifying is itself the check, and a
-      // refusal ends the session from inside it.
+      // The answer is thrown away: identifying is itself the check, it takes
+      // back anything this session may no longer hold, and a refusal ends the
+      // session from inside it. This timer is what covers a session that is
+      // making no calls; one that is makes the same check on each of them.
       this.identify();
     }, REVALIDATE_MS);
     // The same reasoning as the heartbeat in ./websocket.ts: an open session is
@@ -349,12 +367,63 @@ export class TeamSession implements HubSession {
   }
 
   /**
+   * Take back every management subscription from somebody who is no longer an
+   * operator.
+   *
+   * A subscription outliving the person who could take it is the one thing
+   * judging a topic when it is granted cannot prevent on its own: `judgeTopic`
+   * runs as a client subscribes, the account is demoted afterwards, and the
+   * token it holds is untouched by that - minted before, signed, unexpired, and
+   * belonging to an account that is neither disabled nor revoked. Everything
+   * else about the session is in perfect order.
+   *
+   * The session stays open and keeps everything else it asked for. A demotion is
+   * no reason to disconnect somebody who is still an author on this server, and
+   * ending the socket over it would look to them exactly like a server that had
+   * fallen over.
+   *
+   * Each topic taken back is said on that topic, once, and to this session
+   * alone: the hub is not asked to publish, because nothing has happened that
+   * anybody else's subscription is about, and the sequence must not move for the
+   * operators who are still listening. It goes out as an ordinary event so that
+   * a client which has never heard of this kind does with it whatever it does
+   * with any event kind it does not know, rather than meeting a frame it has no
+   * name for.
+   */
+  private withdrawManagement(user: UserRecord): void {
+    if (isOperator(user.groups)) {
+      return;
+    }
+    for (const topic of [...this.topics]) {
+      if (!isAdminTopic(topic)) {
+        continue;
+      }
+      this.topics.delete(topic);
+      this.send({
+        t: "event",
+        topic,
+        seq: this.options.hub.sequenceOf(topic),
+        payload: {
+          kind: "subscription-withdrawn",
+          topic,
+          why: "this account is no longer an operator of this server",
+        },
+      });
+    }
+  }
+
+  /**
    * Who is calling, now.
    *
    * Ends the session when the answer is nobody, and returns undefined so that
    * the caller stops. A refusal here is never per-call: the token that opened
    * this session is the only one it has, so a token that has stopped working has
    * stopped working for everything.
+   *
+   * Whoever it turns out to be is asked the second question on the way through,
+   * because the answer is already in hand: a session that is making calls has no
+   * reason to wait out a revalidation interval before losing what it may no
+   * longer be told.
    */
   private identify(): UserRecord | undefined {
     const identified = identifyToken(
@@ -367,6 +436,7 @@ export class TeamSession implements HubSession {
       this.bye("unauthenticated", describeRefusal(identified.reason));
       return undefined;
     }
+    this.withdrawManagement(identified.user);
     return identified.user;
   }
 
