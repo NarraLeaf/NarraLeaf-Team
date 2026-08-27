@@ -259,18 +259,30 @@ would mark every record stale for a minute after a restart.
 
 ## One implementation, whatever asks for it
 
-Every operator's verb is a function in `src/operations.ts`, and each one calls
-exactly what the command of the same name calls: disabling an account reaches
-`disableUser`, refusing the tokens it holds reaches `revokeUserTokens`, rotating
-a key reaches `KeyStore.rotate`. What each one answers with says the same thing
-the command prints, including how far it reaches — revoking says that a
-connection already open may last until its repository token expires, because
-"every token" is otherwise read as including a session somebody has open.
+An operator's verb has two callers — a command and a method — and neither of them
+implements it. Disabling an account is `disableUser` from both, refusing the
+tokens it holds is `revokeUserTokens` from both, rotating a key is
+`KeyStore.rotate` from both. So what a username may be, how short a password may
+be and what happens to an account that is already disabled are decided in one
+place, and a rule tightened there is tightened for whoever asks.
 
-They are functions rather than a dispatch envelope over a request type, so that
-whatever comes to need them next calls them the way the commands do. Restarting
-`loreserver` is not among them: it belongs to the `nlteam up` that started it,
-and nothing else can honestly offer to.
+What the two ends do with the answer is where they differ, and they differ
+because their readers do. A command prints a sentence, including how far the
+thing it just did reaches — revoking says that a connection already open may last
+until its repository token expires, because "every token" is otherwise read as
+including a session somebody has open. A method answers with the record: the
+account as `adminUserBody` built it, the setting as the settings list carries it,
+so a panel updates the row it is already holding rather than re-reading a page to
+find out what it did. A sentence would be the wrong shape for one and a record
+for the other, which is why neither is built from the other.
+
+Two things one end will do and the other will not, and both are deliberate.
+Removing the last operator — demoting them, or disabling their account — is
+refused over the session and allowed at the command line: the command line runs
+on the machine that holds the storage root, so it is the way back from a server
+nobody can administer, and the refusal names the command. Restarting `loreserver`
+is offered by neither: it belongs to the `nlteam up` that started it, and nothing
+else can honestly offer to.
 
 What a whole server *is* — whether the server beside it is answering, what its
 store weighs, how many accounts, projects and decisions it holds — is worked out
@@ -299,22 +311,28 @@ field, and a message that needs a value is a function of exactly the values it
 needs:
 
 ```ts
-accountCreated: ({ username, group }) =>
-  `created ${username} in ${group}; issue a token for them to sign in with`,
+notADuration: ({ value }) =>
+  `"${value}" is not a duration. Write it as 30 minutes, 48 hours or 7 days.`,
 ```
 
 So a catalogue missing a message does not compile, and one that forgot a name
-inside a sentence does not compile either. The alternative — `t("action.accountCreated",
+inside a sentence does not compile either. The alternative — `t("error.notADuration",
 {...})` against a bag of strings — moves both of those to the moment somebody in
 Tokyo reads it. There is no template syntax, no interpolation format and
 no framework; `messagesFor(locale)` hands back an object and the caller reads
 fields off it.
 
-What is in them is what an operator's verb answers with and what a duration is
-written in, and nothing else: `src/operations.ts` and `src/duration.ts` take a
-language and default to English, which is what the commands and the log get.
-A catalogue holds no sentence nothing reads — three languages of a message that
-has no caller is three translations to keep true for nobody.
+What is in them is small, and deliberately: a duration in words and a refusal to
+read one back. Those are the sentences that have to reach a person in whatever
+language they read, because a lifetime is *shown* to somebody in words and those
+words are what they type back — `src/duration.ts` writes and reads them both,
+taking a language and defaulting to English. Everything this server says of its
+own accord is English: a command prints for whoever is running the server, a
+refusal on the wire is a code and a line for a log, and the sentence a person
+sees is written by the client holding the screen. **A catalogue holds no sentence
+nothing reads** — three languages of a message with no caller is three
+translations to keep true for nobody, which is why the ones the deleted terminal
+interface spoke went with it.
 
 The catalogues are bundled rather than read from disk, which is the only thing
 they could be: the executable carries its own version number for the same
@@ -325,8 +343,9 @@ wanting the number does not have to take words in an unknown language apart.
 
 The rule for what is *not* translated is in the tests and worth restating: what
 Team recorded stays as Team recorded it. Usernames, project names, groups, key
-ids, the label a settings row is found by on the way back, and the detail a
-decision was written down with are data. `tests/i18n.test.ts` walks every
+ids, the label a settings row is found by on the way back, the detail a decision
+was written down with, and the value somebody typed that could not be read are
+data. `tests/i18n.test.ts` walks every
 catalogue against English, calls every sentence in it, and checks that the names
 handed in come back out — the type checker can promise a message exists and
 cannot promise it says anything. All three change together or that test fails.

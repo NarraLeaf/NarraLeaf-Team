@@ -592,3 +592,12 @@ nlteam user revoke-admin bob --root /srv/team
 
 `nlteam init` puts the first account in it. The last account in it cannot be
 taken out: a server with no admin has nobody who could put one back.
+
+Everything on this page an operator does at the machine can also be done over the
+session, by an account in that group, from a management panel — making accounts,
+disabling and enabling them, granting and revoking administration, refusing the
+tokens somebody holds, minting a token for them, changing a setting and rotating
+the signing keys. The protocol will not remove the last operator or disable their
+account: it would leave a server nobody could administer over it. These commands
+still will, because they run on the machine that holds the storage root, and that
+is what makes them the way back.
