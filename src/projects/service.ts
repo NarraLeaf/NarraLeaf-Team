@@ -62,6 +62,7 @@ import {
   recordDecision,
   UNIDENTIFIED_ACCOUNT,
   type NewDecision,
+  type RecordedDecision,
 } from "../identity/audit.js";
 import {
   bearerToken,
@@ -98,6 +99,23 @@ export interface AuthorizationContext {
   readonly namedLifetimes?: Partial<TokenLifetimes>;
   /** Where one line per decision goes. */
   readonly log: (line: string) => void;
+  /**
+   * Somewhere to say that a decision was **refused**, for an operator watching.
+   *
+   * Beside {@link log} and shaped like it, because it is the same kind of thing:
+   * a channel out of here to whatever this service was brought up beside,
+   * absent in a build that has nothing to say it to. This one goes to the
+   * sessions that are subscribed to `admin/refusals`; a build with no socket
+   * has none, and leaves it unset.
+   *
+   * Refusals alone, and that is the design rather than a shortcut. A decision is
+   * taken on every repository access — thousands in an afternoon of one team
+   * working — so calling this on each of them would push more frames than the
+   * rest of the protocol together, to tell a panel something it could only act
+   * on by re-reading a page it already holds. A refusal is the rare outcome and
+   * the one somebody wants put in front of them.
+   */
+  readonly refused?: (decision: RecordedDecision) => void;
 }
 
 /**
@@ -132,7 +150,7 @@ const DATA_CONNECTION = "data connection";
 const NOTHING = "nothing";
 
 /**
- * Say what was decided, once, to both places it has to go.
+ * Say what was decided, once, to every place it has to go.
  *
  * The log line and the record are written side by side rather than one derived
  * from the other: the line is a sentence for somebody watching a terminal, and
@@ -140,10 +158,17 @@ const NOTHING = "nothing";
  * Writing both at one call site is what stops either being forgotten; the two
  * calls that stay on `context.log` alone are the ones where Team decided
  * nothing, and each of them says so.
+ *
+ * A refusal goes to a third place, and only a refusal: it is pushed at whoever
+ * is watching this server rather than left to be found by paging the log. The
+ * reasoning for why an allowance is not is on {@link AuthorizationContext.refused}.
  */
 function decided(context: AuthorizationContext, line: string, decision: NewDecision): void {
   context.log(line);
-  recordDecision(context.database, decision);
+  const recorded = recordDecision(context.database, decision);
+  if (!recorded.allowed) {
+    context.refused?.(recorded);
+  }
 }
 
 /**

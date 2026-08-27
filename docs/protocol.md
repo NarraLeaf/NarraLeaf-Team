@@ -43,7 +43,7 @@ served as JSON, is never cached, and answers `GET` and `HEAD`.
   "name": "team.example.lan",
   "auth": { "required": true, "url": "https://team.example.lan:41402" },
   "data": { "url": "lore://team.example.lan:41337" },
-  "capabilities": ["session", "comments", "clients", "live", "overlay", "password-sign-in", "project-history"],
+  "capabilities": ["session", "comments", "clients", "live", "overlay", "admin", "password-sign-in", "project-history"],
   "authority": { "sha256": "3D:38:…" },
   "version": "0.1.0"
 }
@@ -160,7 +160,7 @@ Before anything is asked, the server sends one `hello`:
   "session": "<connection id>",
   "account": { "id": "…", "username": "ada", "displayName": "Ada", "operator": false },
   "methods": ["projects.list", "…"],
-  "capabilities": ["session", "comments", "clients", "live", "overlay", "password-sign-in", "project-history"],
+  "capabilities": ["session", "comments", "clients", "live", "overlay", "admin", "password-sign-in", "project-history"],
   "serverTime": 1737936000000,
   "heartbeatMs": 30000
 }
@@ -291,11 +291,24 @@ announced by a server that cannot answer it.
 | `clients` | Which installations are connected, and what each has open. |
 | `live` | Live sessions: rooms on a project, for finding installations and broadcasting to them. |
 | `overlay` | Data attached to a project at a revision, which never enters the repository. |
+| `admin` | This server's own state — its accounts, settings, keys, decisions and health — may be read and changed over the socket, by an operator. |
 | `password-sign-in` | A username and a password may be exchanged for a token, before any session. This names the sign-in route above. |
 | `project-history` | A project's revisions may be read a page at a time, through `projects.history`. Present only where the server has a reader that can page one — a build without one answers an empty page, which is not the same as a project with no revisions. |
 
 A client decides what a server can do from `capabilities` or from `hello.methods`,
 never by probing for a `404`.
+
+**Every name here is about the build and none of them is about the caller.**
+`admin` is where that is easiest to misread: it is announced to every session,
+including the ones every `admin.*` method will refuse, because it says this
+server has a management surface rather than that whoever is reading it may use
+one. That second question is answered in the same `hello` frame, by
+`account.operator`. A client draws a management surface from the two together —
+the capability says the surface can exist here, the account says whether to draw
+it — and folding them into one would leave a client unable to tell "this server
+is too old to be administered over the socket" from "you are not an operator",
+which are different sentences to show a person and only one of them is about
+them.
 
 ## Methods
 
@@ -329,6 +342,53 @@ unless a capability is named.
 | `overlay.list` | `overlay` | What is attached to one project, and what the server last read its head to be. |
 | `overlay.put` | `overlay` | Attach something, or replace something one attached before. |
 | `overlay.drop` | `overlay` | Take one's own record off again. |
+| `admin.users.list` | `admin` | A page of this server's accounts, newest first. Each carries the groups it is in, whether those make it an operator, whether it is disabled, and when its tokens were last refused — which is more than `members.list` says, and deliberately so. `limit` defaults to 50 and is capped at 200. |
+| `admin.audit.list` | `admin` | A page of the decisions this server has been asked to make, newest first. `limit` defaults to 50 and is capped at 200. |
+| `admin.settings.list` | `admin` | Everything this server keeps in its settings, and which rows may be changed. Answered whole rather than paged: the rows are a literal in the server rather than a query, so there is nothing for a cursor to be a cursor over. |
+| `admin.keys.list` | `admin` | Every signing key this server holds, published and retired, and which of them signs. The public half of each and nothing else. Answered whole, for the reason the settings are: this is however many times a server has rotated. |
+| `admin.server.status` | `admin` | What this server is, what it can reach, and how much of each thing it holds. Worked out when somebody asks and kept briefly; the answer carries the moment it was worked out and how long one is kept, so a client shows "as of" rather than implying it is live. |
+| `admin.users.create` | `admin` | Make an account from a username and a password, optionally with a display name, an address, and `operator: true` to put it in the admin group. Answers with the account. A name already taken is a `conflict`; a name or a password this server will not store is `bad-params`, carrying the sentence that says what either may be. Announces `user-created`. |
+| `admin.users.disable` | `admin` | Stop an account being issued anything, and refuse the tokens it already holds. Answers with the account. Idempotent: one already disabled is answered and nothing is announced, and its token epoch is not moved a second time. Announces `user-disabled`. |
+| `admin.users.enable` | `admin` | Let a disabled account sign in again. Tokens minted before it was disabled stay unrenewable. Idempotent, and announces `user-enabled`. |
+| `admin.users.grantAdmin` | `admin` | Put an account in the admin group. Idempotent, and announces `user-granted-admin`. |
+| `admin.users.revokeAdmin` | `admin` | Take one out again. Idempotent, and announces `user-revoked-admin`. **Refused for the last operator**; see below. |
+| `admin.users.revokeTokens` | `admin` | Refuse every token an account already holds, without disabling it. Answers with the account, whose `tokensInvalidatedAt` is the moment. Never a no-op, which is why it is worth a `clientId`. Announces `user-tokens-revoked`. |
+| `admin.tokens.mint` | `admin` | Mint a sign-in token for an account without knowing its password, to be handed to the person. Answers with the account, when it expires, and the token — **shown once and kept nowhere**. A repeat under the same `clientId` mints nothing and answers without a token. Refused for a disabled account. Announces nothing on any topic. |
+| `admin.settings.set` | `admin` | Change one setting, named by the `label` the settings list gives it, to `value`. A lifetime takes the words the row shows, `7d`, or a bare number of seconds. Answers with the row as the list carries it. A row that is not editable is `refused`; a label this server has not got is `not-found`. Announces `setting-changed`, and nothing when the value was already that. |
+| `admin.keys.rotate` | `admin` | Generate a signing key and sign with it from now on. Every key that is not retired goes on being published, so a token signed a second ago still verifies. Answers with the whole key list, and announces `keys-rotated` carrying it. |
+
+### Administering a server
+
+The `admin` family is refused to anybody who is not an operator, and the check is
+made **on every call** rather than when the session opened. That is not
+belt-and-braces: this server's whole claim about revocation is that it takes
+effect at once rather than at expiry, and a session that decided this once would
+leave an account demoted an hour ago still administering until it happened to
+reconnect.
+
+**Every write answers with the record it changed**, never with an
+acknowledgement, so a panel updates the row it is already holding instead of
+re-reading a page to find out what it did. **Every write takes an optional
+`clientId`** and is done at most once under it, keyed by the account, the method
+and that id together — one id reused across two methods is two writes rather than
+one. **A write that changed nothing announces nothing**: enabling an account that
+is already enabled is the state that was asked for.
+
+**The last operator cannot be removed over this protocol.** Demoting the only
+account that can administer this server, or disabling it, is refused: it would
+leave a server nobody could put right over the session. The refusal names the way
+back — `nlteam user grant-admin` or `nlteam user enable`, run on the machine that
+holds the storage root. The command line is the rescue plane, and is deliberately
+allowed to do what this one will not.
+
+**A management subscription does not outlive the operator who took it.** A topic
+is judged when it is subscribed to, and an account demoted afterwards keeps a
+perfectly good token — so the check is made again on every call the session
+makes, and on its revalidation timer for a session making none. The window for a
+silent one is **thirty seconds**. Each topic taken back is said on that topic as
+an ordinary event, `{ kind: "subscription-withdrawn", topic, why }`, and to that
+session alone: the sequence does not move for the operators still listening, and
+the session stays open and keeps everything else it subscribed to.
 
 ### Anchors
 
@@ -354,9 +414,23 @@ server never publishes on is refused rather than left waiting.
 | `project:{project}/clients` | An installation opened or closed one project. |
 | `project:{project}/live` | A live session on one project opened, changed or closed. |
 | `live:{session}` | Something was said inside one live session. Kept by nobody. |
+| `admin/users` | An account was made, disabled, enabled, given or denied administration, or had its tokens refused. Operators only. |
+| `admin/settings` | A setting of this server changed. Operators only. |
+| `admin/keys` | This server rotated its signing keys; the event carries the whole list. Operators only. |
+| `admin/refusals` | A decision this server was asked to make was **refused**. Operators only. |
 
 The people on a server are read on demand, through `members.list`, rather than
-watched on a topic.
+watched on a topic: that list is a name beside a piece of work, and what moves it
+is an account being made, which `admin/users` already says.
+
+`admin/refusals` is named for what it publishes rather than for the collection it
+belongs to, and that is the design rather than a shortening. A decision is
+recorded on the path that answers every repository access — thousands in an
+afternoon of one team working — so a topic firing per decision would push more
+frames than the rest of this protocol together, to say something a panel could
+only act on by re-reading a page it already holds. **An allowed decision is
+published nowhere.** A client that wants the whole log pages `admin.audit.list`,
+and has to: the sequence on that topic counts refusals, not rows.
 
 ## Limits
 

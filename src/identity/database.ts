@@ -434,6 +434,44 @@ const MIGRATIONS: readonly Migration[] = [
          WHERE client_id IS NOT NULL`,
     ],
   },
+  {
+    version: 11,
+    description: "a write a client named, where there is no row to hang its name on",
+    statements: [
+      // Every repeatable write before this one carried its client id on the row
+      // it made — a thread, a comment, an overlay record, a project. The writes
+      // an operator makes have no such row: disabling an account creates
+      // nothing, changing a setting replaces a value, and rotating a key writes
+      // a file. So the note lives apart from the effect, and this table is it.
+      //
+      // The primary key is all three columns, which is the `(account, method,
+      // client id)` rule the four above are keyed by, written out as a table of
+      // its own. The method is in it because one client id reused across two
+      // different writes must not be handed the answer to the wrong one.
+      //
+      // `account` is a user id with no foreign key, for the reason the threads
+      // and decisions tables give: a row that cascaded away with an account
+      // would be a record deleted by exactly the thing it records.
+      //
+      // `answer` is what the write produced that cannot be worked out again,
+      // as JSON, and it is NULL on almost every row — a repeat is normally
+      // answered by re-reading the record, which is fresher than any copy could
+      // be. src/identity/writes.ts says which write is not like that and why.
+      //
+      // Nothing prunes this. A row is a few dozen bytes and one is written per
+      // management action a person takes, which is a rate bounded by how fast
+      // somebody can click; the decisions table is bounded because it is
+      // written on every repository access, and this is not that.
+      `CREATE TABLE client_writes (
+         account   TEXT    NOT NULL,
+         method    TEXT    NOT NULL,
+         client_id TEXT    NOT NULL,
+         at        INTEGER NOT NULL,
+         answer    TEXT,
+         PRIMARY KEY (account, method, client_id)
+       ) STRICT`,
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

@@ -46,7 +46,8 @@ import { ProjectReadings } from "./projects/refresh.js";
 import { startAuthorizationService } from "./projects/service.js";
 import { TeamBlobStore } from "./team/blobs.js";
 import { createTeamSocket, type TeamSocket } from "./team/endpoint.js";
-import { projectTopic } from "./team/protocol.js";
+import { projectTopic, TOPIC_ADMIN_REFUSALS } from "./team/protocol.js";
+import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
 import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
 import { trustCommandFor } from "./tls/trust.js";
@@ -226,6 +227,15 @@ export async function up(
       // restart.
       namedLifetimes: namedTokenLifetimes(options.overrides ?? {}),
       log: (line: string) => stdout(`${line}\n`),
+      // The one way the path that answers every repository access reaches the
+      // sessions this process is holding. `team` is made further down and is
+      // read through the optional call, exactly as the reader's `onChange`
+      // below is: a refusal decided before the socket exists, or in a build
+      // that has no socket, goes to the log and to the decisions table and is
+      // told to nobody, which is what happened to every one of them until now.
+      refused: (decision: RecordedDecision) => {
+        team?.hub.publish(TOPIC_ADMIN_REFUSALS, { kind: "decision-refused", decision });
+      },
       onError: (error: Error) => stderr(`nlteam: authorization service: ${error.message}\n`),
     };
     authorization = await startAuthorizationService({ ...service, port: config.authPort });
@@ -306,12 +316,17 @@ export async function up(
       database,
       keys,
       config,
+      // The root as the layout resolved it rather than as it was typed, so that
+      // what this server says about where it keeps things is the path it is
+      // actually reading and writing.
+      root: identity.root,
       // What --token-lifetime named on this command line, so that the sign-in
       // route hands out the same lifetime the exchange does. Everything else
       // about the two lifetimes is read from the database as each token is
       // minted, so changing a stored one reaches this process without a restart.
       namedLifetimes: namedTokenLifetimes(options.overrides ?? {}),
       dataPort: ports.dataPort,
+      healthPort: ports.healthPort,
       blobs: true,
       // For the token the sign-in route hands out, which travels to a machine
       // that may not yet trust this server — the same claim `nlteam token mint`

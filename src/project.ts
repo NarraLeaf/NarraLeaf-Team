@@ -5,10 +5,22 @@
  * rows in Team's database. There is nothing here about who may reach what,
  * because every account of this server reaches every project on it — see
  * ./projects/registry.ts.
+ *
+ * Both verbs have two paths and one output. Given `--root` they open the
+ * database beside the server, which is what somebody logged into that machine
+ * has and what still works when nothing is answering. Given `--server` they
+ * call a method on a session, which is what everybody else has. **The methods
+ * already exist**: these commands were wired to them rather than given routes
+ * of their own, because a command line that grew a verb the protocol does not
+ * have would be one Studio's management surface could never catch up with.
  */
 import type { DatabaseSync } from "node:sqlite";
 
+import { TEAM_METHODS } from "@narraleaf/team-protocol";
+
 import type { WriteText } from "./cli.js";
+import { readCreatedProject, readProjectList } from "./client/answers.js";
+import { withSession } from "./client/server.js";
 import { identityConfig, type IdentityConfig } from "./identity/config.js";
 import { openMigratedDatabase } from "./identity/database.js";
 import { KeyStore } from "./identity/keys.js";
@@ -41,6 +53,82 @@ export interface ProjectCreateOptions {
 
 export interface ProjectListOptions {
   readonly root: string;
+}
+
+export interface ProjectCreateOnServerOptions {
+  /** The address, as src/client/config.ts writes one. */
+  readonly server: string;
+  readonly name: string;
+  readonly description: string | undefined;
+}
+
+export interface ProjectListOnServerOptions {
+  /** The address, as src/client/config.ts writes one. */
+  readonly server: string;
+}
+
+/** One row of the list, whichever path it was read by. */
+interface ProjectRow {
+  readonly name: string;
+  readonly id: string;
+  /** Who made it, or undefined for an account the server no longer has. */
+  readonly madeBy: string | undefined;
+}
+
+/**
+ * The list, or the sentence that stands in for an empty one.
+ *
+ * Written once and called from both paths, so that a person who administers one
+ * server over ssh and another over the protocol is reading the same thing. An
+ * account that no longer exists leaves the column blank rather than showing an
+ * id: over the protocol there is no id to show, and a list that said different
+ * things on the two paths would be worse than one that says less on both.
+ */
+function renderProjects(rows: readonly ProjectRow[], stdout: WriteText): void {
+  if (rows.length === 0) {
+    stdout("no projects yet. Make one with project create <name>.\n");
+    return;
+  }
+  const width = Math.max(...rows.map((row) => row.name.length));
+  for (const row of rows) {
+    const line = `${row.name.padEnd(width)}  ${row.id}  ${row.madeBy ?? ""}`;
+    stdout(`${line.trimEnd()}\n`);
+  }
+}
+
+/** A project that has just been made, whichever path made it. */
+interface MadeProject {
+  readonly name: string;
+  readonly id: string;
+  /** The account it belongs to, or undefined where the answer named none. */
+  readonly owner: string | undefined;
+  /**
+   * The branch the repository was created with, where the path that made it knew.
+   *
+   * Only the local path does. It asks loreserver for the repository itself and
+   * is told what loreserver named the first branch; `projects.create` answers
+   * with the project, which is a record on this server and carries nothing about
+   * the repository's branches. The line is therefore left out rather than filled
+   * in with the name that is usually right — a default this program does not read
+   * is a claim, and the one thing this command must not do is describe a
+   * repository it did not look at.
+   */
+  readonly defaultBranch: string | undefined;
+}
+
+/**
+ * What a project having been made looks like, written once for both paths.
+ *
+ * Same reasoning as {@link renderProjects}: an operator who makes one project
+ * over ssh and the next over the protocol is reading one thing.
+ */
+function renderMadeProject(project: MadeProject, stdout: WriteText): void {
+  stdout(`created ${project.name}\n`);
+  stdout(`repository ${project.id}\n`);
+  stdout(`${`owner ${project.owner ?? ""}`.trimEnd()}\n`);
+  if (project.defaultBranch !== undefined) {
+    stdout(`default branch ${project.defaultBranch}\n`);
+  }
 }
 
 /**
@@ -129,10 +217,15 @@ export async function projectCreate(
       throw error;
     }
 
-    stdout(`created ${repository.name}\n`);
-    stdout(`repository ${repository.id}\n`);
-    stdout(`owner ${owner.username}\n`);
-    stdout(`default branch ${repository.defaultBranchName}\n`);
+    renderMadeProject(
+      {
+        name: repository.name,
+        id: repository.id,
+        owner: owner.username,
+        defaultBranch: repository.defaultBranchName,
+      },
+      stdout,
+    );
     return 0;
   } catch (error) {
     stderr(`nlteam: ${describeError(error)}\n`);
@@ -142,7 +235,55 @@ export async function projectCreate(
   }
 }
 
-/** Every project, or every project one person can reach. */
+/**
+ * Make a project on a server this account is signed in to.
+ *
+ * `projects.create` and not a method of the `admin` family, and that is not an
+ * oversight: making a project is what every account of this server may do, and
+ * it is the same call a Studio installation makes when somebody presses the
+ * button. There is nothing here for an operator to be gated on.
+ *
+ * Which account it belongs to is settled by the session rather than named on
+ * the line. Over the protocol the caller is the maker — there is no `--as` on
+ * this path and the command line refuses one — because the alternative would be
+ * a method that let anybody attribute work to somebody else. The local path has
+ * `--as` for the opposite reason: whoever runs it holds the storage root and is
+ * acting on behalf of a team rather than as one of them.
+ */
+export async function projectCreateOverProtocol(
+  options: ProjectCreateOnServerOptions,
+  stdout: WriteText,
+  stderr: WriteText,
+): Promise<number> {
+  try {
+    const answer = await withSession(options.server, async (session) => {
+      return await session.call(TEAM_METHODS.projectsCreate, {
+        name: options.name,
+        ...(options.description === undefined ? {} : { description: options.description }),
+        // No `repositoryId`: that field is for an author publishing a repository
+        // they already have on their own machine, which is Studio's path and not
+        // a thing a command line has in front of it.
+      });
+    });
+    const project = readCreatedProject(answer);
+    renderMadeProject(
+      {
+        name: project.name,
+        id: project.id,
+        owner: project.createdBy,
+        // Not carried by this answer; see the note on MadeProject.
+        defaultBranch: undefined,
+      },
+      stdout,
+    );
+    return 0;
+  } catch (error) {
+    stderr(`nlteam: ${describeError(error)}\n`);
+    return 1;
+  }
+}
+
+/** Every project, read out of the database beside the server. */
 export async function projectList(
   options: ProjectListOptions,
   stdout: WriteText,
@@ -152,23 +293,63 @@ export async function projectList(
   const database = await openMigratedDatabase(layout.databasePath);
 
   try {
-    const projects = listProjects(database);
-    if (projects.length === 0) {
-      stdout("no projects yet. Make one with project create <name>.\n");
-      return 0;
-    }
     const names = new Map(listUsers(database).map((user) => [user.id, user.username]));
-    const width = Math.max(...projects.map((project) => project.name.length));
-    for (const project of projects) {
-      const madeBy = names.get(project.createdBy) ?? project.createdBy;
-      stdout(`${project.name.padEnd(width)}  ${project.id}  ${madeBy}
-`);
-    }
+    renderProjects(
+      listProjects(database).map((project) => ({
+        name: project.name,
+        id: project.id,
+        // The username where there is one, and the id where the account has
+        // gone: this side has an id to fall back on, and printing it is better
+        // than printing nothing to somebody who can look it up.
+        madeBy: names.get(project.createdBy) ?? project.createdBy,
+      })),
+      stdout,
+    );
     return 0;
   } catch (error) {
     stderr(`nlteam: ${describeError(error)}\n`);
     return 1;
   } finally {
     database.close();
+  }
+}
+
+/**
+ * Every project, asked for over a session.
+ *
+ * The same question the other path asks a database, asked of the server that
+ * owns it. Nothing here knows how a session is opened, what a token is or which
+ * certificate authority it was verified against — that is all one call into
+ * src/client/server.ts, which is the seam every administrative command is now
+ * wired through. What comes back is checked rather than cast, in
+ * src/client/answers.ts, for the reason set out at the top of that file.
+ */
+export async function projectListOverProtocol(
+  options: ProjectListOnServerOptions,
+  stdout: WriteText,
+  stderr: WriteText,
+): Promise<number> {
+  try {
+    const answer = await withSession(options.server, async (session) => {
+      return await session.call(TEAM_METHODS.projectsList);
+    });
+    const projects = readProjectList(answer);
+    renderProjects(
+      projects.map((project) => ({
+        name: project.name,
+        id: project.id,
+        // Absent means the account that made it is gone. There is no id on this
+        // side to fall back on, and inventing one would be a claim.
+        madeBy: project.createdBy,
+      })),
+      stdout,
+    );
+    return 0;
+  } catch (error) {
+    // Every refusal that can arrive here — a token no longer good, a method this
+    // build does not answer, a certificate that no longer chains — carries the
+    // sentence somebody has to read. None of them is a stack trace.
+    stderr(`nlteam: ${describeError(error)}\n`);
+    return 1;
   }
 }

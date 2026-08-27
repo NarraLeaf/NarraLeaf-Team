@@ -1,11 +1,14 @@
 /**
  * English, and the wording every other language is a translation of.
  *
- * These are the sentences Team already said. They are not rewritten here to fit
- * a catalogue: `nlteam user revoke-tokens` prints the same two facts in the same
- * order, and a sentence that drifted from the command's would be a second
- * account of what Team does. When one of these has to change, it changes with
- * the command it belongs to.
+ * What is here is small on purpose. A sentence earns a place in a catalogue
+ * only where the same sentence has to reach a person in whatever language they
+ * read, and the durations are that: a lifetime is shown to somebody in words,
+ * so those words are what they type back, and a refusal to read one has to say
+ * so in the language it was written in. Everything else this server says of its
+ * own accord — a command's output, a line in the log, a refusal on the wire —
+ * is English, because it is read by whoever is running the server or by a client
+ * that writes the person's sentence itself.
  */
 import type { Messages } from "./messages.js";
 
@@ -25,25 +28,6 @@ export const en: Messages = {
       ["seconds", "s"],
       ["second", "s"],
     ],
-  },
-
-  action: {
-    keyRotated: ({ kid, published }) =>
-      `signing with ${kid}; tokens signed by any of the ${published} published keys still verify`,
-    userDisabled: ({ username }) =>
-      `disabled ${username}; nothing new is issued and tokens already issued are refused from now on`,
-    userEnabled: ({ username }) => `enabled ${username}`,
-    tokensRevoked: ({ username, lifetime }) =>
-      `revoked the tokens of ${username}; a connection already open may last until its ` +
-      `repository token expires, at most ${lifetime} from now`,
-    settingReadOnly: "that row is read only",
-    settingChanged: ({ label, value }) =>
-      `${label} is ${value}; tokens already minted keep the lifetime they were given`,
-    accountCreated: ({ username, group }) =>
-      `created ${username} in ${group}; issue a token for them to sign in with`,
-    tokenIssued: ({ username, lifetime }) =>
-      `a sign-in token for ${username}, good for ${lifetime}`,
-    projectCreated: ({ project, owner }) => `created ${project}, owned by ${owner}`,
   },
 
   error: {

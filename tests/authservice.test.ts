@@ -24,7 +24,7 @@ import {
   GRPC_RESOURCE_EXHAUSTED,
   GRPC_UNIMPLEMENTED,
 } from "../src/grpc/status.js";
-import { listDecisions } from "../src/identity/audit.js";
+import { listDecisions, type RecordedDecision } from "../src/identity/audit.js";
 import { identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { KeyStore } from "../src/identity/keys.js";
@@ -66,6 +66,14 @@ interface Harness {
   readonly keys: KeyStore;
   /** Every line the service wrote, in order. */
   readonly log: string[];
+  /**
+   * Every decision the service pushed out as a refusal, in order.
+   *
+   * Kept apart from the log because they are two different channels with two
+   * different rules: the log takes every decision, and this takes the refusals
+   * alone. A test that watched only the log could not tell the difference.
+   */
+  readonly refusals: RecordedDecision[];
   user(username: string): Promise<UserRecord>;
   /** A token for `user`, as an `authorization` header value. */
   bearer(user: UserRecord, options?: { readonly now?: Date }): string;
@@ -91,6 +99,7 @@ async function harness(): Promise<Harness> {
   const database = await openMigratedDatabase(layout.databasePath);
   const keys = await KeyStore.open(layout.keysDir);
   const log: string[] = [];
+  const refusals: RecordedDecision[] = [];
   // Port 0: the operating system picks one that is free, so a test run cannot
   // collide with a Team server the machine is already running.
   const server = await startAuthorizationService({
@@ -99,6 +108,7 @@ async function harness(): Promise<Harness> {
     keys,
     config,
     log: (line) => log.push(line),
+    refused: (decision) => refusals.push(decision),
   });
 
   const call = async (
@@ -119,6 +129,7 @@ async function harness(): Promise<Harness> {
     server,
     keys,
     log,
+    refusals,
     async user(username: string): Promise<UserRecord> {
       await createUser(database, hasher, { username, password: "a password nobody guesses" });
       return requireUser(database, username);
@@ -596,5 +607,96 @@ describe("the rest of the protocol", () => {
 
     expect(failure).toBeInstanceOf(GrpcCallError);
     expect((failure as GrpcCallError).status).toBe(GRPC_UNIMPLEMENTED);
+  });
+});
+
+describe("a refusal, on its way to whoever is watching", () => {
+  it("is pushed out with the row it became, key and all", async () => {
+    const team = await harness();
+    const ada = await team.user("ada");
+    disableUser(team.database, ada.username);
+
+    expect(await team.check(team.bearer(ada), ["urc-nothing"])).toEqual([]);
+
+    expect(team.refusals).toHaveLength(1);
+    expect(team.refusals[0]).toMatchObject({ allowed: false, username: "unknown" });
+    // The key of the row, because a panel that already holds a page of the log
+    // has to be able to tell this refusal from the ones around it, which are
+    // otherwise identical. It is the row the log now carries.
+    expect(team.refusals[0]?.id).toBeTypeOf("number");
+    expect(listDecisions(team.database)[0]).toMatchObject({
+      at: team.refusals[0]?.at,
+      detail: team.refusals[0]?.detail,
+    });
+  });
+
+  it("is the only kind of decision that is pushed at anybody", async () => {
+    // The whole reason this channel is named for refusals. A decision is taken
+    // on every repository access, so pushing the allowances would put more
+    // frames on the wire than the rest of the protocol together, to say
+    // something a panel could only act on by re-reading a page it holds.
+    const team = await harness();
+    const ada = await team.user("ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "harbour",
+      createdBy: ada.id,
+    });
+
+    await team.check(team.bearer(ada), [resourceIdOf(project.id)]);
+    await team.lookup(team.bearer(ada));
+
+    // Three decisions were recorded and every one of them was an allowance, so
+    // nothing was pushed.
+    expect(team.log.length).toBeGreaterThan(0);
+    expect(listDecisions(team.database).every((decision) => decision.allowed)).toBe(true);
+    expect(team.refusals).toEqual([]);
+  });
+
+  it("goes out once for a call that named several resources", async () => {
+    // A refusal has one reason and one subject, whoever presented the token, and
+    // which resources the request happened to name changes nothing about it. It
+    // is recorded once, so it is pushed once - and this is the branch an
+    // unauthenticated caller reaches, which is the one that must not be a way to
+    // make this server send sixty-four frames.
+    const team = await harness();
+
+    await team.check(undefined, ["urc-aa", "urc-bb", "urc-cc"]);
+
+    expect(team.refusals).toHaveLength(1);
+    expect(team.refusals[0]?.resource).toBe("3 resources");
+  });
+
+  it("is written down and logged just the same where there is nobody to push it to", async () => {
+    // A build with no socket, and a refusal decided before one exists, both
+    // leave this unset. What that costs is the pushing; the log line and the row
+    // are what this server did with every refusal before there was anywhere to
+    // push one.
+    const layout = identityLayout(await temporaryRoot());
+    const database = await openMigratedDatabase(layout.databasePath);
+    const keys = await KeyStore.open(layout.keysDir);
+    const log: string[] = [];
+    const server = await startAuthorizationService({
+      port: 0,
+      database,
+      keys,
+      config,
+      log: (line) => log.push(line),
+    });
+    try {
+      await unaryCall({
+        url: server.url,
+        path: METHOD_CHECK_USER_PERMISSION,
+        message: encodeCheckUserPermissionRequest({ resourceIds: ["urc-aa"] }),
+        timeoutMs: 5000,
+      });
+
+      expect(listDecisions(database)).toHaveLength(1);
+      expect(listDecisions(database)[0]?.allowed).toBe(false);
+      expect(log.some((line) => line.includes("refused"))).toBe(true);
+    } finally {
+      await server.close();
+      database.close();
+    }
   });
 });

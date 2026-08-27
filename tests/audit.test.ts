@@ -10,8 +10,10 @@ import {
   DECISION_LIMIT,
   DECISION_TRIM_SLACK,
   listDecisions,
+  pageDecisions,
   recordDecision,
   trimDecisions,
+  type DecisionPage,
 } from "../src/identity/audit.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { identityLayout } from "../src/identity/layout.js";
@@ -194,5 +196,115 @@ describe("trimDecisions", () => {
     trimDecisions(connection);
 
     expect(countDecisions(connection)).toBe(DECISION_LIMIT);
+  });
+});
+
+describe("pageDecisions", () => {
+  /** Every decision a cursor walks to, in the order the pages handed them over. */
+  function walk(connection: DatabaseSync, limit: number): string[] {
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page: DecisionPage = pageDecisions(connection, {
+        limit,
+        ...(cursor === undefined ? {} : { before: cursor }),
+      });
+      seen.push(...page.decisions.map((decision) => decision.detail));
+      if (page.cursor === undefined) {
+        return seen;
+      }
+      cursor = page.cursor;
+    }
+  }
+
+  it("hands back a page at a time, newest first, and says where to carry on", async () => {
+    const connection = await database();
+    for (let index = 0; index < 5; index += 1) {
+      recordDecision(connection, {
+        at: EARLY + index,
+        username: "ada",
+        resource: "harbour",
+        allowed: true,
+        detail: `decision ${index}`,
+      });
+    }
+
+    const first = pageDecisions(connection, { limit: 2 });
+
+    expect(first.decisions.map((decision) => decision.detail)).toEqual([
+      "decision 4",
+      "decision 3",
+    ]);
+    expect(first.cursor).toBeDefined();
+  });
+
+  it("walks the whole log without repeating a row or skipping one", async () => {
+    const connection = await database();
+    for (let index = 0; index < 7; index += 1) {
+      recordDecision(connection, {
+        at: EARLY + index,
+        username: "ada",
+        resource: "harbour",
+        allowed: true,
+        detail: `decision ${index}`,
+      });
+    }
+
+    expect(walk(connection, 3)).toEqual([
+      "decision 6",
+      "decision 5",
+      "decision 4",
+      "decision 3",
+      "decision 2",
+      "decision 1",
+      "decision 0",
+    ]);
+  });
+
+  it("separates decisions taken in the same millisecond, which is the ordinary case", async () => {
+    // A busy server answers a permission question on every repository access,
+    // so several land on the same clock reading. A cursor that was only a time
+    // would either hand one of them over twice or lose it.
+    const connection = await database();
+    for (let index = 0; index < 6; index += 1) {
+      recordDecision(connection, {
+        at: EARLY,
+        username: "ada",
+        resource: "harbour",
+        allowed: true,
+        detail: `decision ${index}`,
+      });
+    }
+
+    expect(walk(connection, 2).sort()).toEqual([
+      "decision 0",
+      "decision 1",
+      "decision 2",
+      "decision 3",
+      "decision 4",
+      "decision 5",
+    ]);
+  });
+
+  it("says nothing follows the last page", async () => {
+    const connection = await database();
+    fillWithAllowances(connection, 3);
+
+    const page = pageDecisions(connection, { limit: 3 });
+
+    expect(page.decisions).toHaveLength(3);
+    expect(page.cursor).toBeUndefined();
+  });
+
+  it("starts again from the top for a cursor it cannot read", async () => {
+    // The cursor came from this server, so one that does not parse is a caller
+    // that lost its place - and the first page is where somebody who has lost
+    // their place is.
+    const connection = await database();
+    fillWithAllowances(connection, 3);
+
+    expect(pageDecisions(connection, { limit: 3, before: "not a cursor" }).decisions).toHaveLength(
+      3,
+    );
   });
 });

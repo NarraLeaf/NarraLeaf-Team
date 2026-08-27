@@ -35,12 +35,14 @@ is a method here and nowhere else.
 
 **The management plane** is who exists, what each may do, and what this server
 is. It is the same protocol as coordination, separated only by an
-administrator's authority — not a second product and not a second port. Today
-these operations are reached by a local command that opens the database
-directly; the direction is that they become protocol methods, so that the
-surface an operator uses is Studio, the same application authors already run,
-and the command line remains for automation and for the times the protocol is
-not the answer.
+administrator's authority — not a second product and not a second port. It is a
+family of methods on that one session, `admin.*`, and the authority behind them
+is read as each call arrives rather than once when the session opened: an
+account taken out of the admin group a moment ago is refused on its very next
+call, which is the whole of what this server claims about withdrawing access.
+So the surface an operator uses is Studio, the same application authors already
+run, and the command line reaches this plane the same way — as a client of those
+methods rather than by opening the database.
 
 **The rescue plane** is deliberately not on the protocol. Whoever holds the
 server's root directory can bring it up and reach the accounts and the settings
@@ -50,6 +52,15 @@ is broken or no one can sign in. It is guarded
 by nothing more than access to the disk, which is the point: it is the floor
 under the other three, not a convenience on top of them.
 
+The two are the same commands wearing different clothes, and which plane a
+command is on is decided by one word on its line: `--server` puts it on the
+management plane, `--root` on the rescue plane. Three commands — `up`, `init` and
+`trust` — take only `--root`, because they are what a server is brought up and
+repaired with, and a rescue reachable only over the thing being rescued would not
+be one. So would a refusal only the protocol can lift: the management plane will
+not take the last operator's administration away or disable their account, and
+names the rescue command that will.
+
 ## Two hosts, divided by who is asking
 
 There are two hosts and there will be two, because the browser interface and the
@@ -57,20 +68,32 @@ terminal interface are both gone — which is what makes the attack surface and
 the deployment small enough to run in a container.
 
 **Studio** is the host for people. Authors reach the coordination and content
-planes through it, and operators will reach the management plane through it too.
-It holds one sealed token per server and never lets the renderer touch the
-network; every remote byte passes through its main process.
+planes through it, and operators reach the management plane through it too. It
+holds one sealed token per server and never lets the renderer touch the network;
+every remote byte passes through its main process.
 
 **The command line** is the host for programs and for emergencies: the common
 operations an operator wants without opening an application, an automation path
 with output a script can read, and the local rescue commands that answer when
-nothing else does.
+nothing else does. On the management plane it is a client of the protocol
+exactly as Studio is — it signs in, pins the authority it was shown, and calls
+the methods. What it holds afterwards belongs to the person who signed in rather
+than to the deployment, and is kept under their own account's configuration
+rather than under any server's storage root.
 
 Two consequences hold the division in place, and each is meant to be checkable
 rather than merely intended. The command line grows no verb the protocol lacks,
-or the Studio surface could never reach parity with it. And the rescue commands
-are reachable only from the disk, never over the protocol, or the thing that
-works when the protocol is broken would not in fact be separate from it.
+or the Studio surface could never reach parity with it — which is why every
+administrative command is wired to a method that already existed rather than
+given a route of its own. And the rescue commands are reachable only from the
+disk, never over the protocol, or the thing that works when the protocol is
+broken would not in fact be separate from it.
+
+A third follows from the first, and is what makes it worth anything: **what a
+command prints does not depend on which plane it took**. Where the protocol
+carries less than a database read does — whether a setting was chosen here or is
+the default answering for it — the column is left blank rather than guessed at,
+and a test drives each command both ways and compares the two.
 
 ## The rules that do not bend
 

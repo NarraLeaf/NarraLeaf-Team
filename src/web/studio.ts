@@ -42,8 +42,14 @@ import { originIsOurs, remoteAddressOf } from "./origin.js";
 /** Where the route lives. Versioned, because a client older than the server is ordinary. */
 const PREFIX = "/api/studio/v1";
 
-/** Where a username and a password become a token. */
-const SIGN_IN = `${PREFIX}/sign-in`;
+/**
+ * Where a username and a password become a token.
+ *
+ * Exported because this server is no longer the only thing in this repository
+ * that knows the address: `nlteam login` posts to it too. One constant, so that
+ * the route cannot come to be served at one address and asked for at another.
+ */
+export const STUDIO_SIGN_IN_PATH = `${PREFIX}/sign-in`;
 
 /** How much of a request body is read before it is refused as nonsense. */
 const MAXIMUM_BODY_BYTES = 4 * 1024;
@@ -168,7 +174,7 @@ export function serveStudioApi(
     return false;
   }
 
-  if (path === SIGN_IN) {
+  if (path === STUDIO_SIGN_IN_PATH) {
     if (request.method !== "POST") {
       onlyMethods(response, "POST", "POST");
       return true;

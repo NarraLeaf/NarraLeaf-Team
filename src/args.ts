@@ -6,6 +6,7 @@
  */
 import { isIP } from "node:net";
 
+import { parseServerAddress } from "./client/config.js";
 import { DEFAULT_IDENTITY } from "./identity/config.js";
 import {
   isLifetimeKey,
@@ -16,7 +17,7 @@ import {
   SETTING_KEYS,
   type SettingChange,
 } from "./identity/settings.js";
-import { DEFAULT_ROLE } from "./identity/users.js";
+import { ADMIN_ROLE, DEFAULT_ROLE } from "./identity/users.js";
 import { DEFAULT_PORTS } from "./loreserver/layout.js";
 
 /**
@@ -42,6 +43,24 @@ export interface IdentityOverrides {
   readonly dataPort?: number;
   readonly hostnames?: readonly string[];
 }
+
+/**
+ * Where a command does its work.
+ *
+ * The two hosts of this system divide by who is asking rather than by what is
+ * asked, and this is where that division reaches the command line. A **root** is
+ * a storage root on this machine, opened directly: it is how a server is rescued
+ * when the protocol is not answering, and it is the only thing `init`, `up` and
+ * `trust` will ever take. A **server** is an address and a session: it is how a
+ * server is administered from anywhere else, by somebody who has logged in.
+ *
+ * They do not fall back to one another in either direction. A command given an
+ * address it has no credentials for says to log in; it does not quietly read
+ * whatever database happens to be under the current directory.
+ */
+export type CommandTarget =
+  | { readonly kind: "root"; readonly root: string }
+  | { readonly kind: "server"; readonly server: string };
 
 /** What a command line asked the program to do. */
 export type Invocation =
@@ -74,23 +93,31 @@ export type Invocation =
       readonly email: string | undefined;
     }
   /** List the accounts. */
-  | { readonly kind: "user-list"; readonly root: string }
-  /** Make an account. */
+  | { readonly kind: "user-list"; readonly target: CommandTarget }
+  /**
+   * Make an account.
+   *
+   * `role` and `isServiceAccount` describe a group and a mark that only the
+   * local path can write. Over the protocol the command line has already
+   * refused everything but the two roles `admin.users.create` carries — see
+   * {@link parseUser} — so `role` there is `admin` or the default and nothing
+   * else, and `isServiceAccount` is false.
+   */
   | {
       readonly kind: "user-create";
-      readonly root: string;
+      readonly target: CommandTarget;
       readonly username: string;
       readonly role: string;
       readonly displayName: string | undefined;
       readonly email: string | undefined;
       readonly isServiceAccount: boolean;
     }
-  | { readonly kind: "user-disable"; readonly root: string; readonly username: string }
-  | { readonly kind: "user-enable"; readonly root: string; readonly username: string }
+  | { readonly kind: "user-disable"; readonly target: CommandTarget; readonly username: string }
+  | { readonly kind: "user-enable"; readonly target: CommandTarget; readonly username: string }
   /** Put an account in the admin group, or take it out. */
   | {
       readonly kind: "user-set-admin";
-      readonly root: string;
+      readonly target: CommandTarget;
       readonly username: string;
       readonly admin: boolean;
     }
@@ -98,18 +125,37 @@ export type Invocation =
    * Refuse every token already issued to an account, leaving the account able
    * to sign in and be given a working one straight away.
    */
-  | { readonly kind: "user-revoke-tokens"; readonly root: string; readonly username: string }
-  /** Sign a token for an account that has proved who it is. */
+  | {
+      readonly kind: "user-revoke-tokens";
+      readonly target: CommandTarget;
+      readonly username: string;
+    }
+  /**
+   * Sign a token for an account.
+   *
+   * `overrides` describes the deployment a token is minted for, and only the
+   * local path settles it: a server asked to mint one mints from what it was
+   * started with. It is read whichever path this is, because these settings can
+   * come from the environment and a container that set them for `up` must not
+   * find every `--server` command refused — what the command line refuses is one
+   * written on the same line as `--server`.
+   */
   | {
       readonly kind: "token-mint";
-      readonly root: string;
+      readonly target: CommandTarget;
       readonly username: string;
       readonly overrides: IdentityOverrides;
     }
-  /** Create a repository on loreserver and record who owns it. */
+  /**
+   * Make a project: a repository on loreserver, and the record of it.
+   *
+   * `as`, `dataPort` and `overrides` belong to the local path alone. Over the
+   * protocol the account that asked is the account it belongs to, and where
+   * loreserver is is the server's own business.
+   */
   | {
       readonly kind: "project-create";
-      readonly root: string;
+      readonly target: CommandTarget;
       readonly name: string;
       readonly description: string | undefined;
       /** The account it is created for; absent when the Team server has only one. */
@@ -117,10 +163,26 @@ export type Invocation =
       readonly dataPort: number;
       readonly overrides: IdentityOverrides;
     }
-  /** List the projects this server holds. */
-  | { readonly kind: "project-list"; readonly root: string }
+  /** List the projects a server holds, over the protocol or off its own disk. */
+  | { readonly kind: "project-list"; readonly target: CommandTarget }
+  /**
+   * Exchange a password for a token on one server, and keep what reaching it takes.
+   *
+   * The address is the one an author is given, which is also the one whose
+   * certificate authority is pinned. The username is a positional for the reason
+   * every other account name in this program is one.
+   */
+  | {
+      readonly kind: "login";
+      readonly server: string;
+      readonly username: string;
+      /** The authority this run was told to expect, and nothing else will do. */
+      readonly fingerprint: string | undefined;
+    }
+  /** Forget one server's token and the authority it was obtained under. */
+  | { readonly kind: "logout"; readonly server: string }
   /** Show the settings this Team server keeps in its database. */
-  | { readonly kind: "settings-list"; readonly root: string }
+  | { readonly kind: "settings-list"; readonly target: CommandTarget }
   /**
    * Change one setting.
    *
@@ -134,13 +196,13 @@ export type Invocation =
    */
   | {
       readonly kind: "settings-set";
-      readonly root: string;
+      readonly target: CommandTarget;
       readonly change: SettingChange;
     }
   /** Show the signing keys. */
-  | { readonly kind: "key-list"; readonly root: string }
+  | { readonly kind: "key-list"; readonly target: CommandTarget }
   /** Generate a key and sign with it from now on. */
-  | { readonly kind: "key-rotate"; readonly root: string }
+  | { readonly kind: "key-rotate"; readonly target: CommandTarget }
   /**
    * Show this Team server's certificate authority, and optionally trust it here.
    *
@@ -181,6 +243,14 @@ function missingRoot(command: string): Invocation {
  */
 const ENVIRONMENT: Readonly<Record<string, string>> = {
   "--root": "NLTEAM_ROOT",
+  // The other half of where a command works. A deployment that administers a
+  // server from a container sets this and never writes --server, exactly as one
+  // that runs the server sets NLTEAM_ROOT and never writes --root.
+  "--server": "NLTEAM_SERVER",
+  // What an automated sign-in was told to trust. It is here rather than left to
+  // the command line because the deployment that most needs to name a
+  // fingerprint is the one that composes no command line at all.
+  "--fingerprint": "NLTEAM_FINGERPRINT",
   "--issuer": "NLTEAM_ISSUER",
   "--audience": "NLTEAM_AUDIENCE",
   "--auth-origin": "NLTEAM_AUTH_ORIGIN",
@@ -232,6 +302,96 @@ function optionValue(tokens: Tokens, env: NodeJS.ProcessEnv, option: string): st
 /** The storage root a command was given, on the line or in the environment. */
 function rootOf(tokens: Tokens, env: NodeJS.ProcessEnv): string | undefined {
   return optionValue(tokens, env, "--root");
+}
+
+/**
+ * An address, in the one spelling everything files it under.
+ *
+ * Returns a sentence instead when it was not one, so that a mistyped address is
+ * refused where the command line is read rather than by whatever tried to dial
+ * it.
+ */
+function addressOf(text: string): string | { message: string } {
+  try {
+    return parseServerAddress(text);
+  } catch (error) {
+    return { message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Where one command is to do its work: a storage root, or a server.
+ *
+ * A flag beats a variable, which is the rule every option in this file is read
+ * by. What is not that rule is the pair of refusals: naming both is refused
+ * rather than settled, because the two do entirely different things and there is
+ * no reading of `--root /srv/team --server team.example.lan` that is obviously
+ * what somebody meant. The same goes for a container with both variables set —
+ * choosing one silently is how an operator comes to administer the wrong server.
+ *
+ * Returns a sentence instead when the command line named neither, or both.
+ */
+function targetOf(tokens: Tokens, env: NodeJS.ProcessEnv, command: string): CommandTarget | string {
+  const namedRoot = tokens.values.get("--root");
+  const namedServer = tokens.values.get("--server");
+  if (namedRoot !== undefined && namedServer !== undefined) {
+    return (
+      `${command} takes --root or --server, not both: --root works on a storage root on ` +
+      "this machine, and --server speaks to a server over the network"
+    );
+  }
+  const chosen = namedServer ?? envValue(env, "--server");
+  const root = namedRoot ?? envValue(env, "--root");
+  if (namedServer === undefined && namedRoot === undefined && chosen !== undefined && root !== undefined) {
+    return (
+      `NLTEAM_SERVER and NLTEAM_ROOT are both set, so ${command} cannot tell which was ` +
+      "meant. Name one of them with --server or --root."
+    );
+  }
+  if (namedServer !== undefined || (namedRoot === undefined && chosen !== undefined)) {
+    const address = addressOf(chosen as string);
+    return typeof address === "string" ? { kind: "server", server: address } : address.message;
+  }
+  if (root !== undefined) {
+    return { kind: "root", root };
+  }
+  return (
+    `${command} needs --root <path> or NLTEAM_ROOT, the directory Team keeps its files in, ` +
+    "or --server <host:port> to reach a server this account has logged in to"
+  );
+}
+
+/** Whether an option was written on the command line, in whichever of the three shapes it takes. */
+function namedOnTheLine(tokens: Tokens, option: string): boolean {
+  return tokens.values.has(option) || tokens.lists.has(option) || tokens.flags.has(option);
+}
+
+/**
+ * Refuse an option that only means something against a storage root.
+ *
+ * Dropped silently, each of these would look exactly like it had been honoured:
+ * a `--data-port` beside `--server` names a port the server settled for itself
+ * when it started, and an `--as` names an account the session has already
+ * decided. Something that looks like it worked is worse than something that
+ * says it cannot — which is the same reading `admin.settings.set` takes of a
+ * read-only setting, and it is taken here so that the refusal arrives before
+ * anything is sent.
+ *
+ * Only what was **written on the line**. The identity settings all have
+ * environment variables, and a container that sets them once so that `up` mints
+ * the right audience must not find every `--server` command refused by its own
+ * configuration. A flag is what somebody typed just now, and this is about that.
+ *
+ * Returns a sentence, or undefined when nothing local-only was named.
+ */
+function refuseWithServer(
+  tokens: Tokens,
+  command: string,
+  options: readonly string[],
+  because: string,
+): string | undefined {
+  const named = options.find((option) => namedOnTheLine(tokens, option));
+  return named === undefined ? undefined : `${command} takes ${named} only with --root: ${because}`;
 }
 
 /**
@@ -467,6 +627,14 @@ const IDENTITY_OPTIONS = [
  * machine and nowhere else.
  */
 const IDENTITY_LIST_OPTIONS = ["--hostname"] as const;
+
+/** Every identity option, in the one list the commands that refuse them share. */
+const ALL_IDENTITY_OPTIONS: readonly string[] = [...IDENTITY_OPTIONS, ...IDENTITY_LIST_OPTIONS];
+
+/** Why the identity settings are a storage root's business, said once for both commands. */
+const IDENTITY_IS_THE_SERVERS =
+  "it describes the deployment a token is minted for, and a server asked to mint one mints " +
+  "from what it was started with";
 
 /**
  * Collect the identity options out of a command line and the environment.
@@ -706,18 +874,22 @@ function parseUser(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation 
   }
 
   if (verb === "list") {
-    const result = readTokens(rest, ["--root"]);
+    const result = readTokens(rest, ["--root", "--server"]);
     if (result.kind !== "tokens") {
       return result.kind === "help" ? { kind: "help" } : error(result.message);
     }
-    const root = rootOf(result.tokens, env);
-    return root === undefined ? missingRoot("user list") : { kind: "user-list", root };
+    const extra = result.tokens.positionals[0];
+    if (extra !== undefined) {
+      return error(`unexpected argument: ${extra}`);
+    }
+    const target = targetOf(result.tokens, env, "user list");
+    return typeof target === "string" ? error(target) : { kind: "user-list", target };
   }
 
   if (verb === "create") {
     const result = readTokens(
       rest,
-      ["--root", "--role", "--display-name", "--email"],
+      ["--root", "--server", "--role", "--display-name", "--email"],
       ["--service-account"],
     );
     if (result.kind !== "tokens") {
@@ -732,23 +904,57 @@ function parseUser(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation 
     if (tokens.positionals[1] !== undefined) {
       return error(`unexpected argument: ${tokens.positionals[1]}`);
     }
-    const root = rootOf(tokens, env);
-    if (root === undefined) {
-      return missingRoot("user create");
+    const target = targetOf(tokens, env, "user create");
+    if (typeof target === "string") {
+      return error(target);
+    }
+    const role = tokens.values.get("--role") ?? DEFAULT_ROLE;
+    if (target.kind === "server") {
+      // Being in the admin group is the whole of what a role decides on this
+      // server, and `admin.users.create` therefore carries one flag rather than
+      // a list of group names — a client naming groups freely would be
+      // inventing a vocabulary nothing on the far side has an opinion about. So
+      // the two roles that flag can express are the two this path takes, and
+      // any other is refused here rather than sent and quietly turned into one
+      // of them.
+      if (role !== ADMIN_ROLE && role !== DEFAULT_ROLE) {
+        return error(
+          `user create --server takes --role ${ADMIN_ROLE} or --role ${DEFAULT_ROLE}: over ` +
+            "the protocol an account either administers this server or does not, and a third " +
+            `group would be dropped. Make it with --root to put it in ${role}.`,
+        );
+      }
+      if (tokens.flags.has("--service-account")) {
+        return error(
+          "user create --server does not take --service-account: the mark is a fact this " +
+            "server keeps about an account and nothing over the protocol writes it. Make the " +
+            "account with --root to mark it.",
+        );
+      }
     }
     return {
       kind: "user-create",
-      root,
+      target,
       username,
-      role: tokens.values.get("--role") ?? DEFAULT_ROLE,
+      role,
       displayName: tokens.values.get("--display-name"),
       email: tokens.values.get("--email"),
       isServiceAccount: tokens.flags.has("--service-account"),
     };
   }
 
-  if (verb === "grant-admin" || verb === "revoke-admin") {
-    const result = readTokens(rest, ["--root"]);
+  if (
+    verb === "grant-admin" ||
+    verb === "revoke-admin" ||
+    verb === "disable" ||
+    verb === "enable" ||
+    verb === "revoke-tokens"
+  ) {
+    // One reading for the five, because they take the same command line: a
+    // username, and where to do it. They were two blocks while the second half
+    // did not exist and the difference between them was which invocation came
+    // out at the end.
+    const result = readTokens(rest, ["--root", "--server"]);
     if (result.kind !== "tokens") {
       return result.kind === "help" ? { kind: "help" } : error(result.message);
     }
@@ -760,36 +966,21 @@ function parseUser(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation 
     if (tokens.positionals[1] !== undefined) {
       return error(`unexpected argument: ${tokens.positionals[1]}`);
     }
-    const root = rootOf(tokens, env);
-    if (root === undefined) {
-      return missingRoot(`user ${verb}`);
+    const target = targetOf(tokens, env, `user ${verb}`);
+    if (typeof target === "string") {
+      return error(target);
     }
-    return { kind: "user-set-admin", root, username, admin: verb === "grant-admin" };
-  }
-
-  if (verb === "disable" || verb === "enable" || verb === "revoke-tokens") {
-    const result = readTokens(rest, ["--root"]);
-    if (result.kind !== "tokens") {
-      return result.kind === "help" ? { kind: "help" } : error(result.message);
+    switch (verb) {
+      case "grant-admin":
+      case "revoke-admin":
+        return { kind: "user-set-admin", target, username, admin: verb === "grant-admin" };
+      case "disable":
+        return { kind: "user-disable", target, username };
+      case "enable":
+        return { kind: "user-enable", target, username };
+      default:
+        return { kind: "user-revoke-tokens", target, username };
     }
-    const { tokens } = result;
-    const username = tokens.positionals[0];
-    if (username === undefined) {
-      return error(`user ${verb} needs a username`);
-    }
-    if (tokens.positionals[1] !== undefined) {
-      return error(`unexpected argument: ${tokens.positionals[1]}`);
-    }
-    const root = rootOf(tokens, env);
-    if (root === undefined) {
-      return missingRoot(`user ${verb}`);
-    }
-    if (verb === "disable") {
-      return { kind: "user-disable", root, username };
-    }
-    return verb === "enable"
-      ? { kind: "user-enable", root, username }
-      : { kind: "user-revoke-tokens", root, username };
   }
 
   return error(`unknown user command: ${verb}`);
@@ -808,7 +999,12 @@ function parseToken(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation
     return error(`unknown token command: ${verb}`);
   }
 
-  const result = readTokens(rest, ["--root", ...IDENTITY_OPTIONS], [], IDENTITY_LIST_OPTIONS);
+  const result = readTokens(
+    rest,
+    ["--root", "--server", ...IDENTITY_OPTIONS],
+    [],
+    IDENTITY_LIST_OPTIONS,
+  );
   if (result.kind !== "tokens") {
     return result.kind === "help" ? { kind: "help" } : error(result.message);
   }
@@ -821,16 +1017,27 @@ function parseToken(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation
   if (tokens.positionals[1] !== undefined) {
     return error(`unexpected argument: ${tokens.positionals[1]}`);
   }
-  const root = rootOf(tokens, env);
-  if (root === undefined) {
-    return missingRoot("token mint");
+  const target = targetOf(tokens, env, "token mint");
+  if (typeof target === "string") {
+    return error(target);
+  }
+  if (target.kind === "server") {
+    const refusal = refuseWithServer(
+      tokens,
+      "token mint",
+      ALL_IDENTITY_OPTIONS,
+      IDENTITY_IS_THE_SERVERS,
+    );
+    if (refusal !== undefined) {
+      return error(refusal);
+    }
   }
   const overrides = readIdentityOverrides(tokens, env);
   if (typeof overrides === "string") {
     return error(overrides);
   }
 
-  return { kind: "token-mint", root, username, overrides };
+  return { kind: "token-mint", target, username, overrides };
 }
 
 /** Parse the arguments that follow `project`. */
@@ -846,7 +1053,7 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
   if (verb === "create") {
     const result = readTokens(
       rest,
-      ["--root", "--description", "--as", ...IDENTITY_OPTIONS],
+      ["--root", "--server", "--description", "--as", ...IDENTITY_OPTIONS],
       [],
       IDENTITY_LIST_OPTIONS,
     );
@@ -862,9 +1069,23 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
     if (tokens.positionals[1] !== undefined) {
       return error(`unexpected argument: ${tokens.positionals[1]}`);
     }
-    const root = rootOf(tokens, env);
-    if (root === undefined) {
-      return missingRoot("project create");
+    const target = targetOf(tokens, env, "project create");
+    if (typeof target === "string") {
+      return error(target);
+    }
+    if (target.kind === "server") {
+      const refusal =
+        refuseWithServer(
+          tokens,
+          "project create",
+          ["--as"],
+          "over the protocol the account that asked is the account it belongs to, and " +
+            "attributing work to somebody else is not something a session lets anybody do",
+        ) ??
+        refuseWithServer(tokens, "project create", ALL_IDENTITY_OPTIONS, IDENTITY_IS_THE_SERVERS);
+      if (refusal !== undefined) {
+        return error(refusal);
+      }
     }
 
     const overrides = readIdentityOverrides(tokens, env);
@@ -874,7 +1095,7 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
 
     return {
       kind: "project-create",
-      root,
+      target,
       name,
       description: tokens.values.get("--description"),
       as: tokens.values.get("--as"),
@@ -885,7 +1106,10 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
   }
 
   if (verb === "list") {
-    const result = readTokens(rest, ["--root"]);
+    // The first command that took either half of the command line. What it
+    // asks for is the same question on both paths — every project this server
+    // holds — which is why it was the one that proved the seam.
+    const result = readTokens(rest, ["--root", "--server"]);
     if (result.kind !== "tokens") {
       return result.kind === "help" ? { kind: "help" } : error(result.message);
     }
@@ -894,14 +1118,63 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
     if (extra !== undefined) {
       return error(`unexpected argument: ${extra}`);
     }
-    const root = rootOf(tokens, env);
-    if (root === undefined) {
-      return missingRoot("project list");
-    }
-    return { kind: "project-list", root };
+    const target = targetOf(tokens, env, "project list");
+    return typeof target === "string" ? error(target) : { kind: "project-list", target };
   }
 
   return error(`unknown project command: ${verb}`);
+}
+
+/** Parse the arguments that follow `login`. */
+function parseLogin(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
+  const result = readTokens(argv, ["--fingerprint"]);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  const { tokens } = result;
+
+  const [server, username, extra] = tokens.positionals;
+  if (server === undefined) {
+    return error(
+      "login needs the address of a server, for example team.example.lan:41402, and the " +
+        "username to sign in as",
+    );
+  }
+  if (username === undefined) {
+    return error("login needs the username to sign in as, after the address");
+  }
+  if (extra !== undefined) {
+    return error(`unexpected argument: ${extra}`);
+  }
+  const address = addressOf(server);
+  if (typeof address !== "string") {
+    return error(address.message);
+  }
+  return {
+    kind: "login",
+    server: address,
+    username,
+    fingerprint: optionValue(tokens, env, "--fingerprint"),
+  };
+}
+
+/** Parse the arguments that follow `logout`. */
+function parseLogout(argv: readonly string[]): Invocation {
+  const result = readTokens(argv, []);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  const { tokens } = result;
+
+  const [server, extra] = tokens.positionals;
+  if (server === undefined) {
+    return error("logout needs the address of a server this account is signed in to");
+  }
+  if (extra !== undefined) {
+    return error(`unexpected argument: ${extra}`);
+  }
+  const address = addressOf(server);
+  return typeof address === "string" ? { kind: "logout", server: address } : error(address.message);
 }
 
 /** Parse the arguments that follow `settings`. */
@@ -915,7 +1188,7 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
   }
 
   if (verb === "list") {
-    const result = readTokens(rest, ["--root"]);
+    const result = readTokens(rest, ["--root", "--server"]);
     if (result.kind !== "tokens") {
       return result.kind === "help" ? { kind: "help" } : error(result.message);
     }
@@ -923,12 +1196,12 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
     if (extra !== undefined) {
       return error(`unexpected argument: ${extra}`);
     }
-    const root = rootOf(result.tokens, env);
-    return root === undefined ? missingRoot("settings list") : { kind: "settings-list", root };
+    const target = targetOf(result.tokens, env, "settings list");
+    return typeof target === "string" ? error(target) : { kind: "settings-list", target };
   }
 
   if (verb === "set") {
-    const result = readTokens(rest, ["--root"]);
+    const result = readTokens(rest, ["--root", "--server"]);
     if (result.kind !== "tokens") {
       return result.kind === "help" ? { kind: "help" } : error(result.message);
     }
@@ -941,13 +1214,17 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
     if (extra !== undefined) {
       return error(`unexpected argument: ${extra}`);
     }
-    const root = rootOf(tokens, env);
-    if (root === undefined) {
-      return missingRoot("settings set");
+    const target = targetOf(tokens, env, "settings set");
+    if (typeof target === "string") {
+      return error(target);
     }
     // Named, rather than left as "unknown setting": somebody who has typed the
     // wrong one of the keys is one line away from the right one, and a message
     // that only says no is a message that sends them to the source.
+    //
+    // Checked here on both paths. The keys are this program's names for what a
+    // server stores, and a mistyped one is a mistyped one wherever the command
+    // was aimed — there is no reason to spend a session finding that out.
     if (!isSettingKey(key)) {
       return error(
         `there is no setting called ${key}. The settings are ${SETTING_KEYS.join(", ")}.`,
@@ -962,13 +1239,17 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
           `${PUBLISH_LINEAGE_KEY} is one of ${PUBLISH_LINEAGE_RULES.join(" or ")}, not ${value}.`,
         );
       }
-      return { kind: "settings-set", root, change: { key, rule: value.trim() as "merge" | "refuse" } };
+      return {
+        kind: "settings-set",
+        target,
+        change: { key, rule: value.trim() as "merge" | "refuse" },
+      };
     }
     // A name is stored as it was written, and every check on it is the
     // database's: what is too long, empty or unprintable is the same question
     // wherever the name came from, and answering it twice would be two answers.
     if (!isLifetimeKey(key)) {
-      return { kind: "settings-set", root, change: { key, name: value } };
+      return { kind: "settings-set", target, change: { key, name: value } };
     }
     // The durations `--token-lifetime` takes, read by the same function, so
     // that 7d means the same thing on every command line here.
@@ -978,7 +1259,7 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
     }
     return {
       kind: "settings-set",
-      root,
+      target,
       change: { key, seconds: Math.floor(milliseconds / 1000) },
     };
   }
@@ -999,7 +1280,7 @@ function parseKey(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
     return error(`unknown key command: ${verb}`);
   }
 
-  const result = readTokens(rest, ["--root"]);
+  const result = readTokens(rest, ["--root", "--server"]);
   if (result.kind !== "tokens") {
     return result.kind === "help" ? { kind: "help" } : error(result.message);
   }
@@ -1007,11 +1288,11 @@ function parseKey(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   if (extra !== undefined) {
     return error(`unexpected argument: ${extra}`);
   }
-  const root = rootOf(result.tokens, env);
-  if (root === undefined) {
-    return missingRoot(`key ${verb}`);
+  const target = targetOf(result.tokens, env, `key ${verb}`);
+  if (typeof target === "string") {
+    return error(target);
   }
-  return verb === "list" ? { kind: "key-list", root } : { kind: "key-rotate", root };
+  return verb === "list" ? { kind: "key-list", target } : { kind: "key-rotate", target };
 }
 
 /** Parse the arguments that follow `trust`. */
@@ -1074,6 +1355,10 @@ export function parseArgs(
       return parseUp(rest, env);
     case "init":
       return parseInit(rest, env);
+    case "login":
+      return parseLogin(rest, env);
+    case "logout":
+      return parseLogout(rest);
     case "user":
       return parseUser(rest, env);
     case "token":

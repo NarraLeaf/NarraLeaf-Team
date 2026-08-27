@@ -30,6 +30,7 @@ import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher } from "../src/identity/passwords.js";
 import { mintToken } from "../src/identity/tokens.js";
 import { createUser } from "../src/identity/users.js";
+import { DEFAULT_PORTS } from "../src/loreserver/layout.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
 import { createTeamSocket } from "../src/team/endpoint.js";
 import { refuseUpgrade } from "../src/team/websocket.js";
@@ -65,7 +66,14 @@ async function main(): Promise<void> {
     createdBy: ada.id,
   });
 
-  const service: TeamService = { database, keys, config, dataPort: config.dataPort };
+  const service: TeamService = {
+    database,
+    keys,
+    config,
+    root,
+    dataPort: config.dataPort,
+    healthPort: DEFAULT_PORTS.healthPort,
+  };
   const socket = createTeamSocket({ service, version: "0.0.0-e2e", host: "127.0.0.1" });
 
   const server = createSecureServer({

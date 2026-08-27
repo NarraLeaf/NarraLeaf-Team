@@ -38,6 +38,16 @@ import { useTemporaryRoots } from "./temporary.js";
 
 const temporaryRoot = useTemporaryRoots("nlteam-blobs-");
 
+/** A port number nothing is listening on, borrowed and given straight back. */
+async function unusedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+
 const CHEAP: ScryptParameters = { cost: 2 ** 12, blockSize: 8, parallelism: 1, keyLength: 32 };
 const hasher = new ScryptPasswordHasher(CHEAP);
 const PASSWORD = "a password nobody guesses";
@@ -114,7 +124,19 @@ async function harness(): Promise<Harness> {
     project: project.id,
   });
 
-  const studio: TeamService = { database, keys, config, dataPort: config.dataPort, blobs: true };
+  const studio: TeamService = {
+    database,
+    keys,
+    config,
+    root,
+    // Nothing here asks this server what it is, so this names a port borrowed
+    // and given straight back rather than the one loreserver ordinarily
+    // answers on: a number this machine said was free beats one this suite
+    // hopes is.
+    healthPort: await unusedPort(),
+    dataPort: config.dataPort,
+    blobs: true,
+  };
   const server = createServer(
     webHandler(() => ({ ...DISCOVERY, capabilities: serverCapabilities(methodTable(teamMethods()), studio) }), {
       studio,

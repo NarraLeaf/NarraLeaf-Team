@@ -4,6 +4,12 @@ The detail behind the quick start in the [README](../README.md): where Team keep
 its files, which ports have to be reachable, how signing in and the certificate
 work, and the commands for accounts, tokens and access.
 
+Every command below is written with `--root`, the storage root on the machine
+the server runs on. Nearly all of them also take `--server`, and then they are
+run from anywhere at all — see
+[Administering a server from somewhere else](#administering-a-server-from-somewhere-else),
+which also says which three do not and why that is deliberate.
+
 For what Team is, see [architecture.md](architecture.md); for how any of it is put
 together, [internals.md](internals.md).
 
@@ -375,10 +381,120 @@ new name and nothing is restarted.
 speaks something I do not" in one comparison. It changes only when a field an
 older client relies on stops meaning what it meant.
 
+## Administering a server from somewhere else
+
+Every command on this page is written with `--root`, which opens the storage
+root on the machine the server runs on. For all but three of them that is not
+the only way. `nlteam login` signs in to a server, and the command then takes
+`--server <host:port>` in place of `--root` and does the same thing from any
+machine at all:
+
+```sh
+nlteam login team.example.lan:41402 ada < password.txt
+nlteam user list --server team.example.lan:41402
+nlteam settings set token.sign_in_lifetime_seconds 7d --server team.example.lan:41402
+nlteam logout team.example.lan:41402
+```
+
+`NLTEAM_SERVER` stands in for the flag, exactly as `NLTEAM_ROOT` stands in for
+`--root`. The two are refused together rather than settled one way: there is no
+reading of a command line naming both that is obviously what somebody meant, and
+choosing one silently is how an operator comes to administer the wrong server.
+
+### What login settles, and where it keeps it
+
+Signing in settles three things in order. **Which machine this is**: a Team
+server's certificate chains to an authority it made for itself, so the
+fingerprint is compared once and the certificate kept — pass `--fingerprint` to
+say what it must be, which is the path an automated deployment takes, or leave it
+out and whatever is presented is pinned and printed for comparing. **What that
+machine is**: the discovery document turns an address into a server, and what it
+serves is read from that document rather than found out by calling something and
+being refused. **Who is asking**: a username and a password, over the verified
+connection, exchanged for a token.
+
+What it keeps — the token, the address and the certificate authority it verified
+against — goes under the signed-in person's own configuration directory and never
+under a server's storage root, because the token belongs to whoever signed in
+rather than to the deployment:
+
+```
+%APPDATA%\nlteam                            Windows
+~/Library/Application Support/nlteam        macOS
+$XDG_CONFIG_HOME/nlteam, or ~/.config/nlteam  elsewhere
+```
+
+`NLTEAM_CONFIG_DIR` names another outright, which is what a container mounting a
+credential in wants. The file is created 0600 and the directory 0700 where the
+platform has such things. More than one server may be signed in to at once, and
+`logout` forgets one of them.
+
+Every call is checked against the account behind that token as it arrives, not
+once when the session opened. An account taken out of the `admin` group a minute
+ago is refused on its very next command rather than when its token would have
+expired.
+
+### The commands that are deliberately not reachable over the protocol
+
+`up`, `init` and `trust` take `--root` and nothing else, and it is worth saying
+plainly why, because it looks like an omission.
+
+They are the rescue path. `up` is what brings a server up; `init` makes the first
+account on a server that has none, and there is nobody to sign in as until it has
+run; `trust` prints the fingerprint a person compares before trusting anything at
+all. Each of them is what you reach for when the protocol is not answering — a
+server that is down, a server nobody can sign in to, a certificate nothing yet
+trusts. **A rescue reachable only over the thing being rescued would not be a
+rescue.** So these are guarded by nothing more than access to the disk, which is
+the point rather than a gap: they are the floor under everything else here.
+
+The same reasoning runs the other way, once. The protocol will not take the last
+operator's administration away or disable their account, because that would leave
+a server nobody could administer over it and nobody who could put that right over
+it either. It refuses, and names the command to run on the machine that holds the
+storage root. `nlteam user grant-admin ... --root` and `nlteam user enable ...
+--root` will do it, and that is what makes them the way back.
+
+### What differs between the two, and what does not
+
+What a command prints does not depend on which of the two it took, wherever both
+have the same facts. Two places they genuinely do not, and both are stated by
+`nlteam --help` as well:
+
+- **`token mint` reads a password with `--root` and none with `--server`.** On
+  the machine itself, the password is how the operator shows the account is
+  theirs to mint for, and checking it is also the only exercise the sign-in path
+  gets. Over the protocol the caller has already proved who they are by holding
+  an operator's session, and minting a token for somebody whose password nobody
+  knows is the whole point of asking a server to do it. A command demanding a
+  password it does not need would be asking for something the operator may not
+  have.
+- **`settings list --server` leaves the last column blank.** A server says what
+  each setting is; it does not say whether the value was chosen there or is the
+  default answering for it. That column is left empty rather than filled in with
+  a guess, because the difference it carries is real — a server that never chose
+  follows a later version of Team if the default moves, and one that chose keeps
+  its number.
+
+Three options are refused beside `--server` rather than quietly dropped, because
+something that looks like it worked is worse than something that says it cannot:
+`--as` on `project create` (over the protocol the account that asked is the
+account it belongs to), `--service-account` on `user create` (nothing over the
+protocol writes that mark), and a `--role` that is neither `admin` nor the
+default (the protocol carries whether an account administers this server and
+nothing else about groups). The identity options — `--issuer`, `--hostname`, the
+ports — are refused beside `--server` for the same reason: they describe the
+deployment a token is minted for, and a server asked to mint one mints from what
+it was started with.
+
+`user list --server` pages through the whole list before it prints, because the
+method hands back a page at a time and this command has always printed the lot.
+
 ## Accounts
 
-An operator makes them, at the server, and hands out a token for each. The
-first account is the exception, because there is nobody to hand it out:
+An operator makes them, at the server or from anywhere they have signed in from,
+and hands out a token for each. The first account is the exception, because there
+is nobody to hand it out and nobody to sign in as:
 
 ```sh
 nlteam init ada --root /srv/team < password.txt
@@ -403,8 +519,27 @@ only accounts in `admin` may administer this server. What reaches the person is
 not the account but a token minted for it — see "Tokens and taking access away"
 below, and hand them that together with this server's address.
 
+The same four commands take `--server` in place of `--root`, and do the same
+things to a server somewhere else:
+
+```sh
+nlteam user create bob --server team.example.lan:41402 < password.txt
+nlteam user list --server team.example.lan:41402
+nlteam user disable bob --server team.example.lan:41402
+nlteam user enable bob --server team.example.lan:41402
+```
+
+`--role` over the protocol is `admin` or the default and nothing else, because
+whether an account administers this server is the whole of what the protocol
+carries about a group; a third group is refused rather than dropped, and the
+account is made with `--root` if it is to be in one. `--service-account` is
+refused there for the same reason.
+
 Passwords are read from standard input rather than from an argument, which
-would be visible in the process list and left behind in a shell's history. They
+would be visible in the process list and left behind in a shell's history — and
+that holds on both paths. `user create --server` sends the password over the
+session, which is TLS to a server whose authority this account pinned when it
+signed in; it never reaches an argument, a log line or an error message. They
 are hashed with scrypt at N = 2^17, r = 8, p = 1, and the stored string carries
 those numbers, so the cost can be raised later without invalidating anything: an
 existing hash keeps verifying under the parameters it was made with, and is
@@ -414,10 +549,25 @@ replaced the next time its owner signs in.
 
 ```sh
 printf '%s' "$PASSWORD" | nlteam token mint ada --root /srv/team
+nlteam token mint ada --server team.example.lan:41402
 ```
 
 The token goes to standard output on its own; what is in it goes to standard
 error. It is a sign-in token, and it lasts thirty days.
+
+**The two lines above ask for different things, and that is the point of the
+second.** With `--root` the password is checked first, through the same path a
+sign-in would take. Whoever runs it already holds the storage root and could sign
+anything they liked with the key in it, so that is not a barrier: it is how the
+operator shows the account is theirs to mint for, and it is the only exercise the
+sign-in path gets. With `--server` no password is read at all. The caller has
+already proved who they are by holding an operator's session, and minting a token
+for somebody whose password nobody knows — which is every account but your own —
+is the whole reason to ask the server rather than the disk. Somebody who can
+disable an account can hardly be stopped from issuing it a token.
+
+The token is shown once and kept nowhere: not in this server's log, not in its
+database. A person who lost one is minted another.
 
 The same token is handed out over the network, to somebody who has the address
 and the password of an account here:
@@ -491,6 +641,14 @@ something somebody chose here, because those are different facts — a Team serv
 never chose follows a later version of Team if the default moves, and one that
 chose keeps its number.
 
+Both take `--server` in place of `--root`, and a value written that way reaches
+the running server exactly as one written on its own disk does — every setting is
+read where it is used, so nothing is restarted either way. The one thing that
+column cannot say over the protocol is which of the two each value is: a server
+answers with what a setting is and not with whether anybody chose it, so
+`settings list --server` leaves that column blank rather than filling it in with
+a guess.
+
 Taking access away is two commands, and they are not the same one:
 
 ```sh
@@ -504,12 +662,18 @@ that works. It is the command for a token that has got out, where disabling
 would take the account away from somebody who has done nothing wrong.
 
 Both reach the same distance where tokens are concerned, and both say so when
-they run. Every token Team has issued to that account is refused from that moment
-wherever Team is the one asked — signing in, exchanging, and the permission
-question behind every repository access. A data connection already open is
-checked by `loreserver`'s data plane rather than by Team, and may last until the
-repository token it was opened with expires. Nothing short of retiring the
-signing key, which invalidates everybody's tokens at once, shortens that.
+they run — in the same words with `--server`, which asks the server for the
+repository lifetime that sentence carries rather than leaving it out. Every token
+Team has issued to that account is refused from that moment wherever Team is the
+one asked — signing in, exchanging, and the permission question behind every
+repository access. A data connection already open is checked by `loreserver`'s
+data plane rather than by Team, and may last until the repository token it was
+opened with expires. Nothing short of retiring the signing key, which invalidates
+everybody's tokens at once, shortens that.
+
+`disable` over the protocol will not take the last operator's account away, and
+says so with the command that will; `disable --root` will, because the machine
+holding the storage root is the way back from everything.
 
 ## Signing keys
 
@@ -522,7 +686,15 @@ been retired is published in the JWKS, so a rotation invalidates nothing:
 ```sh
 nlteam key rotate --root /srv/team
 nlteam key list --root /srv/team
+nlteam key rotate --server team.example.lan:41402
+nlteam key list --server team.example.lan:41402
 ```
+
+Rotating over the protocol rotates the store the running server is holding, so
+the next token it mints is signed by the new key with nothing restarted.
+Rotating on the disk writes a file that server has not seen, and it re-reads the
+directory before it answers about keys for exactly that reason — the two cannot
+come to disagree about which keys this server has.
 
 Taking a key out of the JWKS is deliberately not part of rotating: tokens it
 signed are valid until they expire, so it has to keep verifying for at least one
@@ -536,6 +708,8 @@ A project is one `loreserver` repository, plus Team's record of it.
 ```sh
 nlteam project create harbour --root /srv/team --as ada --description "..."
 nlteam project list --root /srv/team
+nlteam project create harbour --server team.example.lan:41402 --description "..."
+nlteam project list --server team.example.lan:41402
 ```
 
 **Every account of this server reaches every project on it.** There is no
@@ -558,8 +732,19 @@ lock on it, and a second process opening the same directory does not fail, it
 waits for ever. What Team reads instead is a checkout of its own — see
 [Reading what is inside a project](internals.md#reading-what-is-inside-a-project).
 
-A Studio installation does not run these commands. It asks over the session it
-opened with the token it was given, on the same port it signed in at:
+`--as` is refused with `--server`, and there is no equivalent: over the protocol
+the account that asked is the account it belongs to, because a method letting
+anybody attribute work to somebody else is not one worth having. `--root` has it
+for the opposite reason — whoever runs that is acting on behalf of a team rather
+than as one of them. The line naming the repository's default branch is left out
+over the protocol too: that is `loreserver`'s answer to the command that asked it
+directly, and this server's record of a project says nothing about a
+repository's branches.
+
+Making a project is not an operator's privilege, and `project create --server`
+is not one of the `admin` methods. Every account of this server may make one, and
+a Studio installation does exactly that, over the session it opened with the
+token it was given, on the same port it signed in at:
 
 ```
 projects.list     what this server holds, with the remote for each
@@ -588,7 +773,35 @@ the projects and the settings, and put somebody else in the group.
 ```sh
 nlteam user grant-admin bob --root /srv/team
 nlteam user revoke-admin bob --root /srv/team
+nlteam user grant-admin bob --server team.example.lan:41402
+nlteam user revoke-admin bob --server team.example.lan:41402
 ```
 
-`nlteam init` puts the first account in it. The last account in it cannot be
-taken out: a server with no admin has nobody who could put one back.
+`nlteam init` puts the first account in it.
+
+Everything on this page an operator does at the machine can also be done over the
+session, by an account in that group, from a management panel or from a command
+line anywhere — making accounts, disabling and enabling them, granting and
+revoking administration, refusing the tokens somebody holds, minting a token for
+them, changing a setting and rotating the signing keys. The group is read as each
+call arrives rather than once when a session opened, so taking somebody out of it
+takes effect against the very next thing they ask rather than when their token
+would have expired.
+
+The last operator is where the two planes deliberately differ, and it is worth
+being exact about which command does what:
+
+- `user revoke-admin --server` and `user disable --server` are **refused** for
+  the only operator who can still sign in. Either would leave a server nobody
+  could administer over the protocol and nobody who could put that right over it
+  either. The refusal names the command to run on the machine that holds the
+  storage root.
+- `user revoke-admin --root` refuses the last account in the group as well, and
+  says to make somebody else an admin first. That refusal is a guard against a
+  slip rather than a wall: `user grant-admin ... --root` is one line away.
+- `user disable --root` will disable the last operator, and says nothing about
+  it. `user enable ... --root` is what undoes it.
+
+That asymmetry is the rescue plane doing its job. A server whose only operator is
+disabled or demoted is repaired from its own disk, and there is nowhere else it
+could be repaired from.

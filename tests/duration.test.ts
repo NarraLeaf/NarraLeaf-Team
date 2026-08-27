@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeDuration } from "../src/duration.js";
+import { describeDuration, readDuration } from "../src/duration.js";
 import { DEFAULT_IDENTITY } from "../src/identity/config.js";
 
 describe("describeDuration", () => {
@@ -33,5 +33,22 @@ describe("describeDuration", () => {
 
     expect(rendered).toBe("30 days");
     expect(rendered).not.toContain("minute");
+  });
+});
+
+describe("readDuration", () => {
+  it("takes back the words the editor opened on", () => {
+    expect(readDuration("30 days")).toBe(30 * 24 * 60 * 60);
+    expect(readDuration("15 minutes")).toBe(15 * 60);
+    expect(readDuration("1 hour")).toBe(60 * 60);
+  });
+
+  it("takes the spelling every command line here takes", () => {
+    expect(readDuration("7d")).toBe(7 * 24 * 60 * 60);
+    expect(readDuration("90")).toBe(90);
+  });
+
+  it("answers with a sentence rather than a number it invented", () => {
+    expect(typeof readDuration("whenever")).toBe("string");
   });
 });

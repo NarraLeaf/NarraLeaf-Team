@@ -1,51 +1,16 @@
-// One read-only account of a whole server: what it is running, who has an
-// account on it, what projects it holds, what it has been asked and what it has
-// been told to remember.
+// What Team says about a project it has read, and about what it may be told to
+// remember.
 //
-// Shapes and nothing else. They are gathered by src/view.ts, which owns the
-// database, the certificate authority and the health check, and they are handed
-// to whoever has to answer a question out of them. Keeping the shape apart from
-// the gathering is what stops a second reader of this server growing a second
-// account of it.
+// Shapes and nothing else. They are filled in by the half that has the thing
+// being described — a repository by src/projects/read.ts, the settings by
+// src/view.ts — and handed to whoever has to answer a question out of them.
+// Keeping the shape apart from the reading is what stops a second reader of this
+// server growing a second account of it.
 //
 // Every field Team might fail to work out is optional, and an absent field is
 // reported as unknown rather than as an error. This is the whole of the
 // degradation rule: a project written by a newer Studio must show up with the
 // parts Team understands and the word unknown for the rest.
-
-/** The supervised process, as far as Team can see it. */
-export interface ServerView {
-  readonly version: string;
-  readonly running: boolean;
-  readonly pid?: number;
-  readonly startedAt?: number;
-  readonly restarts: number;
-  readonly healthy: boolean;
-  readonly healthCheckedAt?: number;
-  readonly storageBytes?: number;
-  readonly storageRoot: string;
-}
-
-/** The addresses somebody has to be told to reach this Team server. */
-export interface ReachView {
-  readonly signIn: string;
-  readonly data: string;
-  readonly fingerprint: string;
-  /** Ports bound to the loopback, which nobody else can reach. */
-  readonly loopback: ReadonlyArray<{ readonly port: number; readonly what: string }>;
-}
-
-export interface UserView {
-  readonly username: string;
-  readonly displayName: string;
-  readonly email?: string;
-  readonly role: string;
-  readonly disabled: boolean;
-  readonly serviceAccount: boolean;
-  readonly createdAt: number;
-  readonly lastSeenAt?: number;
-  readonly tokensInvalidatedAt?: number;
-}
 
 /** What a revision history tells us, which does not depend on Studio at all. */
 export interface RevisionView {
@@ -94,71 +59,6 @@ export interface ProjectFileView {
   readonly assets?: number;
   readonly assetBytes?: number;
   readonly assetsByKind?: ReadonlyArray<{ readonly kind: string; readonly count: number; readonly bytes: number }>;
-}
-
-export interface ProjectView {
-  readonly name: string;
-  readonly description: string;
-  readonly owner: string;
-  readonly createdAt: number;
-  readonly history: RevisionView;
-  readonly file: ProjectFileView;
-}
-
-/** One decision Team was asked to make, as the log recorded it. */
-export interface AuditView {
-  readonly at: number;
-  readonly username: string;
-  readonly resource: string;
-  readonly allowed: boolean;
-  readonly detail: string;
-}
-
-/**
- * One line on the settings surface.
- *
- * `editable` false means the value can be shown but not changed, and asking to
- * change it must do nothing. `restartRequired` means the change is written now
- * and takes effect when loreserver is next started — which has to be said,
- * because a setting that silently did not apply is worse than one that could
- * not be changed.
- */
-export interface SettingView {
-  readonly group: string;
-  readonly label: string;
-  readonly value: string;
-  /**
-   * The number `value` was written from, where it was written from one.
-   *
-   * Present on the two lifetimes and nowhere else. `value` is the duration in
-   * words, and a reader that wanted the number back would have to take those
-   * words apart again — in whatever language they were written in. Sending
-   * both is cheaper than making everybody parse one.
-   */
-  readonly seconds?: number;
-  readonly editable: boolean;
-  readonly restartRequired?: boolean;
-  /** Why this value is worth thinking about, shown when it is being changed. */
-  readonly caution?: string;
-}
-
-export interface TeamView {
-  readonly teamVersion: string;
-  readonly root: string;
-  /**
-   * The moment this view was gathered. Every relative time on screen — "2h
-   * ago", "up 3d" — is worked out against this rather than the clock, so that
-   * a drawn screen is a function of its view and nothing else. A test that had
-   * to read the clock could not assert on what it drew.
-   */
-  readonly now: number;
-  readonly server: ServerView;
-  readonly reach: ReachView;
-  readonly users: ReadonlyArray<UserView>;
-  readonly projects: ReadonlyArray<ProjectView>;
-  readonly audit: ReadonlyArray<AuditView>;
-  readonly settings: ReadonlyArray<SettingView>;
-  readonly signingKeys: number;
 }
 
 /**
