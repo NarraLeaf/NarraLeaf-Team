@@ -272,15 +272,25 @@ whatever comes to need them next calls them the way the commands do. Restarting
 `loreserver` is not among them: it belongs to the `nlteam up` that started it,
 and nothing else can honestly offer to.
 
-What a whole server looks like is one read-only structure, `src/teamview.ts`,
-gathered by `src/view.ts` from the database, the disk and whatever the
-repositories last said. Gathering one measures a storage root, so it happens
-when something asks and not on a timer. What Team cannot work out arrives absent
-and is reported as "unknown" rather than as an error or a zero — a project
-written by a newer Studio shows the parts Team understands and the word unknown
-for the rest, which is what keeps Team from having to be upgraded in step with
-Studio. Absent and zero are different facts: a project with no revisions is
-`0` and `never`, one nobody has counted is unknown.
+What a whole server *is* — whether the server beside it is answering, what its
+store weighs, how many accounts, projects and decisions it holds — is worked out
+by `src/team/status.ts` and answered by `admin.server.status`. Two parts of it
+are expensive: the health check is a request to another server, and measuring a
+storage root walks and stats every file underneath it, bounded at fifty
+thousand. So it is worked out **when somebody asks and never on a timer**, and
+an answer is kept for ten seconds — callers arriving while a gather is running
+wait on that gather rather than each starting one. It carries the moment it was
+worked out and how long an answer is kept, so a panel saying "as of" is telling
+the truth rather than showing its own clock.
+
+What Team cannot work out arrives absent and is reported as "unknown" rather
+than as an error or a zero — a project written by a newer Studio shows the parts
+Team understands and the word unknown for the rest, which is what keeps Team
+from having to be upgraded in step with Studio. Absent and zero are different
+facts: a project with no revisions is `0` and `never`, one nobody has counted is
+unknown; a storage root too large to walk reports no size rather than none.
+Those shapes are in `src/teamview.ts`, filled in by whichever half holds the
+thing being described.
 
 ## The languages are a shape, not a lookup
 

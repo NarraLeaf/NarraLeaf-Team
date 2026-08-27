@@ -43,7 +43,7 @@ served as JSON, is never cached, and answers `GET` and `HEAD`.
   "name": "team.example.lan",
   "auth": { "required": true, "url": "https://team.example.lan:41402" },
   "data": { "url": "lore://team.example.lan:41337" },
-  "capabilities": ["session", "comments", "clients", "live", "overlay", "password-sign-in", "project-history"],
+  "capabilities": ["session", "comments", "clients", "live", "overlay", "admin", "password-sign-in", "project-history"],
   "authority": { "sha256": "3D:38:…" },
   "version": "0.1.0"
 }
@@ -160,7 +160,7 @@ Before anything is asked, the server sends one `hello`:
   "session": "<connection id>",
   "account": { "id": "…", "username": "ada", "displayName": "Ada", "operator": false },
   "methods": ["projects.list", "…"],
-  "capabilities": ["session", "comments", "clients", "live", "overlay", "password-sign-in", "project-history"],
+  "capabilities": ["session", "comments", "clients", "live", "overlay", "admin", "password-sign-in", "project-history"],
   "serverTime": 1737936000000,
   "heartbeatMs": 30000
 }
@@ -291,11 +291,24 @@ announced by a server that cannot answer it.
 | `clients` | Which installations are connected, and what each has open. |
 | `live` | Live sessions: rooms on a project, for finding installations and broadcasting to them. |
 | `overlay` | Data attached to a project at a revision, which never enters the repository. |
+| `admin` | This server's own state — its accounts, settings, keys, decisions and health — may be read over the socket, by an operator. |
 | `password-sign-in` | A username and a password may be exchanged for a token, before any session. This names the sign-in route above. |
 | `project-history` | A project's revisions may be read a page at a time, through `projects.history`. Present only where the server has a reader that can page one — a build without one answers an empty page, which is not the same as a project with no revisions. |
 
 A client decides what a server can do from `capabilities` or from `hello.methods`,
 never by probing for a `404`.
+
+**Every name here is about the build and none of them is about the caller.**
+`admin` is where that is easiest to misread: it is announced to every session,
+including the ones every `admin.*` method will refuse, because it says this
+server has a management surface rather than that whoever is reading it may use
+one. That second question is answered in the same `hello` frame, by
+`account.operator`. A client draws a management surface from the two together —
+the capability says the surface can exist here, the account says whether to draw
+it — and folding them into one would leave a client unable to tell "this server
+is too old to be administered over the socket" from "you are not an operator",
+which are different sentences to show a person and only one of them is about
+them.
 
 ## Methods
 
@@ -329,6 +342,22 @@ unless a capability is named.
 | `overlay.list` | `overlay` | What is attached to one project, and what the server last read its head to be. |
 | `overlay.put` | `overlay` | Attach something, or replace something one attached before. |
 | `overlay.drop` | `overlay` | Take one's own record off again. |
+| `admin.users.list` | `admin` | A page of this server's accounts, newest first. Each carries the groups it is in, whether those make it an operator, whether it is disabled, and when its tokens were last refused — which is more than `members.list` says, and deliberately so. `limit` defaults to 50 and is capped at 200. |
+| `admin.audit.list` | `admin` | A page of the decisions this server has been asked to make, newest first. `limit` defaults to 50 and is capped at 200. |
+| `admin.settings.list` | `admin` | Everything this server keeps in its settings, and which rows may be changed. Answered whole rather than paged: the rows are a literal in the server rather than a query, so there is nothing for a cursor to be a cursor over. |
+| `admin.keys.list` | `admin` | Every signing key this server holds, published and retired, and which of them signs. The public half of each and nothing else. Answered whole, for the reason the settings are: this is however many times a server has rotated. |
+| `admin.server.status` | `admin` | What this server is, what it can reach, and how much of each thing it holds. Worked out when somebody asks and kept briefly; the answer carries the moment it was worked out and how long one is kept, so a client shows "as of" rather than implying it is live. |
+
+### Administering a server
+
+The `admin` family is refused to anybody who is not an operator, and the check is
+made **on every call** rather than when the session opened. That is not
+belt-and-braces: this server's whole claim about revocation is that it takes
+effect at once rather than at expiry, and a session that decided this once would
+leave an account demoted an hour ago still administering until it happened to
+reconnect.
+
+Nothing in the family writes, so nothing in it publishes on a topic.
 
 ### Anchors
 
@@ -356,7 +385,7 @@ server never publishes on is refused rather than left waiting.
 | `live:{session}` | Something was said inside one live session. Kept by nobody. |
 
 The people on a server are read on demand, through `members.list`, rather than
-watched on a topic.
+watched on a topic, and so is everything the `admin` family answers.
 
 ## Limits
 
