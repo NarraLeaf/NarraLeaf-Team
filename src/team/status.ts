@@ -22,10 +22,10 @@
  * moment it was worked out and how long an answer is kept, so a panel showing
  * "as of" is telling the truth rather than showing the clock.
  *
- * The cache is held against the service rather than in a variable of this
- * module, so that two servers in one process — which is every test run — do not
- * read each other's answers, and so that nothing here keeps a database alive by
- * remembering something about it.
+ * The cache is held against the caller's own object rather than in a variable
+ * of this module, so that two servers in one process — which is every test run —
+ * do not read each other's answers, and so that nothing here keeps a database
+ * alive by remembering something about it.
  */
 import { countDecisions } from "../identity/audit.js";
 import { audienceHosts, authUrl, dataRemoteUrl } from "../identity/config.js";
@@ -57,6 +57,28 @@ export const STATUS_FRESHNESS_MS = 10_000;
 /** The word for a value this server has but cannot show. */
 const UNKNOWN_FINGERPRINT = "unknown";
 
+/**
+ * What a status is worked out from.
+ *
+ * Every field of a running server that {@link gather} reads, and none of the
+ * rest. Written as a `Pick` of {@link TeamService} rather than as a shape of its
+ * own, so it cannot come to name a field the service spells differently, and so
+ * that a server hands itself to this without anything being assembled.
+ *
+ * It is narrowed at all because of the second caller. `nlteam status --root`
+ * works this same answer out against the database, the keys and the stored
+ * identity beside a server, which is what an operator has when the protocol is
+ * the thing that is broken — and a command line is not a running server. It has
+ * no data port to serve on, no sign-in limiter and no repository reader, and a
+ * parameter demanding those would be answered with invented values: a made-up
+ * port inside a struct is indistinguishable from a real one. Narrowing to what
+ * is read is the whole of that seam. Nothing below is duplicated for it.
+ */
+export type StatusSource = Pick<
+  TeamService,
+  "database" | "keys" | "config" | "root" | "healthPort" | "fingerprint"
+>;
+
 interface CachedStatus {
   /** The last answer, absent until one has been worked out. */
   answer?: TeamAdminStatus;
@@ -64,7 +86,7 @@ interface CachedStatus {
   inFlight?: Promise<TeamAdminStatus>;
 }
 
-const cached = new WeakMap<TeamService, CachedStatus>();
+const cached = new WeakMap<StatusSource, CachedStatus>();
 
 /**
  * What this server is, from cache where the cache is still fresh.
@@ -80,7 +102,7 @@ const cached = new WeakMap<TeamService, CachedStatus>();
  * caller's opinion about one.
  */
 export function serverStatus(
-  options: TeamService,
+  options: StatusSource,
   now: number = Date.now(),
 ): Promise<TeamAdminStatus> {
   const entry = cached.get(options) ?? {};
@@ -103,7 +125,7 @@ export function serverStatus(
   return gathering;
 }
 
-async function gather(options: TeamService): Promise<TeamAdminStatus> {
+async function gather(options: StatusSource): Promise<TeamAdminStatus> {
   const { database, config } = options;
   const storageRoot = storageRootOf(options.root);
 
