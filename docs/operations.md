@@ -478,19 +478,132 @@ chose keeps its number — and it is exactly the fact a reader cannot recover fr
 the value. That column is blank only against a server too old to carry it, where
 a blank means "not said" rather than "nobody chose".
 
-Three options are refused beside `--server` rather than quietly dropped, because
+Four options are refused beside `--server` rather than quietly dropped, because
 something that looks like it worked is worse than something that says it cannot:
 `--as` on `project create` (over the protocol the account that asked is the
 account it belongs to), `--service-account` on `user create` (nothing over the
-protocol writes that mark), and a `--role` that is neither `admin` nor the
-default (the protocol carries whether an account administers this server and
-nothing else about groups). The identity options — `--issuer`, `--hostname`, the
+protocol writes that mark), a `--role` that is neither `admin` nor the default
+(the protocol carries whether an account administers this server and nothing
+else about groups), and `--health-port` on `status` (a server checks the
+`loreserver` it started, on the port it was started with). The identity options — `--issuer`, `--hostname`, the
 ports — are refused beside `--server` for the same reason: they describe the
 deployment a token is minted for, and a server asked to mint one mints from what
 it was started with.
 
 `user list --server` pages through the whole list before it prints, because the
 method hands back a page at a time and this command has always printed the lot.
+`audit` pages on both paths and stops at what was asked for rather than at the
+end of the log, which is a different bargain and is set out under
+[The decisions this server has made](#the-decisions-this-server-has-made).
+
+## What this server is
+
+One screenful: the versions it is running, whether `loreserver` is answering,
+what it holds and how much of it, the addresses somebody has to be told in order
+to reach it, and the fingerprint they compare once.
+
+```sh
+nlteam status --root /srv/team
+nlteam status --server team.example.lan:41402
+```
+
+```
+nlteam 0.1.0 under /srv/team
+as of 2026-08-27T09:12:33.001Z, and an answer is kept for 10 seconds
+
+loreserver 0.8.6, answering
+  store         /srv/team/loreserver/store
+  size          4.2 GiB
+
+reachable at
+  sign in       https://team.example.lan:41402
+  data          lore://team.example.lan:41337
+  fingerprint   AB:CD:EF:...
+  loopback      41339 health, 41400 jwks, 41401 authz
+
+on this server
+  accounts      3
+  projects      2
+  decisions     41
+  signing keys  1
+```
+
+**The answer is not live, and the second line says so.** Two of its parts are
+expensive — the health check is a request to another server, and measuring the
+store stats every file underneath it — so a server works one out when it is
+asked and hands that same one to everybody who asks within the next ten seconds.
+Whoever reads "as of" is being told when the answer was true rather than when
+the question was put, which is what a clock in its place would have shown.
+
+Two values are printed as `unknown` rather than guessed at. The **size** is
+absent where the store could not be added up — one too large to walk, at fifty
+thousand files, or one `loreserver` has not made yet — because a partial total
+looks exactly like a real one, and a store that appeared to halve would read as
+a store that had lost half of what was in it. The **fingerprint** is absent on a
+server with no certificates, which is one that has never been brought up.
+
+The loopback ports are there for one question: which of them this server is
+holding, for somebody looking at a port that is already taken. Nobody off the
+machine can reach any of them.
+
+`--health-port` is the one thing `status --root` has to be told, because it is
+the one thing a storage root does not record. The identity settings are written
+into the database by `up` and read back out of it; the health port is not one of
+them. Left out it is the default, and a status taken with the wrong number says
+`loreserver` is not answering when it is. It is refused beside `--server`,
+because a server checks the `loreserver` it started, on the port it was started
+with.
+
+## The decisions this server has made
+
+Every repository access `loreserver` serves is a question put to Team — may this
+account touch this resource — and every answer is kept, with the short reason
+the log line already carried.
+
+```sh
+nlteam audit --root /srv/team
+nlteam audit --refused --limit 200 --server team.example.lan:41402
+```
+
+```
+2026-08-27T09:12:33.001Z  allowed  ada  harbour     owner
+2026-08-27T09:12:31.114Z  refused  bob  lighthouse  no grant
+```
+
+Newest first, because the order somebody looking for a refusal reads in is
+backwards from now. The account is `unknown` for a caller whose token was
+missing, expired or not one of this server's. The resource is the project's name
+where Team knew it and the repository id where it did not.
+
+**`--limit` is how many rows are printed**, and it is fifty unless you say
+otherwise — a screenful. It is worth being exact that it counts rows printed
+rather than rows read: the command reads back through the log until it has
+printed what was asked for, and how far back that took is not something anybody
+has to think about.
+
+This is deliberately unlike `user list`, which pages through the whole list
+before it prints. The size of the account list is the size of the team, which is
+small and is meaningful. The size of this one is how busy the server has been,
+and it is bounded by the server rather than by anything a person did — a couple
+of thousand rows, with the oldest allowances dropped first when the bound forces
+a choice. Nobody asking for "the audit" wants all of it; what they want is the
+last screenful, or the last screenful of refusals.
+
+`--refused` shows the refusals and nothing else, and it is what this command is
+usually opened for. A refusal is the rare outcome: an afternoon of ordinary work
+is thousands of allowances, so the last fifty decisions on a working server
+often hold no refusal at all, and a screenful without one reads like a server
+with nothing wrong. With the flag the command keeps reading back until it has
+the refusals asked for or the log ends, so **an empty listing means nothing on
+record was refused** — a statement about the server rather than about the page.
+
+The same judgement about refusals is made in two other places, which is why it
+is worth trusting here: the protocol publishes refusals on a topic of their own
+and publishes an allowance nowhere, and the table itself drops the oldest
+allowances before it drops any refusal. Only a server whose refusals alone have
+filled the log loses one, and that is a server with a problem worth noticing.
+
+How many are on record is one of the lines `nlteam status` prints.
 
 ## Accounts
 
