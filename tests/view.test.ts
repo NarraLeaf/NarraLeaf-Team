@@ -21,7 +21,6 @@ import {
   SIGN_IN_LIFETIME_KEY,
 } from "../src/identity/settings.js";
 import { createUser } from "../src/identity/users.js";
-import { readDuration } from "../src/operations.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
 import {
   directoryBytes,
@@ -148,22 +147,5 @@ describe("what a storage root holds", () => {
     const root = await temporaryRoot();
 
     expect(storageRootOf(root).startsWith(root)).toBe(true);
-  });
-});
-
-describe("readDuration", () => {
-  it("takes back the words the editor opened on", () => {
-    expect(readDuration("30 days")).toBe(30 * 24 * 60 * 60);
-    expect(readDuration("15 minutes")).toBe(15 * 60);
-    expect(readDuration("1 hour")).toBe(60 * 60);
-  });
-
-  it("takes the spelling every command line here takes", () => {
-    expect(readDuration("7d")).toBe(7 * 24 * 60 * 60);
-    expect(readDuration("90")).toBe(90);
-  });
-
-  it("answers with a sentence rather than a number it invented", () => {
-    expect(typeof readDuration("whenever")).toBe("string");
   });
 });

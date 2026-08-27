@@ -34,34 +34,6 @@ export interface FormatMessages {
   readonly durationWords: ReadonlyArray<readonly [string, "d" | "h" | "m" | "s"]>;
 }
 
-/** What an action answers with, once it has happened. */
-export interface ActionMessages {
-  readonly keyRotated: (fields: { readonly kid: string; readonly published: number }) => string;
-  readonly userDisabled: (fields: { readonly username: string }) => string;
-  readonly userEnabled: (fields: { readonly username: string }) => string;
-  readonly tokensRevoked: (fields: {
-    readonly username: string;
-    readonly lifetime: string;
-  }) => string;
-  readonly settingReadOnly: string;
-  readonly settingChanged: (fields: {
-    readonly label: string;
-    readonly value: string;
-  }) => string;
-  readonly accountCreated: (fields: {
-    readonly username: string;
-    readonly group: string;
-  }) => string;
-  readonly tokenIssued: (fields: {
-    readonly username: string;
-    readonly lifetime: string;
-  }) => string;
-  readonly projectCreated: (fields: {
-    readonly project: string;
-    readonly owner: string;
-  }) => string;
-}
-
 /** What went wrong, where somebody wrote a value this could not read. */
 export interface ErrorMessages {
   readonly notADuration: (fields: { readonly value: string }) => string;
@@ -74,6 +46,5 @@ export interface Messages {
   /** What this language calls itself, which is what a switcher has to show. */
   readonly name: string;
   readonly format: FormatMessages;
-  readonly action: ActionMessages;
   readonly error: ErrorMessages;
 }

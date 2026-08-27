@@ -11,8 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { readDuration } from "../src/operations.js";
-import { describeDuration } from "../src/duration.js";
+import { describeDuration, readDuration } from "../src/duration.js";
 import { en, everyLanguage, ja, messagesFor, zh } from "../src/i18n/index.js";
 import { localeOfTag } from "../src/i18n/locales.js";
 
@@ -66,30 +65,11 @@ function leaves(messages: Messages): Map<string, string> {
 
 /** The one sample every message here happens to take, plus the duration pair. */
 function callWithSamples(message: (...args: never[]) => string): string {
-  const fields = {
-    code: "CODE",
-    role: "member",
-    lifetime: "7 days",
-    kid: "0001",
-    published: 2,
-    username: "ada",
-    label: "sign-in token",
-    value: "30 days",
-    project: "winterlight",
-    owner: "ada",
-    level: "write",
-    group: "admin",
-    status: 503,
-    directory: "/srv/team/keys",
-    minimum: "60",
-    maximum: "31536000",
-    detail: "refused",
-    revisions: "12",
-    seconds: 30,
-    minutes: 5,
-    hours: 2,
-    days: 3,
-  };
+  // Short because the catalogue is short: what a language is asked for is a
+  // duration in words and a refusal that quotes what somebody wrote. A message
+  // taking a name this does not carry comes back saying "undefined", which is
+  // what the walk below is checking for.
+  const fields = { value: "30 days" };
   // Two shapes reach here: everything takes one object, and `duration` takes an
   // amount and a unit. Trying both is cheaper than describing which is which.
   const asObject = (message as (fields: unknown) => string)(fields);
@@ -106,7 +86,7 @@ describe("every language answers", () => {
     // Without this, a walk that stopped finding anything would turn every
     // comparison below into a loop over nothing, and the suite would go green
     // on a catalogue nobody checked.
-    expect(english.size).toBeGreaterThan(10);
+    expect(english.size).toBeGreaterThan(3);
   });
 
   for (const language of everyLanguage()) {
@@ -132,12 +112,14 @@ describe("every language answers", () => {
 
       it("keeps the names it is handed", () => {
         // The failure this catches is a translated sentence that reads well and
-        // dropped the username out of the middle of it.
-        expect(language.action.userDisabled({ username: "ada" })).toContain("ada");
-        // A key id is data, and stays as the database has it in every language.
-        expect(language.action.keyRotated({ kid: "abc123", published: 2 })).toContain("abc123");
-        // What was written stays as it was written, in the refusal too.
+        // dropped out of the middle of it the one thing it was given. What
+        // somebody wrote stays exactly as they wrote it, in every language:
+        // quoting it back differently would tell them they typed something they
+        // did not.
         expect(language.error.notADuration({ value: "someday" })).toContain("someday");
+        // The number of a duration is arithmetic rather than words, and comes
+        // through whichever language wrote the unit around it.
+        expect(language.format.duration(30, "day")).toContain("30");
       });
     });
   }
