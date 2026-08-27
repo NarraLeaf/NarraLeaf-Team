@@ -199,6 +199,11 @@ twice — the same client, the same id, over a socket that dropped between the
 request and the answer — returns the row it already made rather than a second
 one, and a repeat announces nothing on any topic.
 
+**A server remembers an id for a day and no longer.** That is what a retry
+takes, with a night's margin on it; past that a client sending the same id again
+is not repeating itself, and the call is made. An id is a way of saying "this is
+the call I already sent", not a name reserved for ever.
+
 ### Errors
 
 A call that is not answered is refused with a coded frame:
@@ -371,8 +376,9 @@ acknowledgement, so a panel updates the row it is already holding instead of
 re-reading a page to find out what it did. **Every write takes an optional
 `clientId`** and is done at most once under it, keyed by the account, the method
 and that id together — one id reused across two methods is two writes rather than
-one. **A write that changed nothing announces nothing**: enabling an account that
-is already enabled is the state that was asked for.
+one, and one reused a day later is a fresh write rather than a repeat. **A write
+that changed nothing announces nothing**: enabling an account that is already
+enabled is the state that was asked for.
 
 **The last operator cannot be removed over this protocol.** Demoting the only
 account that can administer this server, or disabling it, is refused: it would

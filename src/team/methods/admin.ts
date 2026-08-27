@@ -37,10 +37,11 @@
  *
  * **Nothing here is done twice.** Every write takes an optional `clientId` and
  * is keyed by the account, the method and that id together — see
- * src/identity/writes.ts, which says why the method is part of the key. And a
- * write that changed nothing announces nothing: enabling an account that is
- * already enabled is the state the caller asked for, so it is answered and not
- * published, exactly as `projects.create` answers a repeat.
+ * src/identity/writes.ts, which says why the method is part of the key and why
+ * an id is remembered for a day rather than for ever. And a write that changed
+ * nothing announces nothing: enabling an account that is already enabled is the
+ * state the caller asked for, so it is answered and not published, exactly as
+ * `projects.create` answers a repeat.
  *
  * The operations themselves are the ones the command line makes, called here
  * rather than written a second time, so that what a username may be and what

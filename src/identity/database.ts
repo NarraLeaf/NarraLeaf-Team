@@ -458,10 +458,16 @@ const MIGRATIONS: readonly Migration[] = [
       // answered by re-reading the record, which is fresher than any copy could
       // be. src/identity/writes.ts says which write is not like that and why.
       //
-      // Nothing prunes this. A row is a few dozen bytes and one is written per
-      // management action a person takes, which is a rate bounded by how fast
-      // somebody can click; the decisions table is bounded because it is
-      // written on every repository access, and this is not that.
+      // A row does not outlive the retry it protects. src/identity/writes.ts
+      // chooses the window and says why one is needed at all — briefly, the
+      // point is not the size of the table but that an id remembered for ever
+      // is an id nobody can ever use again. Rows past the window are dropped on
+      // the write path, once in every so many writes, never on a timer.
+      //
+      // There is no index on `at`, and the prune is a scan. That is the right
+      // trade here rather than a corner cut: the prune is what keeps the table
+      // to a day of management actions, which is the handful of rows a scan
+      // walks.
       `CREATE TABLE client_writes (
          account   TEXT    NOT NULL,
          method    TEXT    NOT NULL,
