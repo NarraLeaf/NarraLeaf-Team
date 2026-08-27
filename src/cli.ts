@@ -2,6 +2,8 @@ import { parseArgs } from "./args.js";
 import { describeDuration } from "./duration.js";
 import { DEFAULT_IDENTITY } from "./identity/config.js";
 import {
+  COLLABORATION_KEY,
+  COLLABORATION_MODES,
   PUBLISH_LINEAGE_KEY,
   PUBLISH_LINEAGE_RULES,
   SERVER_NAME_KEY,
@@ -223,7 +225,11 @@ ${SERVER_NAME_KEY} takes the name this deployment is called in Studio, which is
 its host until somebody chooses one. ${PUBLISH_LINEAGE_KEY} takes ${PUBLISH_LINEAGE_RULES.join(" or ")}
 and says what Studio does when somebody publishes a repository this server already
 holds - merge connects it under the name it is already registered as, refuse will
-not have it. The keys are
+not have it. ${COLLABORATION_KEY} takes ${COLLABORATION_MODES.join(" or ")} and says whether
+this deployment is a collaboration server at all - closed withdraws comments, live
+sessions, overlays and the client list from everybody, and lists the projects and
+the members to its operators only. It is administered the same either way. The
+keys are
 ${SETTING_KEYS.map((key) => `  ${key}`).join("\n")}
 
 init, user create, token mint --root and login read the password from standard

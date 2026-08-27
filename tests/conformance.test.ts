@@ -45,6 +45,11 @@ import {
 } from "../src/team/methods.js";
 import { teamMethods } from "../src/team/endpoint.js";
 import type { TeamService } from "../src/team/service.js";
+import { openMigratedDatabase } from "../src/identity/database.js";
+import { identityLayout } from "../src/identity/layout.js";
+import { useTemporaryRoots } from "./temporary.js";
+
+const temporaryRoot = useTemporaryRoots("nlteam-conformance-");
 
 interface Contract {
   protocol: number;
@@ -86,18 +91,31 @@ describe("the protocol contract", () => {
     expect(Object.values(TEAM_METHODS).sort()).toEqual([...contract.methods].sort());
   });
 
-  it("advertises every capability the contract names, when the build serves them all", () => {
+  it("advertises every capability the contract names, when the build serves them all", async () => {
     // The socket capabilities the method table implies, and the three the HTTP
     // routes add when there is a reader to page a history and somewhere to put a
     // file down. A build serving all of it advertises exactly the contract's
     // vocabulary and no more.
-    const everything = {
-      readings: { get: () => undefined, revisions: async () => undefined },
-      blobs: true,
-    } as unknown as TeamService;
-    expect(serverCapabilities(methodTable(teamMethods()), everything).sort()).toEqual(
-      [...contract.capabilities].sort(),
+    //
+    // A real database, because what is announced is worked out against the
+    // deployment as well as the build: a server closed to collaboration
+    // announces no coordination plane. Nothing is stored in this one, which is a
+    // deployment nobody has closed.
+    const database = await openMigratedDatabase(
+      identityLayout(await temporaryRoot()).databasePath,
     );
+    try {
+      const everything = {
+        database,
+        readings: { get: () => undefined, revisions: async () => undefined },
+        blobs: true,
+      } as unknown as TeamService;
+      expect(serverCapabilities(methodTable(teamMethods()), everything).sort()).toEqual(
+        [...contract.capabilities].sort(),
+      );
+    } finally {
+      database.close();
+    }
   });
 
   it("builds the topics the contract spells out", () => {

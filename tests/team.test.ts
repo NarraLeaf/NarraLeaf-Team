@@ -44,7 +44,9 @@ import {
   listProjects,
   newProjectId,
 } from "../src/projects/registry.js";
-import { createTeamSocket, type TeamSocket } from "../src/team/endpoint.js";
+import { discoveryDocument, type DiscoveryDocument } from "../src/identity/discovery.js";
+import { COORDINATION_CAPABILITIES } from "../src/team/collaboration.js";
+import { createTeamSocket, teamMethods, type TeamSocket } from "../src/team/endpoint.js";
 import {
   TEAM_METHODS,
   TEAM_SOCKET_PATH,
@@ -2726,6 +2728,7 @@ describe("the settings, as an operator reads them", () => {
 
     expect(settings.filter((row) => row.editable).map((row) => row.label)).toEqual([
       "name",
+      "collaboration",
       "repeat publishes",
       "sign-in token",
       "repository token",
@@ -3404,6 +3407,192 @@ describe("changing a setting over the session", () => {
     }))["setting"] as Record<string, unknown>;
 
     expect(second["value"]).toBe("moonlit");
+  });
+
+  it("refuses a word that is not one of the ones a closed set holds", async () => {
+    // Both of the settings whose value is a word rather than free text, because
+    // a refusal that arrived as `internal` would reach the operator as "something
+    // went wrong" with the sentence saying what the words are stripped off it.
+    const { ada } = await administered();
+
+    const collaboration = await ada.send("call", {
+      method: TEAM_METHODS.adminSettingsSet,
+      params: { label: "collaboration", value: "sometimes" },
+    });
+    const lineage = await ada.send("call", {
+      method: TEAM_METHODS.adminSettingsSet,
+      params: { label: "repeat publishes", value: "sometimes" },
+    });
+
+    expect(collaboration.code).toBe("bad-params");
+    expect(collaboration.message).toContain("open or closed");
+    expect(lineage.code).toBe("bad-params");
+    expect(lineage.message).toContain("merge or refuse");
+  });
+});
+
+/**
+ * Every method under a capability a closed deployment does not have.
+ *
+ * Read off the method table rather than listed here, so that a method added to
+ * any of the four is covered by these tests on the day it is written rather than
+ * on the day somebody remembers this constant.
+ */
+const COORDINATION_METHODS = teamMethods()
+  .filter((method) => COORDINATION_CAPABILITIES.includes(method.capability))
+  .map((method) => method.name);
+
+/** The methods that say what is on this server, which a closed one keeps to its operators. */
+const LISTING_METHODS = [
+  TEAM_METHODS.projectsList,
+  TEAM_METHODS.projectsGet,
+  TEAM_METHODS.projectsHistory,
+  TEAM_METHODS.membersList,
+];
+
+describe("a server closed to collaboration", () => {
+  /** The document `up` composes from that socket, without the listener around it. */
+  function documentOf(team: Harness): DiscoveryDocument {
+    return discoveryDocument({
+      database: team.database,
+      host: "127.0.0.1",
+      auth: { required: true, url: "https://127.0.0.1:41402" },
+      data: { url: "lore://127.0.0.1:41337" },
+      // The socket's own function, which is what src/up.ts hands it. What a
+      // client reads before it connects and what it is told after have to be one
+      // answer rather than two that agree today.
+      capabilities: team.socket.capabilities,
+      authority: { sha256: "3D:38:9F:E6" },
+      version: "0.0.0-test",
+    });
+  }
+
+  /** Closed the way an operator closes one: over the protocol, on a running server. */
+  async function closed(): Promise<{ team: Harness; ada: Client; bob: Client }> {
+    const administration = await administered();
+    await administration.ada.value(TEAM_METHODS.adminSettingsSet, {
+      label: "collaboration",
+      value: "closed",
+    });
+    return administration;
+  }
+
+  it("announces no coordination plane, before a client connects or after", async () => {
+    const { team } = await closed();
+
+    const document = documentOf(team);
+    // A session opened after the setting changed, which is the one that is told
+    // the truth. The two sessions already open were told something else, and the
+    // test below is what happens when one of them acts on it.
+    const fresh = await team.connect(team.tokenFor("bob"));
+
+    for (const capability of COORDINATION_CAPABILITIES) {
+      expect(document.capabilities).not.toContain(capability);
+      expect(fresh.hello?.capabilities).not.toContain(capability);
+    }
+    // What a closed deployment still is: a socket that answers, and a server
+    // that is administered.
+    expect(document.capabilities).toContain("session");
+    expect(fresh.hello?.capabilities).toContain("session");
+    expect(fresh.hello?.capabilities).toContain("admin");
+  });
+
+  it("refuses every method under them, to an operator as readily as to anybody", async () => {
+    const { ada, bob } = await closed();
+
+    for (const method of COORDINATION_METHODS) {
+      // Refused before the parameters are read, which is why a bare call is
+      // enough: the gate is in front of the handler rather than inside it.
+      expect((await ada.call(method)).code).toBe("refused");
+      expect((await bob.call(method)).code).toBe("refused");
+    }
+    // Both of these sessions were opened while the deployment was still open and
+    // were told a capability list that has since changed. They are refused all
+    // the same: the list is advice and the gate is the authority.
+    expect(ada.hello?.capabilities).toContain("live");
+  });
+
+  it("keeps what is on it to its operators", async () => {
+    const { team, ada, bob } = await administered();
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: requireUser(team.database, "ada").id,
+    });
+    await ada.value(TEAM_METHODS.adminSettingsSet, { label: "collaboration", value: "closed" });
+
+    for (const method of LISTING_METHODS) {
+      expect((await bob.call(method, { project: project.id })).code).toBe("refused");
+    }
+    // An operator reads all four exactly as before, because administering a
+    // server includes knowing what is on it.
+    expect(await ada.value(TEAM_METHODS.projectsList)).toHaveProperty("projects");
+    expect(await ada.value(TEAM_METHODS.projectsGet, { project: project.id })).toHaveProperty(
+      "project",
+    );
+    expect(await ada.value(TEAM_METHODS.projectsHistory, { project: project.id })).toHaveProperty(
+      "revisions",
+    );
+    expect(await ada.value(TEAM_METHODS.membersList)).toHaveProperty("members");
+  });
+
+  it("says what happened, in a sentence the person refused can act on", async () => {
+    const { bob } = await closed();
+
+    const refusal = await bob.send("call", { method: TEAM_METHODS.projectsList });
+
+    // The setting by name, because the person reading this either changes it or
+    // asks the person who can - and neither is served by "refused".
+    expect(refusal.message).toContain("server.collaboration");
+    expect(refusal.message).toContain("closed to collaboration");
+  });
+
+  it("goes on being administered, which is how it is opened again", async () => {
+    const { ada } = await closed();
+
+    // Every read of the management family, on a deployment that has just had its
+    // coordination plane taken away. None of it is that plane's.
+    expect(await ada.value(TEAM_METHODS.adminUsersList)).toHaveProperty("users");
+    expect(await ada.value(TEAM_METHODS.adminSettingsList)).toHaveProperty("settings");
+    expect(await ada.value(TEAM_METHODS.adminKeysList)).toHaveProperty("keys");
+    expect(await ada.value(TEAM_METHODS.adminAuditList)).toHaveProperty("decisions");
+    expect(await ada.value(TEAM_METHODS.adminServerStatus)).toHaveProperty("gatheredAt");
+  });
+
+  it("is opened again on the session that closed it, with nothing restarted", async () => {
+    const { team, ada, bob } = await closed();
+    expect((await bob.call(TEAM_METHODS.projectsList)).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.threadsList)).code).toBe("refused");
+
+    await ada.value(TEAM_METHODS.adminSettingsSet, { label: "collaboration", value: "open" });
+
+    // The same process, the same sessions, no reconnection: the capability list
+    // and the gate are both worked out when they are used, so a setting written
+    // a moment ago is what the next call is judged by.
+    expect(await bob.value(TEAM_METHODS.projectsList)).toHaveProperty("projects");
+    expect((await bob.call(TEAM_METHODS.threadsList)).code).toBe("bad-params");
+    const fresh = await team.connect(team.tokenFor("bob"));
+    for (const capability of COORDINATION_CAPABILITIES) {
+      expect(documentOf(team).capabilities).toContain(capability);
+      expect(fresh.hello?.capabilities).toContain(capability);
+    }
+  });
+
+  it("says it changed on the settings topic, like every other setting", async () => {
+    const { team, ada } = await administered();
+    const watcher = await team.connect(team.tokenFor("ada"));
+    await watcher.send("subscribe", { topic: TOPIC_ADMIN_SETTINGS });
+
+    await ada.value(TEAM_METHODS.adminSettingsSet, { label: "collaboration", value: "closed" });
+
+    await watcher.until(() => watcher.events.length > 0);
+    const event = watcher.events[0]?.payload as {
+      kind: string;
+      setting: { label: string; value: string };
+    };
+    expect(event.kind).toBe("setting-changed");
+    expect(event.setting).toMatchObject({ label: "collaboration", value: "closed" });
   });
 });
 

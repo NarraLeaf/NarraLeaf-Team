@@ -201,6 +201,7 @@ describe("nlteam settings list", () => {
     // number through an upgrade and one that follows the default.
     expect(out).toBe(
       "server.name                        the server's host  default\n" +
+        "server.collaboration               open               default\n" +
         "project.publish_lineage            merge              default\n" +
         "token.sign_in_lifetime_seconds     30 days            default\n" +
         "token.repository_lifetime_seconds  15 minutes         default\n",

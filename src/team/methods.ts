@@ -15,6 +15,7 @@
  * capability is for.
  */
 import type { UserRecord } from "../identity/users.js";
+import { collaborationOpen, withoutCoordination } from "./collaboration.js";
 import { serviceCapabilities, type TeamService } from "./service.js";
 import type { TeamPresence } from "./presence.js";
 import { CONTRACT, TEAM_METHODS } from "./protocol.js";
@@ -130,7 +131,7 @@ export function capabilitiesOf(table: ReadonlyMap<string, TeamMethod>): TeamCapa
 }
 
 /**
- * Everything this build advertises, as one derived list.
+ * Everything this deployment announces, as one derived list.
  *
  * The discovery document and the opening `hello` frame both carry this, so a
  * client is told the same thing before and after it connects. It is two halves
@@ -139,6 +140,14 @@ export function capabilitiesOf(table: ReadonlyMap<string, TeamMethod>): TeamCapa
  * which methods it registered - see {@link serviceCapabilities}. Neither half is
  * written down a second time, so a module left out of the build takes its
  * capability with it.
+ *
+ * **Then the deployment's own answer is subtracted**, which is why this is
+ * called each time a document is written or a session opened rather than once
+ * when the process started: a server closed to collaboration announces no
+ * coordination plane, and that is a stored setting somebody changes over ssh -
+ * see ./collaboration.ts. Reading it is a row from a database this process
+ * already holds open, so working the list out afresh costs a query and needs no
+ * cache anybody has to remember to invalidate.
  */
 export function serverCapabilities(
   table: ReadonlyMap<string, TeamMethod>,
@@ -148,7 +157,9 @@ export function serverCapabilities(
   for (const capability of serviceCapabilities(service)) {
     capabilities.add(capability);
   }
-  return [...capabilities];
+  return [
+    ...(collaborationOpen(service.database) ? capabilities : withoutCoordination(capabilities)),
+  ];
 }
 
 /**

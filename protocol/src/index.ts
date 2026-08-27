@@ -91,11 +91,18 @@ export const TEAM_HEARTBEAT_MS = 30_000;
  *  - `password-sign-in` - a username and a password may be exchanged for a token.
  *  - `project-history` - a project's revisions may be read a page at a time.
  *
- * **Every name here is a statement about the build and none of them is about the
- * caller.** `admin` is where that is easiest to misread: it says this server can
- * be administered over the socket, not that whoever is reading it may. Which of
- * those two a client is holding is a different question, answered by
- * {@link TeamAccount.operator} in the same `hello` frame.
+ * **Every name here is a statement about the deployment and none of them is
+ * about the caller.** `admin` is where that is easiest to misread: it says this
+ * server can be administered over the socket, not that whoever is reading it
+ * may. Which of those two a client is holding is a different question, answered
+ * by {@link TeamAccount.operator} in the same `hello` frame.
+ *
+ * Most of what a deployment announces follows from its build, but not all of it:
+ * `comments`, `live`, `overlay` and `clients` are the coordination plane, and a
+ * server whose operator has closed it to collaboration announces none of the
+ * four and refuses every method under them. So the list is a statement about the
+ * server as it stands, which is why it may differ between two connections to the
+ * same process and why a client reads it again each time it connects.
  */
 export const TEAM_CAPABILITIES = [
   /** The link session exists at all. Everything else on the socket implies it. */

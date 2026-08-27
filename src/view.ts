@@ -21,11 +21,13 @@ import { dirname, join } from "node:path";
 import { describeDuration } from "./duration.js";
 import { audienceHosts, hostOf, type IdentityConfig } from "./identity/config.js";
 import {
+  COLLABORATION_KEY,
   isSettingStored,
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
   PUBLISH_LINEAGE_KEY,
   SERVER_NAME_KEY,
+  storedCollaboration,
   storedPublishLineage,
   SIGN_IN_LIFETIME_KEY,
   storedServerName,
@@ -61,13 +63,14 @@ export interface ViewContext {
 const STORAGE_FILE_LIMIT = 50_000;
 
 /**
- * The labels of the three rows Team has somewhere to write.
+ * The labels of the five rows Team has somewhere to write.
  *
  * Named here rather than typed twice, because the settings surface finds a row
  * by its position and the writer finds it by its label; two spellings of the
  * same string would put a new value in the wrong place.
  */
 export const SERVER_NAME_SETTING = "name";
+export const COLLABORATION_SETTING = "collaboration";
 export const PUBLISH_LINEAGE_SETTING = "repeat publishes";
 export const SIGN_IN_SETTING = "sign-in token";
 export const REPOSITORY_SETTING = "repository token";
@@ -86,6 +89,8 @@ export function settingKeyOf(label: string): SettingKey | undefined {
   switch (label) {
     case SERVER_NAME_SETTING:
       return SERVER_NAME_KEY;
+    case COLLABORATION_SETTING:
+      return COLLABORATION_KEY;
     case PUBLISH_LINEAGE_SETTING:
       return PUBLISH_LINEAGE_KEY;
     case SIGN_IN_SETTING:
@@ -173,6 +178,17 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       // already reach it at rather than as a blank.
       value: storedServerName(database, hostOf(config.authOrigin)),
       stored: isSettingStored(database, SERVER_NAME_KEY),
+      editable: true,
+    },
+    {
+      group: "server",
+      label: COLLABORATION_SETTING,
+      // Whether this deployment is a collaboration server at all. First in the
+      // server group after the name, because it is the row that decides what
+      // several of the others are for: a closed deployment announces no
+      // coordination plane and lists nothing to anybody but its operators.
+      value: storedCollaboration(database),
+      stored: isSettingStored(database, COLLABORATION_KEY),
       editable: true,
     },
     {

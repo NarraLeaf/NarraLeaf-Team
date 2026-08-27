@@ -29,6 +29,13 @@
  * an operator" — which are different sentences to show a person, and only one of
  * them is about them.
  *
+ * **Nothing here is turned off by the collaboration switch.** A deployment whose
+ * operator has closed it announces `admin` as before and answers every method
+ * below as before: what that switch stops is this server being worked on, not
+ * its being administered — and `admin.settings.set` is the way back from it, so
+ * a family that went with the rest would be a switch nobody could unflip over
+ * this protocol. See src/team/collaboration.ts.
+ *
  * **Every write answers with the record it changed**, never with an
  * acknowledgement: the account as {@link adminUserBody} builds it, the setting
  * as the settings list carries it, the keys as the key list carries them. A
@@ -52,11 +59,15 @@ import { adminUserBody } from "../../identity/answers.js";
 import type { KeyStore } from "../../identity/keys.js";
 import { defaultPasswordHasher } from "../../identity/passwords.js";
 import {
+  COLLABORATION_KEY,
+  InvalidCollaborationModeError,
+  InvalidPublishLineageError,
   InvalidServerNameError,
   InvalidSettingError,
   isLifetimeKey,
   PUBLISH_LINEAGE_KEY,
   SERVER_NAME_KEY,
+  setCollaboration,
   setPublishLineage,
   setServerName,
   setTokenLifetime,
@@ -572,7 +583,7 @@ export function adminMethods(): TeamMethod[] {
     }),
     administered(TEAM_METHODS.adminSettingsList, (_params: unknown, context: MethodContext) => ({
       // Whole rather than paged, and that is a decision rather than a gap. The
-      // rows are a literal in settingRows: ten of them today, and however many
+      // rows are a literal in settingRows: twelve of them today, and however many
       // that function is written to build tomorrow. There is no query behind
       // this that could return more of them, so a cursor would be a cursor over
       // a list whose length is a line of source, and a caller would page
@@ -620,6 +631,13 @@ export function adminMethods(): TeamMethod[] {
           // that "is that a rule" has one answer wherever the question arrives
           // from.
           setPublishLineage(context.options.database, value);
+        } else if (key === COLLABORATION_KEY) {
+          // A word out of a closed set as well, checked where it is stored for
+          // the same reason. This is the one row on this surface whose value
+          // decides what the rest of this protocol answers: the settings family
+          // goes on working whichever way it is written, which is what makes a
+          // deployment that has just been closed one an operator can open again.
+          setCollaboration(context.options.database, value);
         } else if (isLifetimeKey(key)) {
           // The words this server wrote, taken back: a lifetime is shown as
           // "30 days" and a caller sending that back means it. `7d` and bare
@@ -645,7 +663,16 @@ export function adminMethods(): TeamMethod[] {
         if (error instanceof MethodError) {
           throw error;
         }
-        if (error instanceof InvalidServerNameError || error instanceof InvalidSettingError) {
+        if (
+          error instanceof InvalidServerNameError ||
+          error instanceof InvalidSettingError ||
+          error instanceof InvalidPublishLineageError ||
+          error instanceof InvalidCollaborationModeError
+        ) {
+          // Every way a value can be the wrong value, answered as the caller's
+          // rather than as this server's. One of these missing would reach the
+          // client as `internal` with its sentence stripped off — a value that
+          // was refused, over a wire that says nothing about why.
           throw new MethodError("bad-params", error.message);
         }
         throw error;

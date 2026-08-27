@@ -9,6 +9,9 @@ import { isIP } from "node:net";
 import { parseServerAddress } from "./client/config.js";
 import { DEFAULT_IDENTITY } from "./identity/config.js";
 import {
+  COLLABORATION_KEY,
+  COLLABORATION_MODES,
+  isCollaborationMode,
   isLifetimeKey,
   isPublishLineageRule,
   PUBLISH_LINEAGE_KEY,
@@ -1243,6 +1246,21 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
         kind: "settings-set",
         target,
         change: { key, rule: value.trim() as "merge" | "refuse" },
+      };
+    }
+    // A word out of a closed set as well, and read the same way for the same
+    // reason. Nothing about what closing a deployment means is settled here:
+    // this is a command line reading a word.
+    if (key === COLLABORATION_KEY) {
+      if (!isCollaborationMode(value)) {
+        return error(
+          `${COLLABORATION_KEY} is one of ${COLLABORATION_MODES.join(" or ")}, not ${value}.`,
+        );
+      }
+      return {
+        kind: "settings-set",
+        target,
+        change: { key, mode: value.trim() as "open" | "closed" },
       };
     }
     // A name is stored as it was written, and every check on it is the

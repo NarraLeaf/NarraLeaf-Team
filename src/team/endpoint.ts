@@ -74,7 +74,16 @@ export interface TeamSocketOptions {
  */
 export interface TeamSocket {
   readonly hub: TeamHub;
-  readonly capabilities: readonly TeamCapability[];
+  /**
+   * What this deployment announces, asked rather than settled.
+   *
+   * A function because part of the answer is a stored setting: a deployment
+   * closed to collaboration announces no coordination plane, and an operator
+   * closes one over ssh. Handed to whoever writes the discovery document and to
+   * every session that opens, so both come from the same source and a client
+   * cannot be told one thing before it connects and another after.
+   */
+  readonly capabilities: () => readonly TeamCapability[];
   /**
    * Who is connected and what each has open.
    *
@@ -113,10 +122,15 @@ export function createTeamSocket(options: TeamSocketOptions): TeamSocket {
   // where they differ would advertise what it cannot answer, so it refuses to
   // start rather than serve that.
   assertProtocolConsistency(methods);
-  // The one list the discovery document and the hello frame both carry, worked
-  // out from what this build serves rather than written down twice.
-  const capabilities = serverCapabilities(methods, options.service);
-  const hub = new TeamHub(capabilities);
+  // The one answer the discovery document and the hello frame both carry,
+  // worked out from what this build serves rather than written down twice - and
+  // worked out afresh each time one of them is written, because part of it is a
+  // stored setting. A list settled here would announce a coordination plane an
+  // operator closed an hour ago until somebody restarted the process, which is
+  // the same reason the server's own name is read per request.
+  const capabilities = (): readonly TeamCapability[] =>
+    serverCapabilities(methods, options.service);
+  const hub = new TeamHub();
   // Given the hub's publish rather than the hub, because what presence needs is
   // a way to reach whoever is listening and nothing else. The one-way dependency
   // is what keeps a room from being able to end a session or count them.
@@ -174,6 +188,7 @@ export function createTeamSocket(options: TeamSocketOptions): TeamSocket {
       user: identified.user,
       serverName,
       version: options.version,
+      capabilities,
     });
     options.service.log?.(
       `team: ${identified.user.username} opened a session (${hub.size} open)`,

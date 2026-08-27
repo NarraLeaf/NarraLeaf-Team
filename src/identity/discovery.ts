@@ -77,9 +77,14 @@ export interface DiscoveryDocument {
    * not find one for, so a capability added to a later Team is one Studio waits
    * to see rather than one it has to discover by getting a 404. The list is
    * built from what this build actually serves - the socket capabilities derived
-   * from the registered methods, and the two the HTTP routes add - and it is the
+   * from the registered methods, and the ones the HTTP routes add - and it is the
    * same list the opening `hello` frame carries, so a client cannot be told one
    * thing here and another over the socket.
+   *
+   * One thing about it is not a property of the build: a deployment its operator
+   * has closed to collaboration announces no `comments`, `live`, `overlay` or
+   * `clients`, and that is a stored setting. So the list is asked for as each
+   * document is written rather than settled when the process started.
    */
   readonly capabilities: readonly string[];
   readonly authority: {
@@ -117,11 +122,11 @@ export interface DiscoveryDocument {
 /**
  * Everything the document is composed from, as it stands when one is asked for.
  *
- * Everything here but the name is settled when `up` starts: the ports, the
- * fingerprint, the version, and what this build serves. The name is not, which
- * is the whole reason this is a source rather than a finished document — it is
- * a setting, and a setting somebody changes over ssh has to reach the next
- * request rather than the next restart.
+ * The ports, the fingerprint and the version are settled when `up` starts. The
+ * name and the capabilities are not, which is the whole reason this is a source
+ * rather than a finished document — both depend on a setting, and a setting
+ * somebody changes over ssh has to reach the next request rather than the next
+ * restart.
  */
 export interface DiscoverySource {
   /** Where the chosen name is read from, on each request. */
@@ -130,7 +135,15 @@ export interface DiscoverySource {
   readonly host: string;
   readonly auth: DiscoveryDocument["auth"];
   readonly data: DiscoveryDocument["data"];
-  readonly capabilities: readonly string[];
+  /**
+   * What this deployment announces, asked as each document is written.
+   *
+   * The same function the socket hands its sessions, so that the list here and
+   * the list in the opening frame are one answer rather than two that agree
+   * today. A deployment closed to collaboration announces no coordination plane,
+   * and that is a setting rather than a property of the build.
+   */
+  readonly capabilities: () => readonly string[];
   readonly authority: DiscoveryDocument["authority"];
   readonly version: string;
 }
@@ -145,7 +158,10 @@ export function discoveryDocument(source: DiscoverySource): DiscoveryDocument {
     policy: { publishLineage: storedPublishLineage(source.database) },
     auth: source.auth,
     data: source.data,
-    capabilities: source.capabilities,
+    // Asked as the answer is composed, for the name's reason: a deployment
+    // closed to collaboration announces no coordination plane, and an operator
+    // closes one without restarting anything.
+    capabilities: source.capabilities(),
     authority: source.authority,
     version: source.version,
   };

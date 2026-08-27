@@ -168,7 +168,9 @@ describe("the name a server answers with", () => {
             host: "team.example.lan",
             auth: DOCUMENT.auth,
             data: DOCUMENT.data,
-            capabilities: DOCUMENT.capabilities,
+            // Asked for as each document is written, which is what a source is
+            // for: part of the answer is a stored setting.
+            capabilities: () => DOCUMENT.capabilities,
             authority: DOCUMENT.authority,
             version: DOCUMENT.version,
         };

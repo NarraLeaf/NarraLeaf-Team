@@ -25,7 +25,6 @@
  * durable outbox per client, which is a database this server would then have to
  * prune, back up and reason about.
  */
-import type { TeamCapability } from "./protocol.js";
 
 /** What the hub needs of a session, so that a test can be one in three lines. */
 export interface HubSession {
@@ -43,11 +42,6 @@ export class TeamHub {
 
   /** The last sequence published on each topic. Absent means nothing yet, which is nought. */
   private readonly sequences = new Map<string, number>();
-
-  constructor(
-    /** What this build serves, carried here because the hello frame is written per session. */
-    readonly capabilities: readonly TeamCapability[],
-  ) {}
 
   /** How many sessions are open, for an operator's line rather than for a decision. */
   get size(): number {

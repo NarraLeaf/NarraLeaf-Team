@@ -634,22 +634,24 @@ nlteam settings list --root /srv/team
 nlteam settings set token.sign_in_lifetime_seconds 7d --root /srv/team
 nlteam settings set token.repository_lifetime_seconds 5m --root /srv/team
 nlteam settings set server.name "Winterlight" --root /srv/team
+nlteam settings set server.collaboration closed --root /srv/team
 ```
 
 A lifetime is written as `--token-lifetime` takes one: `30m`, `48h`, `7d`, or a
 bare number of seconds. `server.name` takes the name itself, which is what a
-person reads in Studio rather than an address. `list` says of each setting whether it is the default or
+person reads in Studio rather than an address. `server.collaboration` takes `open`
+or `closed` and is the subject of its own section below. `list` says of each setting whether it is the default or
 something somebody chose here, because those are different facts — a Team server that
 never chose follows a later version of Team if the default moves, and one that
 chose keeps its number.
 
 Both take `--server` in place of `--root`, and a value written that way reaches
 the running server exactly as one written on its own disk does — every setting is
-read where it is used, so nothing is restarted either way. The one thing that
-column cannot say over the protocol is which of the two each value is: a server
-answers with what a setting is and not with whether anybody chose it, so
-`settings list --server` leaves that column blank rather than filling it in with
-a guess.
+read where it is used, so nothing is restarted either way. A server answers with
+whether each value was chosen as well as with what it is, so `settings list
+--server` fills that column in too; it is blank only for a server too old to say,
+where either word would be a claim about what a later version of Team does with
+the default.
 
 Taking access away is two commands, and they are not the same one:
 
@@ -676,6 +678,48 @@ everybody's tokens at once, shortens that.
 `disable` over the protocol will not take the last operator's account away, and
 says so with the command that will; `disable --root` will, because the machine
 holding the storage root is the way back from everything.
+
+## Whether this deployment is a collaboration server
+
+```sh
+nlteam settings set server.collaboration closed --root /srv/team
+nlteam settings set server.collaboration open --server team.example.lan:41402
+```
+
+A Team server is a collaboration server, and that is what `open` — the value a
+deployment nobody has told otherwise has — means. `closed` says this deployment
+holds projects and is administered and is not a place people work together.
+
+What an operator is choosing is which of two things their deployment is, not who
+may do what on it. Closing one is the right answer for a server kept as the place
+the repositories live, on a team that coordinates somewhere else entirely; it is
+the wrong answer for a team that is having trouble with one person, because it
+takes the same thing away from all of them. Accounts are what a person is refused
+by: `user disable` and `user revoke-tokens` are above.
+
+On a closed deployment:
+
+- Comments, live sessions, overlays and the client list are gone. The four
+  capabilities are not announced in the discovery document or in the opening frame
+  of a session, and every call under them is refused — to everybody, operators
+  included. An operator does not need `live.say`; what they need is the
+  administration, which is untouched.
+- The projects and the members are listed to operators only. Anybody else asking
+  what is on this server is refused, and told that it is closed to collaboration
+  and which setting says so, so that they know to ask for it to be opened rather
+  than to report a server that looks broken.
+- Everything else about the server carries on. It signs people in, it holds the
+  repositories, `loreserver` serves them, and the accounts, settings, keys,
+  decisions and status are read and changed exactly as before.
+
+Closing one reaches a running server, as every setting here does. A session that
+was already open was told, when it connected, a list of capabilities that has
+since changed; nothing goes and takes that back, because the refusal on the call
+is what decides and the list is only what a client checks first. So a client that
+acts on the old list is refused, which is a thing every client already copes with,
+and the next client to connect is told the truth. Opening the deployment again is
+the same command with `open`, and it takes effect on the next call rather than on
+the next restart.
 
 ## Signing keys
 

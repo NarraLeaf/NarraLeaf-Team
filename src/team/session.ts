@@ -32,6 +32,7 @@
  */
 import { describeRefusal, identifyToken } from "../identity/bearer.js";
 import { isOperator, type UserRecord } from "../identity/users.js";
+import { judgeCollaboration } from "./collaboration.js";
 import type { TeamService } from "./service.js";
 import type { TeamHub, HubSession } from "./hub.js";
 import { MethodError, type MethodContext, type TeamMethod } from "./methods.js";
@@ -41,6 +42,7 @@ import {
   TEAM_PROTOCOL_VERSION,
   type TeamAccount,
   type TeamByeFrame,
+  type TeamCapability,
   type TeamClientFrame,
   type TeamErrorCode,
   type TeamServerFrame,
@@ -91,6 +93,17 @@ export interface SessionOptions {
   readonly user: UserRecord;
   readonly serverName: string;
   readonly version: string;
+  /**
+   * What this deployment announces, asked as this session opens.
+   *
+   * A function rather than a list, and the same function the discovery document
+   * is written from, so that a client cannot be told one thing before it
+   * connects and another after. It is asked here rather than when the process
+   * started because part of the answer is a stored setting - see
+   * ./collaboration.ts, which also says what happens to a session that was told
+   * an answer which has since changed.
+   */
+  readonly capabilities: () => readonly TeamCapability[];
 }
 
 /** The person behind a record, as the protocol carries them. */
@@ -157,7 +170,7 @@ export class TeamSession implements HubSession {
       session: this.id,
       account: accountOf(options.user),
       methods: [...options.methods.keys()],
-      capabilities: options.hub.capabilities,
+      capabilities: options.capabilities(),
       serverTime: Date.now(),
       heartbeatMs: TEAM_HEARTBEAT_MS,
     });
@@ -267,6 +280,18 @@ export class TeamSession implements HubSession {
 
     const user = this.identify();
     if (user === undefined) {
+      return;
+    }
+
+    // Asked of every call, and asked here rather than inside each handler for
+    // the reason the management family wraps its own: a gate one can forget to
+    // write is a gate somebody eventually forgets. This is also the authority -
+    // the capability list a session was told when it opened is advice, and a
+    // client acting on a list that has since changed meets a refusal, which is
+    // what a refusal is for. See ./collaboration.ts.
+    const collaboration = judgeCollaboration(this.options.service.database, user, method);
+    if (collaboration.kind === "refused") {
+      this.fail(id, "refused", collaboration.detail);
       return;
     }
 
@@ -389,6 +414,9 @@ export class TeamSession implements HubSession {
    * a client which has never heard of this kind does with it whatever it does
    * with any event kind it does not know, rather than meeting a frame it has no
    * name for.
+   *
+   * Nothing comparable happens to a subscription when a deployment is closed to
+   * collaboration, and ./collaboration.ts says why the two cases are not alike.
    */
   private withdrawManagement(user: UserRecord): void {
     if (isOperator(user.groups)) {

@@ -285,9 +285,9 @@ something to fix rather than a goodbye that reads as clean:
 
 One vocabulary, carried the same way by the discovery document and the `hello`
 frame, so a client is told the same thing before and after it connects. It is
-derived from what the build actually serves rather than written down, so a module
-left out of a build takes its capability with it, and a capability is never
-announced by a server that cannot answer it.
+derived from what the build actually serves and from what the deployment is set
+to, rather than written down, so a module left out of a build takes its capability
+with it, and a capability is never announced by a server that cannot answer it.
 
 | Capability | What it means |
 |---|---|
@@ -303,7 +303,45 @@ announced by a server that cannot answer it.
 A client decides what a server can do from `capabilities` or from `hello.methods`,
 never by probing for a `404`.
 
-**Every name here is about the build and none of them is about the caller.**
+### The four a deployment can turn off
+
+Most of what a server announces follows from its build. Four names do not.
+`comments`, `live`, `overlay` and `clients` are the coordination plane, and an
+operator may decide that their deployment holds projects and is administered and
+is not a place people work together. The setting is `server.collaboration`, which
+is `open` or `closed`, and on a closed deployment:
+
+- the four are absent from the discovery document and from the `hello` frame, and
+  every method under them is refused — to everybody, operators included. An
+  operator has no use for `live.say`, and an exception for them would be a hole in
+  a switch whose whole purpose is that there is nothing on the other side of it.
+- `projects.list`, `projects.get`, `projects.history` and `members.list` are
+  refused to anybody who is not an operator. Those are `session` methods, and
+  `session` cannot be withdrawn — a server answering the socket has it — so this is
+  a refusal per call rather than a capability that disappears. The refusal says
+  what happened and names the setting, because the account it refuses has done
+  nothing wrong and would otherwise read it as a server that is broken.
+- everything under `admin` is untouched, and so is the sign-in route. What the
+  switch stops is the deployment being worked on, not its being administered, and
+  `admin.settings.set` is the way back from it.
+
+The list is worked out when a discovery document is written and when a `hello`
+frame is composed, from one source, so a deployment closed over ssh reaches the
+next connection rather than the next restart and no client is told one thing
+before it connects and another after.
+
+**A session already open was told a list that has since changed, and it is not
+withdrawn.** There is no frame that takes a capability back and none is being
+invented for this: the methods refuse regardless, because the capability list is
+advice and the gate on the call is the authority. So the worst a stale list can do
+is lead a client to call something and be refused, which is the ordinary shape of
+a refusal and the one thing every client already handles. A new session is told
+the truth. A subscription held under a capability that has just been turned off is
+left alone as well — those topics carry nothing an account of this server may not
+see, and with the methods that publish on them refused there is nothing left to
+publish, so the subscription goes quiet by itself.
+
+**Every name here is about the deployment and none of them is about the caller.**
 `admin` is where that is easiest to misread: it is announced to every session,
 including the ones every `admin.*` method will refuse, because it says this
 server has a management surface rather than that whoever is reading it may use
@@ -319,6 +357,11 @@ them.
 
 The whole surface, and every name a client may call. All are gated by `session`
 unless a capability is named.
+
+On a deployment closed to collaboration, every method under `comments`, `live`,
+`overlay` and `clients` is refused to everybody, and `projects.list`,
+`projects.get`, `projects.history` and `members.list` are refused to anybody who
+is not an operator — see [Capabilities](#capabilities).
 
 | Method | Capability | What it does |
 |---|---|---|

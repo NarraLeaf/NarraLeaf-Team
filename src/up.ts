@@ -359,12 +359,13 @@ export async function up(
       host: hostOf(config.authOrigin),
       auth: { required: options.identity === true, url: authUrl(config) },
       data: { url: dataRemoteUrl(hostOf(config.authOrigin), config.dataPort) },
-      // The one capability list, taken from the socket that worked it out - the
-      // same list its `hello` frame carries. Worked out from what this build
-      // actually answers rather than written down a second time: a capability
-      // announced by a build that does not serve it is the one failure a client
-      // cannot recover from, because checking before asking is the whole of what
-      // a capability is for.
+      // The one capability list, taken from the socket that works it out - the
+      // same answer its `hello` frame carries, from the same function rather
+      // than from a copy of its result. Worked out from what this build actually
+      // answers rather than written down a second time: a capability announced
+      // by a build that does not serve it is the one failure a client cannot
+      // recover from, because checking before asking is the whole of what a
+      // capability is for.
       capabilities: team.capabilities,
       authority: { sha256: certificates.authority.fingerprint256 },
       version: VERSION,

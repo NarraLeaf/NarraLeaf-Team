@@ -17,7 +17,7 @@
  * meaning "not said", where either word would be a claim about what happens
  * when a later version of Team moves the default.
  *
- * The rows themselves are the four settings a person may change, on both paths.
+ * The rows themselves are the five settings a person may change, on both paths.
  * The server's surface has seven more on it — the issuer, the ports, the
  * authority's fingerprint — which it marks read-only and shows for a panel to
  * draw. They are left out here rather than shown on one path only, because a
@@ -34,6 +34,7 @@ import { hostOf } from "./identity/config.js";
 import { openMigratedDatabase } from "./identity/database.js";
 import { identityLayout } from "./identity/layout.js";
 import {
+  COLLABORATION_KEY,
   isLifetimeKey,
   storedIdentity,
   isSettingStored,
@@ -42,11 +43,13 @@ import {
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
   SERVER_NAME_KEY,
+  setCollaboration,
   setPublishLineage,
   setServerName,
   setTokenLifetime,
   SETTING_KEYS,
   SIGN_IN_LIFETIME_KEY,
+  storedCollaboration,
   storedPublishLineage,
   storedServerName,
   storedTokenLifetimes,
@@ -131,6 +134,8 @@ function settingValue(database: DatabaseSync, key: SettingKey): string {
       const origin = storedIdentity(database).authOrigin;
       return storedServerName(database, origin === undefined ? THE_SERVERS_HOST : hostOf(origin));
     }
+    case COLLABORATION_KEY:
+      return storedCollaboration(database);
     case PUBLISH_LINEAGE_KEY:
       return storedPublishLineage(database);
     case SIGN_IN_LIFETIME_KEY:
@@ -307,6 +312,17 @@ function renderSettingChange(
     );
     return;
   }
+  if (key === COLLABORATION_KEY) {
+    // The one change here that alters what this server answers rather than what
+    // it says about itself, so it is the one that has to say what happens to the
+    // people who are connected: their next call is judged the new way, and the
+    // list they were told when they connected is only advice.
+    stdout(
+      "Sessions already open keep the capability list they were told; every call is judged " +
+        "as this setting now stands, and the next client to connect is told the truth.\n",
+    );
+    return;
+  }
   if (key === PUBLISH_LINEAGE_KEY) {
     // Said because it is the one thing an operator would otherwise have to
     // find out by watching somebody publish: this is a rule Studio keeps, so
@@ -343,6 +359,8 @@ function writtenValue(database: DatabaseSync, change: SettingChange): string {
   switch (change.key) {
     case SERVER_NAME_KEY:
       return setServerName(database, change.name);
+    case COLLABORATION_KEY:
+      return setCollaboration(database, change.mode);
     case PUBLISH_LINEAGE_KEY:
       return setPublishLineage(database, change.rule);
     case SIGN_IN_LIFETIME_KEY:
@@ -398,6 +416,8 @@ function sentValue(change: SettingChange): string {
   switch (change.key) {
     case SERVER_NAME_KEY:
       return change.name;
+    case COLLABORATION_KEY:
+      return change.mode;
     case PUBLISH_LINEAGE_KEY:
       return change.rule;
     case SIGN_IN_LIFETIME_KEY:

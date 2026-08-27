@@ -1,11 +1,13 @@
 /**
  * The settings a Team server keeps in its database rather than in its source.
  *
- * There are the two token lifetimes, the name this deployment calls itself, and
- * the identity a token's audience is built from — the issuer, the audience, the
- * auth origin, the host names and the ports. The first two are changed with
- * `settings set` and are read where they are used, as a token is minted or as
- * the discovery document is answered, so a change reaches a running server. The
+ * There are the two token lifetimes, the name this deployment calls itself, the
+ * two words an operator chooses about what their deployment is and how it is
+ * used, and the identity a token's audience is built from — the issuer, the
+ * audience, the auth origin, the host names and the ports. Everything but the
+ * identity is changed with `settings set` and is read where it is used, as a
+ * token is minted or as the discovery document is answered, so a change reaches
+ * a running server without anything being restarted. The
  * identity is different in who owns it: `up` writes it from the configuration it
  * was started with, and the commands that mint a token in another process read
  * it — see {@link storedIdentity}, which is why a token minted by hand names the
@@ -99,6 +101,63 @@ export function isPublishLineageRule(value: string): value is PublishLineageRule
   return PUBLISH_LINEAGE_RULES.some((rule) => rule === value.trim());
 }
 
+/** The key that says whether this deployment is a collaboration server at all. */
+export const COLLABORATION_KEY = "server.collaboration";
+
+/**
+ * Whether people other than this server's operators may work together on it.
+ *
+ * **This is the one setting that decides what kind of deployment this is**, and
+ * it is a switch an operator reaches for rather than a permission on an account:
+ * it says nothing about who anybody is, and everything about what the deployment
+ * is for.
+ *
+ *  - `open` is a collaboration server. Comments, live sessions, overlays and the
+ *    client list are announced and answered, and every account of this server may
+ *    read what is on it.
+ *  - `closed` is a deployment that holds projects and is administered, and that
+ *    is all. The four coordination capabilities are not announced and every
+ *    method under them refuses - operators included, because an operator has no
+ *    use for `live.say` and an exception for them would be a hole in a switch
+ *    whose whole purpose is that there is nothing on the other side of it. And
+ *    what anybody who is not an operator may read shrinks to nothing: they
+ *    cannot list the projects, read one, page its history or list the members.
+ *
+ * ⚠ **Not a rule this server states and a client keeps, the way
+ * {@link PUBLISH_LINEAGE_RULES} is.** Every part of this is refused here, on the
+ * call, so a client that ignored the capability list gains nothing by it.
+ */
+export const COLLABORATION_MODES = ["open", "closed"] as const;
+
+/** One of the two above. */
+export type CollaborationMode = (typeof COLLABORATION_MODES)[number];
+
+/**
+ * What a deployment is until somebody says otherwise.
+ *
+ * `open`, because a Team server is a collaboration server: that is what somebody
+ * installs one for, and a deployment that had to be switched on before the thing
+ * it is for worked would be a deployment whose first hour is spent finding out
+ * why nothing does.
+ */
+export const DEFAULT_COLLABORATION: CollaborationMode = "open";
+
+/** Raised when a mode is not one of the two this server has. */
+export class InvalidCollaborationModeError extends Error {
+  constructor(readonly value: string) {
+    super(
+      `${COLLABORATION_KEY} cannot be "${value}". It is one of ` +
+        `${COLLABORATION_MODES.join(" or ")}.`,
+    );
+    this.name = "InvalidCollaborationModeError";
+  }
+}
+
+/** Whether some text names one of the modes. */
+export function isCollaborationMode(value: string): value is CollaborationMode {
+  return COLLABORATION_MODES.some((mode) => mode === value.trim());
+}
+
 /**
  * Every key a person may name, in the order they are shown.
  *
@@ -108,6 +167,7 @@ export function isPublishLineageRule(value: string): value is PublishLineageRule
  */
 export const SETTING_KEYS = [
   SERVER_NAME_KEY,
+  COLLABORATION_KEY,
   PUBLISH_LINEAGE_KEY,
   SIGN_IN_LIFETIME_KEY,
   REPOSITORY_LIFETIME_KEY,
@@ -150,7 +210,8 @@ export function isLifetimeKey(key: string): key is LifetimeKey {
 export type SettingChange =
   | { readonly key: LifetimeKey; readonly seconds: number }
   | { readonly key: typeof SERVER_NAME_KEY; readonly name: string }
-  | { readonly key: typeof PUBLISH_LINEAGE_KEY; readonly rule: PublishLineageRule };
+  | { readonly key: typeof PUBLISH_LINEAGE_KEY; readonly rule: PublishLineageRule }
+  | { readonly key: typeof COLLABORATION_KEY; readonly mode: CollaborationMode };
 
 /**
  * The one thing about the repository lifetime that is not obvious from its
@@ -334,6 +395,41 @@ export function setPublishLineage(database: DatabaseSync, rule: string): Publish
   }
   const stored = rule.trim() as PublishLineageRule;
   writeSetting(database, PUBLISH_LINEAGE_KEY, stored);
+  return stored;
+}
+
+/**
+ * Whether this deployment is a collaboration server, as it stands now.
+ *
+ * Read wherever the answer is needed rather than once, which is what lets a
+ * deployment be closed to collaboration over ssh and have that reach the next
+ * request instead of the next restart — the capability list and every call under
+ * it are worked out from this, and both ask each time. See
+ * src/team/collaboration.ts.
+ *
+ * A stored value nobody can read falls back to the default rather than raising,
+ * for {@link storedServerName}'s reason: this decides what is announced in the
+ * document that says where to sign in, and refusing to answer it would take that
+ * document out over an unreadable word. `open` is the value that fails towards
+ * the server working rather than towards a deployment nobody can use and no
+ * message explains — and a file only whoever holds the storage root can write is
+ * not where an attacker turns collaboration on.
+ */
+export function storedCollaboration(database: DatabaseSync): CollaborationMode {
+  const stored = readSetting(database, COLLABORATION_KEY);
+  if (stored === undefined || !isCollaborationMode(stored)) {
+    return DEFAULT_COLLABORATION;
+  }
+  return stored.trim() as CollaborationMode;
+}
+
+/** Store that mode, and answer with it as stored. */
+export function setCollaboration(database: DatabaseSync, mode: string): CollaborationMode {
+  if (!isCollaborationMode(mode)) {
+    throw new InvalidCollaborationModeError(mode);
+  }
+  const stored = mode.trim() as CollaborationMode;
+  writeSetting(database, COLLABORATION_KEY, stored);
   return stored;
 }
 

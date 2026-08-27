@@ -78,6 +78,7 @@ describe("the settings surface", () => {
     // over them would be writing somewhere nothing reads.
     expect(editable).toEqual([
       "name",
+      "collaboration",
       "repeat publishes",
       "sign-in token",
       "repository token",
