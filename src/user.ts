@@ -21,7 +21,7 @@
 import { TEAM_METHODS } from "@narraleaf/team-protocol";
 
 import type { WriteText } from "./cli.js";
-import { pageUsers, repositoryTokenLifetime } from "./client/admin.js";
+import { allUsers, repositoryTokenLifetime } from "./client/admin.js";
 import { readUser, type ListedUser } from "./client/answers.js";
 import { withSession } from "./client/server.js";
 import { describeDuration } from "./duration.js";
@@ -270,7 +270,7 @@ export async function userListOverProtocol(
   stderr: WriteText,
 ): Promise<number> {
   try {
-    const users = await withSession(options.server, async (session) => await pageUsers(session));
+    const users = await withSession(options.server, async (session) => await allUsers(session));
     renderUsers(
       byUsername(users.map(rowOfListed)),
       // Unreachable rather than unlikely: an account had to sign in for this

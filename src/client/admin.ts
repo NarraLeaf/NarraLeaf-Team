@@ -58,7 +58,7 @@ import type { TeamSessionClient } from "./session.js";
  * which keeps this from naming a number that would have to be kept in step with
  * one on the far side.
  */
-export async function pageUsers(session: TeamSessionClient): Promise<readonly ListedUser[]> {
+export async function allUsers(session: TeamSessionClient): Promise<readonly ListedUser[]> {
   const users: ListedUser[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
