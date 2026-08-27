@@ -1794,8 +1794,14 @@ describe("a live session", () => {
     expect(session.project).toBe(project);
     expect(session.revision).toBe("rev-1");
     expect(session.story).toBe("story-1");
-    // And nothing it did not have to give away: the digits are not in the record.
-    expect(JSON.stringify(found["session"])).not.toContain(opened["code"] as string);
+    // And nothing it did not have to give away: no field of the record is the
+    // digits. Field by field rather than against the whole serialisation, which
+    // was measured failing on a run that had nothing wrong with it: four decimal
+    // digits turn up inside a random project id about once in two thousand runs,
+    // and a test that fails at random is a test nobody can read a failure from.
+    expect(Object.values(found["session"] as Record<string, unknown>)).not.toContain(
+      opened["code"],
+    );
 
     // With the project known, the ordinary steps work: say which installation has
     // it, then join by the code.
