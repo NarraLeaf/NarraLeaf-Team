@@ -98,11 +98,12 @@ export const TEAM_HEARTBEAT_MS = 30_000;
  * by {@link TeamAccount.operator} in the same `hello` frame.
  *
  * Most of what a deployment announces follows from its build, but not all of it:
- * `comments`, `live`, `overlay` and `clients` are the coordination plane, and a
- * server whose operator has closed it to collaboration announces none of the
- * four and refuses every method under them. So the list is a statement about the
- * server as it stands, which is why it may differ between two connections to the
- * same process and why a client reads it again each time it connects.
+ * `comments`, `live`, `overlay`, `clients` and `blobs` are the coordination
+ * plane, and a server whose operator has closed it to collaboration announces
+ * none of the five, refuses every method under them, and serves none of the blob
+ * addresses. So the list is a statement about the server as it stands, which is
+ * why it may differ between two connections to the same process and why a client
+ * reads it again each time it connects.
  */
 export const TEAM_CAPABILITIES = [
   /** The link session exists at all. Everything else on the socket implies it. */

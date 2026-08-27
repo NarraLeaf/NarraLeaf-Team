@@ -112,16 +112,17 @@ export const COLLABORATION_KEY = "server.collaboration";
  * it says nothing about who anybody is, and everything about what the deployment
  * is for.
  *
- *  - `open` is a collaboration server. Comments, live sessions, overlays and the
- *    client list are announced and answered, and every account of this server may
- *    read what is on it.
+ *  - `open` is a collaboration server. Comments, live sessions, overlays, the
+ *    client list and the files a live session carries are announced and answered,
+ *    and every account of this server works on what is on it.
  *  - `closed` is a deployment that holds projects and is administered, and that
- *    is all. The four coordination capabilities are not announced and every
+ *    is all. The five coordination capabilities are not announced and every
  *    method under them refuses - operators included, because an operator has no
  *    use for `live.say` and an exception for them would be a hole in a switch
  *    whose whole purpose is that there is nothing on the other side of it. And
- *    what anybody who is not an operator may read shrinks to nothing: they
- *    cannot list the projects, read one, page its history or list the members.
+ *    the projects become their operators' business: anybody else is refused the
+ *    project list, one project, a project's history, the member list, and making
+ *    a project or taking one off.
  *
  * ⚠ **Not a rule this server states and a client keeps, the way
  * {@link PUBLISH_LINEAGE_RULES} is.** Every part of this is refused here, on the

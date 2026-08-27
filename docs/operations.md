@@ -699,15 +699,17 @@ by: `user disable` and `user revoke-tokens` are above.
 
 On a closed deployment:
 
-- Comments, live sessions, overlays and the client list are gone. The four
-  capabilities are not announced in the discovery document or in the opening frame
-  of a session, and every call under them is refused — to everybody, operators
-  included. An operator does not need `live.say`; what they need is the
+- Comments, live sessions, overlays, the client list and the files a live session
+  carries are gone. The five capabilities are not announced in the discovery
+  document or in the opening frame of a session, every call under them is refused
+  — to everybody, operators included — and the addresses a file travels over are
+  refused too. An operator does not need `live.say`; what they need is the
   administration, which is untouched.
-- The projects and the members are listed to operators only. Anybody else asking
-  what is on this server is refused, and told that it is closed to collaboration
-  and which setting says so, so that they know to ask for it to be opened rather
-  than to report a server that looks broken.
+- The projects and the members are the operators' business. Anybody else asking
+  what is on this server, or trying to put a project on it or take one off, is
+  refused, and told that it is closed to collaboration and which setting says so,
+  so that they know to ask for it to be opened rather than to report a server that
+  looks broken.
 - Everything else about the server carries on. It signs people in, it holds the
   repositories, `loreserver` serves them, and the accounts, settings, keys,
   decisions and status are read and changed exactly as before.
@@ -717,9 +719,12 @@ was already open was told, when it connected, a list of capabilities that has
 since changed; nothing goes and takes that back, because the refusal on the call
 is what decides and the list is only what a client checks first. So a client that
 acts on the old list is refused, which is a thing every client already copes with,
-and the next client to connect is told the truth. Opening the deployment again is
-the same command with `open`, and it takes effect on the next call rather than on
-the next restart.
+and the next client to connect is told the truth. A file transfer that was already
+under way is refused on its next request, which is the one place a stale list would
+otherwise have gone on working: the addresses admit an installation this server
+knows to have the project open, and one that said so before the switch keeps that
+standing until its socket closes. Opening the deployment again is the same command
+with `open`, and it takes effect on the next call rather than on the next restart.
 
 ## Signing keys
 

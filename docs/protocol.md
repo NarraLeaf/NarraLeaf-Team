@@ -299,28 +299,42 @@ with it, and a capability is never announced by a server that cannot answer it.
 | `admin` | This server's own state — its accounts, settings, keys, decisions and health — may be read and changed over the socket, by an operator. |
 | `password-sign-in` | A username and a password may be exchanged for a token, before any session. This names the sign-in route above. |
 | `project-history` | A project's revisions may be read a page at a time, through `projects.history`. Present only where the server has a reader that can page one — a build without one answers an empty page, which is not the same as a project with no revisions. |
+| `blobs` | A live session's files may be put down on this server and collected from it, over `/api/team/v1/blobs/{project}/{transfer}`. The one capability that is about bytes rather than about a call: the socket carries sixteen kilobytes a message, and a file is not a message. Present only where the build has somewhere to put one. |
 
 A client decides what a server can do from `capabilities` or from `hello.methods`,
 never by probing for a `404`.
 
-### The four a deployment can turn off
+### The five a deployment can turn off
 
-Most of what a server announces follows from its build. Four names do not.
-`comments`, `live`, `overlay` and `clients` are the coordination plane, and an
-operator may decide that their deployment holds projects and is administered and
-is not a place people work together. The setting is `server.collaboration`, which
-is `open` or `closed`, and on a closed deployment:
+Most of what a server announces follows from its build. Five names do not.
+`comments`, `live`, `overlay`, `clients` and `blobs` are the coordination plane —
+everything on this server that is a remote-collaboration service — and an operator
+may decide that their deployment holds projects and is administered and is not a
+place people work together. The setting is `server.collaboration`, which is `open`
+or `closed`, and on a closed deployment:
 
-- the four are absent from the discovery document and from the `hello` frame, and
+- the five are absent from the discovery document and from the `hello` frame, and
   every method under them is refused — to everybody, operators included. An
   operator has no use for `live.say`, and an exception for them would be a hole in
   a switch whose whole purpose is that there is nothing on the other side of it.
-- `projects.list`, `projects.get`, `projects.history` and `members.list` are
-  refused to anybody who is not an operator. Those are `session` methods, and
-  `session` cannot be withdrawn — a server answering the socket has it — so this is
-  a refusal per call rather than a capability that disappears. The refusal says
-  what happened and names the setting, because the account it refuses has done
-  nothing wrong and would otherwise read it as a server that is broken.
+- the blob addresses are refused as well, and that is a separate check rather than
+  a consequence of the capability going quiet. They are HTTP rather than methods,
+  and they admit an installation this server currently knows to have the project
+  open — an installation that announced itself before the switch keeps that
+  standing until its socket closes, so nothing about the capability list or the
+  methods would have stopped it collecting a transfer it had already agreed. The
+  route reads the setting as it stands at the moment of the request.
+- `projects.list`, `projects.get`, `projects.history`, `members.list`,
+  `projects.create` and `projects.forget` are refused to anybody who is not an
+  operator: what is on this server becomes its operators' to read and to change.
+  Those are `session` methods, and `session` cannot be withdrawn — a server
+  answering the socket has it — so this is a refusal per call rather than a
+  capability that disappears. The refusal says what happened and names the
+  setting, because the account it refuses has done nothing wrong and would
+  otherwise read it as a server that is broken. The two writes are in the list
+  because a closed server that still let an ordinary account make a project on it
+  would be accepting collaboration, and accepting a write whose result the same
+  account then cannot see.
 - everything under `admin` is untouched, and so is the sign-in route. What the
   switch stops is the deployment being worked on, not its being administered, and
   `admin.settings.set` is the way back from it.
@@ -360,8 +374,9 @@ unless a capability is named.
 
 On a deployment closed to collaboration, every method under `comments`, `live`,
 `overlay` and `clients` is refused to everybody, and `projects.list`,
-`projects.get`, `projects.history` and `members.list` are refused to anybody who
-is not an operator — see [Capabilities](#capabilities).
+`projects.get`, `projects.history`, `members.list`, `projects.create` and
+`projects.forget` are refused to anybody who is not an operator — see
+[Capabilities](#capabilities).
 
 | Method | Capability | What it does |
 |---|---|---|

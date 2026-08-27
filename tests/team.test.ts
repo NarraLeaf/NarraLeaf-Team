@@ -3448,11 +3448,13 @@ const COORDINATION_METHODS = teamMethods()
   .filter((method) => COORDINATION_CAPABILITIES.includes(method.capability))
   .map((method) => method.name);
 
-/** The methods that say what is on this server, which a closed one keeps to its operators. */
-const LISTING_METHODS = [
+/** The methods a closed deployment keeps for its operators: what is on it, and what may go on it. */
+const KEPT_FOR_OPERATORS = [
   TEAM_METHODS.projectsList,
   TEAM_METHODS.projectsGet,
   TEAM_METHODS.projectsHistory,
+  TEAM_METHODS.projectsCreate,
+  TEAM_METHODS.projectsForget,
   TEAM_METHODS.membersList,
 ];
 
@@ -3475,7 +3477,9 @@ describe("a server closed to collaboration", () => {
 
   /** Closed the way an operator closes one: over the protocol, on a running server. */
   async function closed(): Promise<{ team: Harness; ada: Client; bob: Client }> {
-    const administration = await administered();
+    // With somewhere to put a file down, so that `blobs` is a capability this
+    // build would otherwise announce rather than one absent for want of a store.
+    const administration = await administered({ blobs: true });
     await administration.ada.value(TEAM_METHODS.adminSettingsSet, {
       label: "collaboration",
       value: "closed",
@@ -3518,7 +3522,7 @@ describe("a server closed to collaboration", () => {
     expect(ada.hello?.capabilities).toContain("live");
   });
 
-  it("keeps what is on it to its operators", async () => {
+  it("keeps what is on it, and what may go on it, to its operators", async () => {
     const { team, ada, bob } = await administered();
     const project = createProject(team.database, {
       id: newProjectId(),
@@ -3528,11 +3532,18 @@ describe("a server closed to collaboration", () => {
     });
     await ada.value(TEAM_METHODS.adminSettingsSet, { label: "collaboration", value: "closed" });
 
-    for (const method of LISTING_METHODS) {
-      expect((await bob.call(method, { project: project.id })).code).toBe("refused");
+    for (const method of KEPT_FOR_OPERATORS) {
+      expect((await bob.call(method, { project: project.id, name: "harbour" })).code).toBe(
+        "refused",
+      );
     }
-    // An operator reads all four exactly as before, because administering a
-    // server includes knowing what is on it.
+    // Making one is refused as firmly as reading them, and that is the sharper
+    // half: a closed server that let an ordinary account put a project on it
+    // would be taking a write whose result the same account cannot then see.
+    expect(listProjects(team.database)).toHaveLength(1);
+
+    // An operator reads all of it exactly as before, because administering a
+    // server includes knowing what is on it, and may still take one off.
     expect(await ada.value(TEAM_METHODS.projectsList)).toHaveProperty("projects");
     expect(await ada.value(TEAM_METHODS.projectsGet, { project: project.id })).toHaveProperty(
       "project",
@@ -3541,6 +3552,8 @@ describe("a server closed to collaboration", () => {
       "revisions",
     );
     expect(await ada.value(TEAM_METHODS.membersList)).toHaveProperty("members");
+    await ada.value(TEAM_METHODS.projectsForget, { project: project.id });
+    expect(listProjects(team.database)).toHaveLength(0);
   });
 
   it("says what happened, in a sentence the person refused can act on", async () => {

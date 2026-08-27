@@ -4,21 +4,31 @@
  *
  * An operator can decide that their Team server holds projects and is
  * administered and is not a place people work together — see
- * `server.collaboration` in src/identity/settings.ts. Two things follow, and
- * they are different in kind, which is why both are decided here rather than
- * each where it happens to be needed:
+ * `server.collaboration` in src/identity/settings.ts. The question that decides
+ * what goes with it is whether the thing is a remote-collaboration service, and
+ * three things answer yes, differing in kind — which is why all three are
+ * decided here rather than each where it happens to be needed:
  *
- *   - **Four capabilities are not announced.** `comments`, `live`, `overlay` and
- *     `clients` are the coordination plane, and a deployment that is closed to
- *     collaboration does not have one. They are absent from the discovery
- *     document and from the `hello` frame, and every method under them refuses.
- *   - **What is on this server is listed to its operators only.** The project
- *     list, one project, a project's history and the member list are not
- *     capabilities of their own — they are methods under `session`, and a server
- *     answering the socket has `session` by definition. So this is a refusal per
- *     call rather than a capability that disappears, and the refusal says what
- *     happened, because the account it refuses has done nothing wrong and would
- *     otherwise read it as a server that is broken.
+ *   - **Five capabilities are not announced.** `comments`, `live`, `overlay`,
+ *     `clients` and `blobs` are the coordination plane, and a deployment that is
+ *     closed to collaboration does not have one. They are absent from the
+ *     discovery document and from the `hello` frame, and every method under them
+ *     refuses.
+ *   - **The projects on this server are its operators' business.** The project
+ *     list, one project, a project's history and the member list — and making a
+ *     project or taking one off — are not capabilities of their own: they are
+ *     methods under `session`, and a server answering the socket has `session` by
+ *     definition. So this is a refusal per call rather than a capability that
+ *     disappears, and the refusal says what happened, because the account it
+ *     refuses has done nothing wrong and would otherwise read it as a server that
+ *     is broken. The writes are in the list for a sharper reason than symmetry: a
+ *     closed server that still let an ordinary account make a project on it would
+ *     be accepting collaboration, and accepting a write whose result the same
+ *     account then cannot see.
+ *   - **The blob addresses are not served.** They are HTTP rather than a method,
+ *     so no method table gates them and the capability going quiet would not stop
+ *     them; {@link judgeBlobRoute} is how they are shut, and the note on it says
+ *     why it reads the setting itself.
  *
  * **The management family is untouched.** The point of the switch is to stop
  * this deployment being used for collaboration, not to stop it being
@@ -65,26 +75,38 @@ import { TEAM_METHODS, type TeamCapability } from "./protocol.js";
  * One list, read both by what is announced and by what is refused, so that a
  * capability cannot be left out of the discovery document while its methods go
  * on answering, or the other way about.
+ *
+ * `blobs` is in it although no method carries it: it names the addresses a live
+ * session's files travel over, which are HTTP rather than calls. Leaving it out
+ * would have announced a file transfer on a deployment that serves no live
+ * session to transfer one for.
  */
 export const COORDINATION_CAPABILITIES: readonly TeamCapability[] = [
   "comments",
   "clients",
   "live",
   "overlay",
+  "blobs",
 ];
 
 /**
- * The methods that say what is on this server.
+ * The methods a closed deployment keeps for its operators.
  *
- * Reads rather than writes, and named one at a time rather than derived from
- * their capability, because they have no capability of their own to be derived
- * from: they are the `session` methods, and `session` is the one capability that
- * cannot be withdrawn.
+ * Named one at a time rather than derived from their capability, because they
+ * have no capability of their own to be derived from: they are the `session`
+ * methods, and `session` is the one capability that cannot be withdrawn.
+ *
+ * Reads and writes both. What is on this server, and what may be put on it or
+ * taken off it, are the same question about the same thing, and a list holding
+ * only the reads would leave an ordinary account able to make a project on a
+ * server it cannot then list.
  */
-const LISTING_METHODS: readonly string[] = [
+const KEPT_FOR_OPERATORS: readonly string[] = [
   TEAM_METHODS.projectsList,
   TEAM_METHODS.projectsGet,
   TEAM_METHODS.projectsHistory,
+  TEAM_METHODS.projectsCreate,
+  TEAM_METHODS.projectsForget,
   TEAM_METHODS.membersList,
 ];
 
@@ -144,14 +166,49 @@ export function judgeCollaboration(
         `operators decide that with the ${COLLABORATION_KEY} setting.`,
     };
   }
-  if (LISTING_METHODS.includes(method.name) && !isOperator(user.groups)) {
+  if (KEPT_FOR_OPERATORS.includes(method.name) && !isOperator(user.groups)) {
     return {
       kind: "refused",
       detail:
-        "this server is closed to collaboration, so only its operators may read what is on " +
-        `it. Ask an operator to set ${COLLABORATION_KEY} to open if you are meant to be ` +
-        "working here.",
+        "this server is closed to collaboration, so what is on it is its operators' to read " +
+        `and to change. Ask an operator to set ${COLLABORATION_KEY} to open if you are meant ` +
+        "to be working here.",
     };
   }
   return { kind: "allowed" };
+}
+
+/**
+ * Whether the addresses a live session's files travel over are served here.
+ *
+ * Asked as each blob request arrives, and asked of the setting rather than of
+ * anything worked out earlier — which is the whole point of it being a second
+ * gate rather than a consequence of the first two.
+ *
+ * The capability going quiet stops a client that checks before asking, and the
+ * methods refusing stops a new transfer being agreed. Neither shuts this door.
+ * An installation that announced itself while the deployment was still open
+ * keeps its entry in presence until its socket closes — see
+ * src/team/presence.ts — and src/web/blobs.ts admits a request from exactly such
+ * an installation, so a transfer id agreed a minute before the switch would go
+ * on being served afterwards by a server that had stopped announcing it could.
+ * A switch that looks effective and is not is worse than no switch, so the route
+ * reads the setting as it stands at the moment of the request, which is the one
+ * thing that cannot be stale.
+ *
+ * Presence is deliberately not touched. Dropping announcements when a setting
+ * changed would mean walking every open session, which is the invalidation this
+ * design avoids, and it would say those installations had closed the project
+ * when they had not.
+ */
+export function judgeBlobRoute(database: DatabaseSync): CollaborationVerdict {
+  if (collaborationOpen(database)) {
+    return { kind: "allowed" };
+  }
+  return {
+    kind: "refused",
+    detail:
+      "this server is closed to collaboration, so it carries no files for a live session. " +
+      `Its operators decide that with the ${COLLABORATION_KEY} setting.`,
+  };
 }

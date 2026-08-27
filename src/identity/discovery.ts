@@ -82,9 +82,9 @@ export interface DiscoveryDocument {
    * thing here and another over the socket.
    *
    * One thing about it is not a property of the build: a deployment its operator
-   * has closed to collaboration announces no `comments`, `live`, `overlay` or
-   * `clients`, and that is a stored setting. So the list is asked for as each
-   * document is written rather than settled when the process started.
+   * has closed to collaboration announces no `comments`, `live`, `overlay`,
+   * `clients` or `blobs`, and that is a stored setting. So the list is asked for
+   * as each document is written rather than settled when the process started.
    */
   readonly capabilities: readonly string[];
   readonly authority: {

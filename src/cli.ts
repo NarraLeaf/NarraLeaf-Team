@@ -227,9 +227,9 @@ and says what Studio does when somebody publishes a repository this server alrea
 holds - merge connects it under the name it is already registered as, refuse will
 not have it. ${COLLABORATION_KEY} takes ${COLLABORATION_MODES.join(" or ")} and says whether
 this deployment is a collaboration server at all - closed withdraws comments, live
-sessions, overlays and the client list from everybody, and lists the projects and
-the members to its operators only. It is administered the same either way. The
-keys are
+sessions, overlays, the client list and a live session's files from everybody, and
+keeps the projects and the members for its operators. It is administered the same
+either way. The keys are
 ${SETTING_KEYS.map((key) => `  ${key}`).join("\n")}
 
 init, user create, token mint --root and login read the password from standard

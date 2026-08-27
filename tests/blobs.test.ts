@@ -25,6 +25,7 @@ import { KeyStore } from "../src/identity/keys.js";
 import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
 import { mintToken } from "../src/identity/tokens.js";
+import { setCollaboration } from "../src/identity/settings.js";
 import { createUser, requireUser } from "../src/identity/users.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
 import { BLOB_PROJECT_BYTES, TeamBlobStore, blobBytesOnDisk } from "../src/team/blobs.js";
@@ -443,5 +444,55 @@ describe("what the server says it can do", () => {
       capabilities: string[];
     };
     expect(document.capabilities).toContain("blobs");
+  });
+
+  it("stops announcing it on a deployment closed to collaboration", async () => {
+    const held = await harness();
+    setCollaboration(held.database, "closed");
+
+    const document = (await (await fetch(`${held.origin}${DISCOVERY_PATH}`)).json()) as {
+      capabilities: string[];
+    };
+
+    // Nothing was restarted. The document is composed from the setting as it
+    // stands, which is the whole reason the capability list is a function.
+    expect(document.capabilities).not.toContain("blobs");
+  });
+});
+
+describe("a deployment closed to collaboration", () => {
+  it("carries no file for a live session, however far the transfer had got", async () => {
+    // ⚠ The case the route's own check exists for. The announcement that admits
+    // this request was made while the deployment was still open and lives until
+    // the socket closes, and the transfer was agreed then too - so neither the
+    // capability going quiet nor `live.*` refusing would have stopped this
+    // request. The route reads the setting itself.
+    const held = await harness();
+    const bytes = randomBytes(2048);
+    expect((await reserve(held, "t-closed", bytes.length, sha256(bytes))).status).toBe(201);
+    expect((await put(held, "t-closed", 0, bytes.subarray(0, 1024))).status).toBe(200);
+
+    setCollaboration(held.database, "closed");
+
+    for (const method of ["HEAD", "GET", "PATCH", "POST", "DELETE"]) {
+      const refused = await fetch(address(held, "t-closed"), { method, headers: asAda(held) });
+      expect(refused.status).toBe(403);
+    }
+  });
+
+  it("serves them again the moment it is opened, with nothing restarted", async () => {
+    const held = await harness();
+    const bytes = randomBytes(1024);
+    await reserve(held, "t-reopened", bytes.length, sha256(bytes));
+    setCollaboration(held.database, "closed");
+    expect(
+      (await fetch(address(held, "t-reopened"), { method: "HEAD", headers: asAda(held) })).status,
+    ).toBe(403);
+
+    setCollaboration(held.database, "open");
+
+    expect(
+      (await fetch(address(held, "t-reopened"), { method: "HEAD", headers: asAda(held) })).status,
+    ).toBe(200);
   });
 });

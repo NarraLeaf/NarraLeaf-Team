@@ -28,10 +28,17 @@
  * is made of, so it is the same authorisation the old byte channel had - and because it is about
  * the instance rather than about a room, it goes on being answerable after a room has ended, which
  * is what lets a transfer resume across a session boundary.
+ *
+ * And, before either of those, a deployment that is a collaboration server at all. A file for a
+ * live session is a collaboration service, so `server.collaboration` shuts these addresses along
+ * with the rest - checked here on the setting rather than left to the capability disappearing,
+ * because the instance this route admits may have announced itself before the switch. See
+ * src/team/collaboration.ts.
  */
 import { bearerToken, describeRefusal, identifyToken } from "../identity/bearer.js";
 import { findProject } from "../projects/registry.js";
 import { isBlobName, type TeamBlobStore } from "../team/blobs.js";
+import { judgeBlobRoute } from "../team/collaboration.js";
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TeamPresence } from "../team/presence.js";
@@ -324,6 +331,18 @@ function permit(
   );
   if (identified.kind === "refused") {
     refuse(response, 401, describeRefusal(identified.reason));
+    return undefined;
+  }
+
+  // Before anything about the project, because this is a statement about the
+  // deployment rather than about the caller or about what it asked for: a server
+  // closed to collaboration does not serve these addresses at all. Read here, on
+  // the setting as it stands, rather than left to the capability going quiet -
+  // see judgeBlobRoute, which says why the announcement and the methods together
+  // are not enough to shut this door.
+  const collaboration = judgeBlobRoute(options.service.database);
+  if (collaboration.kind === "refused") {
+    refuse(response, 403, collaboration.detail);
     return undefined;
   }
 
