@@ -62,34 +62,6 @@ export interface ProjectFileView {
 }
 
 /**
- * One line on the settings surface.
- *
- * `editable` false means the value can be shown but not changed, and asking to
- * change it must do nothing. `restartRequired` means the change is written now
- * and takes effect when loreserver is next started — which has to be said,
- * because a setting that silently did not apply is worse than one that could
- * not be changed.
- */
-export interface SettingView {
-  readonly group: string;
-  readonly label: string;
-  readonly value: string;
-  /**
-   * The number `value` was written from, where it was written from one.
-   *
-   * Present on the two lifetimes and nowhere else. `value` is the duration in
-   * words, and a reader that wanted the number back would have to take those
-   * words apart again — in whatever language they were written in. Sending
-   * both is cheaper than making everybody parse one.
-   */
-  readonly seconds?: number;
-  readonly editable: boolean;
-  readonly restartRequired?: boolean;
-  /** Why this value is worth thinking about, shown when it is being changed. */
-  readonly caution?: string;
-}
-
-/**
  * What is said about a project nobody has read yet.
  *
  * An empty history rather than a zeroed one: absent draws as unknown, and a

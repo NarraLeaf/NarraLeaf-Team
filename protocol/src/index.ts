@@ -90,6 +90,12 @@ export const TEAM_HEARTBEAT_MS = 30_000;
  *
  *  - `password-sign-in` - a username and a password may be exchanged for a token.
  *  - `project-history` - a project's revisions may be read a page at a time.
+ *
+ * **Every name here is a statement about the build and none of them is about the
+ * caller.** `admin` is where that is easiest to misread: it says this server can
+ * be administered over the socket, not that whoever is reading it may. Which of
+ * those two a client is holding is a different question, answered by
+ * {@link TeamAccount.operator} in the same `hello` frame.
  */
 export const TEAM_CAPABILITIES = [
   /** The link session exists at all. Everything else on the socket implies it. */
@@ -102,6 +108,16 @@ export const TEAM_CAPABILITIES = [
   "live",
   /** Data attached to a project at a revision, which never enters the repository. */
   "overlay",
+  /**
+   * This server's own state - its accounts, settings, keys, decisions and
+   * health - may be read over the socket, by an operator.
+   *
+   * Announced to everybody, refused to all but operators. It is what this build
+   * can do; whether the account on the other end may do it is
+   * {@link TeamAccount.operator}, and a client draws a management surface from
+   * the two together.
+   */
+  "admin",
   /** A username and a password may be exchanged for a token, before any session. */
   "password-sign-in",
   /** A project's revisions may be read a page at a time. */
@@ -673,6 +689,228 @@ export type TeamProjectsEvent =
   /** This server read a repository again, so what it says about it may have changed. */
   | { readonly kind: "project-read"; readonly project: string };
 
+/* ------------------------------------------------------- administration */
+
+/**
+ * What the `admin` methods answer with.
+ *
+ * Every one of these is a record with named fields, and none of them is shaped
+ * by how a terminal would print it: this is what a management panel draws from,
+ * and a column width, a joined string or an "n/a" would be a decision about a
+ * screen taken in the wrong half of the system. Where Team does not know
+ * something the field is absent, which is the same degradation rule everything
+ * else on this wire follows.
+ */
+
+/**
+ * One account, as whoever administers this server reads it.
+ *
+ * Deliberately more than a member of a project is - which is what
+ * `members.list` answers with, and which carries a name, an address and one
+ * label. This is the record somebody acts on: it says which groups an account
+ * is in rather than only whether those groups amount to an operator, and it
+ * says when its tokens were last refused, both of which are an operator's
+ * business and nobody else's.
+ */
+export interface TeamAdminUser {
+  /** The stable identifier, which is what a token's subject holds. */
+  readonly id: string;
+  readonly username: string;
+  readonly displayName: string;
+  readonly email?: string;
+  /**
+   * Every group the account is in, which is the whole of what a role is here.
+   *
+   * A list rather than one string. A server may put an account in as many
+   * groups as it likes, and the one thing a reader must not have to do is take
+   * a joined string apart to find out whether a name is in it.
+   */
+  readonly groups: readonly string[];
+  /**
+   * Whether those groups make it an operator.
+   *
+   * Derived from {@link groups} on every read, never stored, and sent beside
+   * them so that the label a panel draws and the door this server opens are
+   * decided by the same rule.
+   */
+  readonly operator: boolean;
+  /** Whether the account is stopped from signing in or being issued anything. */
+  readonly disabled: boolean;
+  readonly serviceAccount: boolean;
+  readonly createdAt: number;
+  /**
+   * When its tokens were last refused wholesale.
+   *
+   * Absent for an account nothing has ever done that to, and for one whose last
+   * refusal was made before this server kept the moment.
+   */
+  readonly tokensInvalidatedAt?: number;
+}
+
+/**
+ * One line of what this server keeps in its settings.
+ *
+ * `editable` false means the value can be shown but not changed, and asking to
+ * change it must do nothing: the identity settings and the ports are named on
+ * the command line that started the server, and offering to change a value that
+ * would be thrown away is worse than refusing, because it looks like it worked.
+ */
+export interface TeamAdminSetting {
+  /** Which heading this row belongs under. */
+  readonly group: string;
+  /**
+   * What the row is called.
+   *
+   * The key as well as the caption: a row is found by its position and written
+   * by the setting this label stands for, so it is matched rather than only
+   * displayed.
+   */
+  readonly label: string;
+  readonly value: string;
+  /**
+   * The number `value` was written from, where it was written from one.
+   *
+   * Present on the two token lifetimes and nowhere else. `value` is a duration
+   * in words, and a reader that wanted the number back would have to take those
+   * words apart again - in whatever language they were written in. Sending both
+   * is cheaper than making everybody parse one.
+   */
+  readonly seconds?: number;
+  readonly editable: boolean;
+  /**
+   * The change is written now and takes effect when loreserver is next started.
+   *
+   * Said out loud because a setting that silently did not apply is worse than
+   * one that could not be changed.
+   */
+  readonly restartRequired?: boolean;
+  /** Why this value is worth thinking about, shown when it is being changed. */
+  readonly caution?: string;
+}
+
+/**
+ * One signing key this server holds.
+ *
+ * The public half of it and nothing else. A `kid` is an RFC 7638 thumbprint of
+ * the public key, so it identifies a key without being derived from anything
+ * secret, and it is what a token names in its header.
+ */
+export interface TeamAdminKey {
+  readonly kid: string;
+  /** Position in the sequence of keys; the highest is the newest. */
+  readonly serial: number;
+  /**
+   * True for a key that is kept but no longer published or used.
+   *
+   * A retired key verifies nothing: it is on this list so that an operator can
+   * see a rotation happened rather than have a key disappear.
+   */
+  readonly retired: boolean;
+  /**
+   * Whether new tokens are signed with this one, which is true of at most one.
+   *
+   * The newest key that has not been retired signs, while every key that has
+   * not been retired is published - which is what makes a rotation invisible to
+   * anybody already holding a token.
+   */
+  readonly signing: boolean;
+}
+
+/** One decision this server was asked to make, as its log recorded it. */
+export interface TeamAdminDecision {
+  /** The row's own key, which is what a list of otherwise identical rows is keyed on. */
+  readonly id: number;
+  readonly at: number;
+  /** Who asked, or the word for a caller that presented nothing this server could read. */
+  readonly username: string;
+  /** The project's name where this server knew it, and the resource id where it did not. */
+  readonly resource: string;
+  readonly allowed: boolean;
+  /** The short reason, as the log line says it: `owner`, `no grant`, `expired`. */
+  readonly detail: string;
+}
+
+/**
+ * What this server is, as of the moment it was last worked out.
+ *
+ * **Gathered when somebody asks and cached for a stated moment, never on a
+ * timer.** Two of the parts are expensive - the health check is a request to
+ * another server, and measuring the store can stat tens of thousands of files -
+ * so this carries {@link gatheredAt} and {@link freshnessMs} rather than
+ * pretending to be live: a panel says "as of" and is telling the truth, where
+ * one that showed a clock would be showing when it asked rather than when the
+ * answer was true.
+ */
+export interface TeamAdminStatus {
+  /** The moment the answer below was worked out. */
+  readonly gatheredAt: number;
+  /**
+   * How long an answer is served before it is worked out again.
+   *
+   * Sent rather than assumed, so that a panel deciding how often to ask is
+   * reading this server's number instead of guessing at one.
+   */
+  readonly freshnessMs: number;
+  /** This server's own version. */
+  readonly version: string;
+  /** The storage root everything this server writes is underneath. */
+  readonly root: string;
+  readonly loreserver: TeamAdminLoreserver;
+  readonly reach: TeamAdminReach;
+  /** How many accounts exist. */
+  readonly accounts: number;
+  /** How many projects are on the list. */
+  readonly projects: number;
+  /** How many decisions are on record, which is bounded by this server. */
+  readonly decisions: number;
+  /** How many signing keys are published, retired ones not counted. */
+  readonly signingKeys: number;
+}
+
+/**
+ * The server beside this one, as far as this one can see it.
+ *
+ * What is here is what a second program can see over a socket: whether it
+ * answered, the version this build pins, and what its store weighs. The
+ * process itself - its pid, when it started, how often it has been restarted -
+ * belongs to whatever is supervising it, and a number invented for those would
+ * read as a fact.
+ */
+export interface TeamAdminLoreserver {
+  /** The version this build of Team pins and installs. */
+  readonly version: string;
+  /** Whether it answered its health check when this was gathered. */
+  readonly healthy: boolean;
+  /** Where it keeps what it holds. */
+  readonly storageRoot: string;
+  /**
+   * What that store weighs.
+   *
+   * Absent rather than nought where it could not be added up - a store too
+   * large to walk, or one that is not there yet. A partial total looks exactly
+   * like a real one, and a store that appeared to halve would read as a store
+   * that had lost half of what was in it.
+   */
+  readonly storageBytes?: number;
+}
+
+/** The addresses somebody has to be told in order to reach this server. */
+export interface TeamAdminReach {
+  /** Where a person signs in. */
+  readonly signIn: string;
+  /** Where a repository is cloned from. */
+  readonly data: string;
+  /** This server's certificate authority, which is what a client compares once. */
+  readonly fingerprint: string;
+  /**
+   * Ports bound to the loopback, which nobody off this machine can reach.
+   *
+   * Listed so that an operator diagnosing a port that is already taken can see
+   * what this server is holding without reading its command line.
+   */
+  readonly loopback: ReadonlyArray<{ readonly port: number; readonly what: string }>;
+}
+
 /* -------------------------------------------------------- method names */
 
 /**
@@ -733,6 +971,16 @@ export const TEAM_METHODS = {
   overlayPut: "overlay.put",
   /** Take one's own record off again. */
   overlayDrop: "overlay.drop",
+  /** A page of this server's accounts, newest first. */
+  adminUsersList: "admin.users.list",
+  /** Everything this server keeps in its settings, and which of it may be changed. */
+  adminSettingsList: "admin.settings.list",
+  /** Every signing key this server holds, published and retired. */
+  adminKeysList: "admin.keys.list",
+  /** A page of the decisions this server has been asked to make, newest first. */
+  adminAuditList: "admin.audit.list",
+  /** What this server is and what it can reach, as of the moment it was gathered. */
+  adminServerStatus: "admin.server.status",
 } as const;
 
 export type TeamMethodName = (typeof TEAM_METHODS)[keyof typeof TEAM_METHODS];

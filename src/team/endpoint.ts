@@ -32,6 +32,7 @@ import {
   serverCapabilities,
   type TeamMethod,
 } from "./methods.js";
+import { adminMethods } from "./methods/admin.js";
 import { clientMethods } from "./methods/clients.js";
 import { commentMethods } from "./methods/comments.js";
 import { liveMethods } from "./methods/live.js";
@@ -92,6 +93,7 @@ export function teamMethods(): readonly TeamMethod[] {
     ...clientMethods(),
     ...liveMethods(),
     ...overlayMethods(),
+    ...adminMethods(),
   ];
 }
 

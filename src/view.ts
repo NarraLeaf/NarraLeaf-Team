@@ -31,7 +31,11 @@ import {
 } from "./identity/settings.js";
 import { instanceLayout } from "./loreserver/layout.js";
 import { LORESERVER_VERSION, resolveArtifact } from "./loreserver/pin.js";
-import type { SettingView } from "./teamview.js";
+// The rows below go out over a session as they stand - see
+// src/team/methods/admin.ts - so what one looks like is the wire's business
+// rather than this module's, and there is no second declaration of the shape to
+// fall out of step with it.
+import type { TeamAdminSetting } from "./team/protocol.js";
 
 import type { DatabaseSync } from "node:sqlite";
 
@@ -140,7 +144,7 @@ export function storageRootOf(root: string): string {
  * `up`, so they are shown and marked read-only: offering to change a value that
  * would be thrown away is worse than refusing, because it looks like it worked.
  */
-export function settingRows(context: ViewContext): SettingView[] {
+export function settingRows(context: ViewContext): TeamAdminSetting[] {
   const lifetimes = storedTokenLifetimes(context.database);
   const storageRoot = storageRootOf(context.root);
   const { config } = context;

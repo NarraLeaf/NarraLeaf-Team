@@ -8,6 +8,7 @@
     "clients",
     "live",
     "overlay",
+    "admin",
     "password-sign-in",
     "project-history"
   ],
@@ -46,7 +47,12 @@
     "live.say",
     "overlay.list",
     "overlay.put",
-    "overlay.drop"
+    "overlay.drop",
+    "admin.users.list",
+    "admin.settings.list",
+    "admin.keys.list",
+    "admin.audit.list",
+    "admin.server.status"
   ],
   "topics": {
     "projects": "projects",
