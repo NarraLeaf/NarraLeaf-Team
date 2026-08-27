@@ -2,11 +2,11 @@
  * Writes a client named, so that a repeat of one is not a second one.
  *
  * A call travels over a socket that can drop between the request and the
- * answer, and a client that never saw the answer retries. Three writes on this
+ * answer, and a client that never saw the answer retries. Four writes on this
  * server already survive that, and each of them does it out of the row it made:
- * a thread, a comment and an overlay record all carry a `client_id` column, so
- * "have I done this already" is answered by looking for the row — see
- * src/comments/store.ts and src/overlay/store.ts.
+ * a thread, a comment, an overlay record and a project all carry a `client_id`
+ * column, so "have I done this already" is answered by looking for the row —
+ * see src/comments/store.ts, src/overlay/store.ts and src/projects/create.ts.
  *
  * The writes an operator makes have no such row. Disabling an account does not
  * create anything to hang a client id on, changing a setting replaces a value,
