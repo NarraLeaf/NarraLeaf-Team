@@ -16,12 +16,15 @@ import { identityLayout } from "./identity/layout.js";
 import {
   isSettingStored,
   lifetimeUnder,
+  PUBLISH_LINEAGE_KEY,
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
   SERVER_NAME_KEY,
+  setPublishLineage,
   setServerName,
   setTokenLifetime,
   SETTING_KEYS,
+  storedPublishLineage,
   storedServerName,
   storedTokenLifetimes,
   type SettingChange,
@@ -65,6 +68,9 @@ const THE_SERVERS_HOST = "the server's host";
 function settingValue(database: DatabaseSync, key: SettingKey): string {
   if (key === SERVER_NAME_KEY) {
     return storedServerName(database, THE_SERVERS_HOST);
+  }
+  if (key === PUBLISH_LINEAGE_KEY) {
+    return storedPublishLineage(database);
   }
   // The duration in the words somebody would have typed, not the seconds
   // the key names: 2592000 is correct and nobody can hold it up against
@@ -128,6 +134,19 @@ export async function settingsSet(
       stdout(
         "The next client to read this server's address is told the new name; nothing is " +
           "restarted.\n",
+      );
+      return 0;
+    }
+
+    if (change.key === PUBLISH_LINEAGE_KEY) {
+      const after = setPublishLineage(database, change.rule);
+      stdout(`${change.key} is ${after}, and was ${before}\n`);
+      // Said because it is the one thing an operator would otherwise have to
+      // find out by watching somebody publish: this is a rule Studio keeps, so
+      // it reaches a machine the next time that machine reads this server.
+      stdout(
+        "Studio reads this with the rest of what this server says about itself, so a machine " +
+          "already open picks it up the next time it looks.\n",
       );
       return 0;
     }

@@ -22,7 +22,9 @@ import { KeyStore } from "./identity/keys.js";
 import { identityLayout } from "./identity/layout.js";
 import {
   lifetimeUnder,
+  PUBLISH_LINEAGE_KEY,
   SERVER_NAME_KEY,
+  setPublishLineage,
   setServerName,
   setTokenLifetimes,
   SIGN_IN_LIFETIME_KEY,
@@ -195,6 +197,18 @@ export function setSetting(
       messages.action.settingChanged({
         label,
         value: setServerName(context.database, value),
+      }),
+    );
+  }
+
+  // Nor is every setting free text. This one is a word out of a closed set, and
+  // the set is checked where it is stored rather than here - one answer to "is
+  // that a rule", wherever the question arrives from.
+  if (key === PUBLISH_LINEAGE_KEY) {
+    return said(
+      messages.action.settingChanged({
+        label,
+        value: setPublishLineage(context.database, value),
       }),
     );
   }

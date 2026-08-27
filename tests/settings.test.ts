@@ -17,7 +17,9 @@ import {
   namedTokenLifetimes,
   persistIdentity,
   REPOSITORY_LIFETIME_KEY,
+  PUBLISH_LINEAGE_KEY,
   SERVER_NAME_KEY,
+  storedPublishLineage,
   setServerName,
   setTokenLifetimes,
   SIGN_IN_LIFETIME_KEY,
@@ -199,6 +201,7 @@ describe("nlteam settings list", () => {
     // number through an upgrade and one that follows the default.
     expect(out).toBe(
       "server.name                        the server's host  default\n" +
+        "project.publish_lineage            merge              default\n" +
         "token.sign_in_lifetime_seconds     30 days            default\n" +
         "token.repository_lifetime_seconds  15 minutes         default\n",
     );
@@ -504,6 +507,58 @@ describe("nlteam settings set, on the name", () => {
     const connection = await openMigratedDatabase(identityLayout(root).databasePath);
     try {
       expect(isSettingStored(connection, SERVER_NAME_KEY)).toBe(false);
+    } finally {
+      connection.close();
+    }
+  });
+
+  it("stores the rule for a repository this server already holds", async () => {
+    const root = await temporaryRoot();
+
+    const { code, out, err } = await invoke((stdout, stderr) =>
+      settingsSet({ root, change: { key: PUBLISH_LINEAGE_KEY, rule: "refuse" } }, stdout, stderr),
+    );
+
+    expect(code).toBe(0);
+    expect(err).toBe("");
+    expect(out).toContain("project.publish_lineage is refuse, and was merge");
+    // The one thing an operator would otherwise learn by watching somebody
+    // publish: nothing restarts, and a machine already open picks it up when it
+    // next reads this server.
+    expect(out).toContain("the next time it looks");
+
+    const connection = await openMigratedDatabase(identityLayout(root).databasePath);
+    try {
+      expect(storedPublishLineage(connection)).toBe("refuse");
+    } finally {
+      connection.close();
+    }
+  });
+
+  it("refuses a rule that is neither of the two, and changes nothing", async () => {
+    const root = await temporaryRoot();
+
+    const { code, out, err } = await invoke((stdout, stderr) =>
+      settingsSet(
+        // Past the command line's own check, which is where a person's typing is
+        // caught. This is the other half: the store answers the same question, so
+        // that a caller reaching it another way cannot put a word here that
+        // everything downstream would read as neither rule.
+        { root, change: { key: PUBLISH_LINEAGE_KEY, rule: "ask" as "merge" } },
+        stdout,
+        stderr,
+      ),
+    );
+
+    expect(code).toBe(1);
+    expect(out).toBe("");
+    expect(err).toContain("is one of merge or refuse");
+
+    const connection = await openMigratedDatabase(identityLayout(root).databasePath);
+    try {
+      expect(isSettingStored(connection, PUBLISH_LINEAGE_KEY)).toBe(false);
+      // And what it answers meanwhile is the default rather than nothing.
+      expect(storedPublishLineage(connection)).toBe("merge");
     } finally {
       connection.close();
     }

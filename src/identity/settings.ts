@@ -43,6 +43,62 @@ export const REPOSITORY_LIFETIME_KEY = "token.repository_lifetime_seconds";
 /** The key the name this server calls itself is stored under. */
 export const SERVER_NAME_KEY = "server.name";
 
+/** The key the rule for a repository this server already holds is stored under. */
+export const PUBLISH_LINEAGE_KEY = "project.publish_lineage";
+
+/**
+ * What Studio does when somebody publishes a repository this server already has.
+ *
+ * **The case is ordinary rather than exotic**: a project folder copied to start a
+ * variant carries the same repository, so the repository has been here before -
+ * registered under whatever it was called the first time - and the author is now
+ * publishing it under a name of their choosing.
+ *
+ *  - `merge` connects it under the name this server already holds it as. What is
+ *    left is two histories of one project, which is what sending and getting are
+ *    for: the divergence is settled by a person, once, with both sides in front
+ *    of them.
+ *  - `refuse` will not have it, and the author is told which project it already is.
+ *    For a deployment where one repository is meant to be one project and a second
+ *    copy of it is a mistake somebody should hear about rather than merge.
+ *
+ * ⚠ **A rule this server states and Studio keeps, not a permission this server
+ * enforces.** What it governs is what an author's own machine writes into its own
+ * repository, which nothing here can reach - so it belongs with the other things an
+ * operator decides about how their deployment is used, and not with the things that
+ * are checked before a write is allowed.
+ */
+export const PUBLISH_LINEAGE_RULES = ["merge", "refuse"] as const;
+
+/** One of the two above. */
+export type PublishLineageRule = (typeof PUBLISH_LINEAGE_RULES)[number];
+
+/**
+ * What a deployment does about it until somebody says otherwise.
+ *
+ * `merge`, because it is the answer that loses nothing: the two copies are one
+ * project and the author is given the means to reconcile them. Refusing is the
+ * stricter choice and stricter is not the safer default here - a refusal on a
+ * server nobody configured would stop an ordinary act with no way to see why.
+ */
+export const DEFAULT_PUBLISH_LINEAGE: PublishLineageRule = "merge";
+
+/** Raised when a rule is not one of the two this server has. */
+export class InvalidPublishLineageError extends Error {
+  constructor(readonly value: string) {
+    super(
+      `${PUBLISH_LINEAGE_KEY} cannot be "${value}". It is one of ` +
+        `${PUBLISH_LINEAGE_RULES.join(" or ")}.`,
+    );
+    this.name = "InvalidPublishLineageError";
+  }
+}
+
+/** Whether some text names one of the rules. */
+export function isPublishLineageRule(value: string): value is PublishLineageRule {
+  return PUBLISH_LINEAGE_RULES.some((rule) => rule === value.trim());
+}
+
 /**
  * Every key a person may name, in the order they are shown.
  *
@@ -52,6 +108,7 @@ export const SERVER_NAME_KEY = "server.name";
  */
 export const SETTING_KEYS = [
   SERVER_NAME_KEY,
+  PUBLISH_LINEAGE_KEY,
   SIGN_IN_LIFETIME_KEY,
   REPOSITORY_LIFETIME_KEY,
 ] as const;
@@ -92,7 +149,8 @@ export function isLifetimeKey(key: string): key is LifetimeKey {
  */
 export type SettingChange =
   | { readonly key: LifetimeKey; readonly seconds: number }
-  | { readonly key: typeof SERVER_NAME_KEY; readonly name: string };
+  | { readonly key: typeof SERVER_NAME_KEY; readonly name: string }
+  | { readonly key: typeof PUBLISH_LINEAGE_KEY; readonly rule: PublishLineageRule };
 
 /**
  * The one thing about the repository lifetime that is not obvious from its
@@ -250,6 +308,32 @@ export function setServerName(database: DatabaseSync, name: string): string {
   }
   const stored = name.trim();
   writeSetting(database, SERVER_NAME_KEY, stored);
+  return stored;
+}
+
+/**
+ * The rule this deployment states about a repository it already holds.
+ *
+ * A stored value nobody can read falls back to the default rather than raising,
+ * for {@link storedServerName}'s reason and not {@link lifetimeOf}'s: this is
+ * composed into the discovery document, and refusing to answer would take out the
+ * one document that says where to sign in over a policy that has a sane default.
+ */
+export function storedPublishLineage(database: DatabaseSync): PublishLineageRule {
+  const stored = readSetting(database, PUBLISH_LINEAGE_KEY);
+  if (stored === undefined || !isPublishLineageRule(stored)) {
+    return DEFAULT_PUBLISH_LINEAGE;
+  }
+  return stored.trim() as PublishLineageRule;
+}
+
+/** Store that rule, and answer with it as stored. */
+export function setPublishLineage(database: DatabaseSync, rule: string): PublishLineageRule {
+  if (!isPublishLineageRule(rule)) {
+    throw new InvalidPublishLineageError(rule);
+  }
+  const stored = rule.trim() as PublishLineageRule;
+  writeSetting(database, PUBLISH_LINEAGE_KEY, stored);
   return stored;
 }
 
