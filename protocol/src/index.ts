@@ -462,6 +462,35 @@ export const LIVE_PAYLOAD_LIMIT = 16 * 1024;
 /** The most any single field describing a client instance may be. */
 export const INSTANCE_FIELD_LIMIT = 256;
 
+/**
+ * The most the rows on one page may weigh, in UTF-8 bytes.
+ *
+ * The per-field limits above bound one row and say nothing about how many of
+ * them an answer holds; a count bounds how many and says nothing about how
+ * large each is. Multiply the two out and one call asks a server to compose
+ * megabytes, serialise them, and then hold them while a slow socket drains. So
+ * every list this protocol pages carries a second ceiling beside its count, and
+ * a page ends at whichever of the two is reached first.
+ *
+ * **A row's weight is the whole of its variable-length content**, not its
+ * largest field: a comment's body and the suggestion beside it, an overlay
+ * record's body and the anchor it is filed under. Counting one field and
+ * leaving the rest to the count cap is how an answer of two thousand small rows
+ * with long anchors comes out several times the ceiling that was meant to bound
+ * it.
+ *
+ * A mebibyte, because what these lists carry is notes and marks rather than
+ * documents: it holds the whole of an ordinary project's conversations in one
+ * page, and it is a dozen times the largest single row anybody may write, so a
+ * reader whose rows really are that large goes on making progress rather than
+ * being cut off.
+ *
+ * **The first row of a page goes on it whatever it weighs.** A page that came
+ * back empty because one row was larger than the whole budget would be a cursor
+ * that never moved, and a reader that could never get past that row.
+ */
+export const PAGE_BYTES_LIMIT = 1024 * 1024;
+
 /* --------------------------------------------------------- client instances */
 
 /**
@@ -1283,5 +1312,6 @@ export const CONTRACT = {
     overlayBody: OVERLAY_BODY_LIMIT,
     livePayload: LIVE_PAYLOAD_LIMIT,
     instanceField: INSTANCE_FIELD_LIMIT,
+    pageBytes: PAGE_BYTES_LIMIT,
   },
 } as const;

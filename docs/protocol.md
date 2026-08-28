@@ -394,8 +394,8 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `projects.create` | `session` | Make a project, or — given a `repositoryId` — register a repository the author already has. Making one asks the content server for the repository and takes the row back if it refuses; registering one asks it for nothing, because the repository already exists under that id. Announces `project-created` on the `projects` topic. |
 | `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Any account may, and forgetting a project that is already gone answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
 | `members.list` | `session` | Every account, as a name beside a piece of work. |
-| `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. |
-| `threads.get` | `comments` | One thread and a page of its comments, oldest first. `limit` defaults to 50 and is capped at 200; `after` carries the reader on from the cursor the last page ended with, and the cursor is absent when the conversation ends there. The thread's own `comments` count is how many there are in all, so a client knows what it holds a page of. |
+| `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. `limit` defaults to 50 and is capped at 200, and a page also ends once the threads on it total a mebibyte — whichever comes first, since a thread carries the comment that opened it and that comment may hold a suggestion, so the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. |
+| `threads.get` | `comments` | One thread and a page of its comments, oldest first. `limit` defaults to 50 and is capped at 200, and a page also ends once the comments on it total a mebibyte; `after` carries the reader on from the cursor the last page ended with, and the cursor is absent when the conversation ends there. The thread's own `comments` count is how many there are in all, so a client knows what it holds a page of. |
 | `threads.create` | `comments` | Open a thread on an anchor, with its first comment. |
 | `threads.reply` | `comments` | Add a comment to a thread. |
 | `threads.resolve` | `comments` | Mark a thread resolved, or open it again. Idempotent: resolving a thread that is already in the asked-for state changes nothing and announces nothing. |
@@ -410,7 +410,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `live.leave` | `live` | Leave one. The last one out closes it. |
 | `live.close` | `live` | Close one outright, which only its opener may do. |
 | `live.say` | `live` | Say something to everybody in one. Kept by nobody. |
-| `overlay.list` | `overlay` | A page of what is attached to one project, newest change first, and what the server last read its head to be. `limit` defaults to 500 and is capped at 2 000, and a page also ends once the bodies on it total a mebibyte — whichever comes first, since a record's body may be 64 KiB and the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. `total` is how many the project holds in all, whatever this page or a narrowing left out. |
+| `overlay.list` | `overlay` | A page of what is attached to one project, newest change first, and what the server last read its head to be. `limit` defaults to 500 and is capped at 2 000, and a page also ends once the records on it total a mebibyte — whichever comes first, since a record's body may be 64 KiB and the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. `total` is how many the project holds in all, whatever this page or a narrowing left out. |
 | `overlay.put` | `overlay` | Attach something, or replace something one attached before. |
 | `overlay.drop` | `overlay` | Take one's own record off again. |
 | `admin.users.list` | `admin` | A page of this server's accounts, newest first. Each carries the groups it is in, whether those make it an operator, whether it is disabled, and when its tokens were last refused — which is more than `members.list` says, and deliberately so. `limit` defaults to 50 and is capped at 200. |
@@ -517,6 +517,7 @@ it by being refused.
 | `overlayBody` | 65 536 | One overlay record. |
 | `livePayload` | 16 384 | One thing said in a live session. |
 | `instanceField` | 256 | Each field describing a client installation. |
+| `pageBytes` | 1 048 576 | The rows on one page of any list this server answers with, weighed as the whole of what a client wrote into each — a comment's body and the suggestion beside it, an overlay record's body and its anchor. A page ends at this or at its count, whichever comes first, and its first row goes on it whatever it weighs. |
 
 Two transport ceilings sit above the per-field limits: a WebSocket message may
 total **128 KiB**, and an HTTP request body — the sign-in route's — at most

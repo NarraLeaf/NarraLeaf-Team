@@ -26,6 +26,7 @@ import {
   INSTANCE_FIELD_LIMIT,
   LIVE_PAYLOAD_LIMIT,
   OVERLAY_BODY_LIMIT,
+  PAGE_BYTES_LIMIT,
   SUGGESTION_LIMIT,
   TEAM_METHODS,
   TEAM_PROTOCOL_VERSION,
@@ -143,6 +144,7 @@ describe("the protocol contract", () => {
     expect(OVERLAY_BODY_LIMIT).toBe(contract.limits["overlayBody"]);
     expect(LIVE_PAYLOAD_LIMIT).toBe(contract.limits["livePayload"]);
     expect(INSTANCE_FIELD_LIMIT).toBe(contract.limits["instanceField"]);
+    expect(PAGE_BYTES_LIMIT).toBe(contract.limits["pageBytes"]);
   });
 });
 

@@ -99,7 +99,7 @@ export interface OverlayQuery {
   readonly revision?: string;
   readonly limit: number;
   /**
-   * The most the bodies on one page may total.
+   * The most the records on one page may weigh.
    *
    * A second ceiling because the first one is not a bound on memory: a body may
    * be as large as the protocol lets one be, so a page of the maximum count
@@ -122,6 +122,27 @@ export interface OverlayPage {
   readonly records: OverlayRecord[];
   /** Where to carry on from, absent when this is the end. */
   readonly cursor?: string;
+}
+
+/**
+ * What one record adds to an answer, in UTF-8 bytes.
+ *
+ * Everything a client wrote, rather than the body alone. The anchor is most of
+ * the difference: three fields of ANCHOR_FIELD_LIMIT each, on however many
+ * records the count ceiling allows, comes to several times the budget the bodies
+ * were being held to - so weighing only bodies bounds the wrong half of the
+ * answer. What is left out is the same handful of bytes on every record there
+ * is - an id, a project id, two timestamps - and the count ceiling bounds that.
+ */
+function weigh(record: OverlayRecord): number {
+  return (
+    Buffer.byteLength(record.body, "utf-8") +
+    Buffer.byteLength(record.anchor.document ?? "", "utf-8") +
+    Buffer.byteLength(record.anchor.element ?? "", "utf-8") +
+    Buffer.byteLength(record.revision, "utf-8") +
+    Buffer.byteLength(record.kind, "utf-8") +
+    Buffer.byteLength(record.instance ?? "", "utf-8")
+  );
 }
 
 /**
@@ -182,11 +203,11 @@ export function listOverlay(database: DatabaseSync, query: OverlayQuery): Overla
     // could come back empty because one record is larger than the whole budget
     // would be a cursor that never moved, and a reader that could never get
     // past that record.
-    if (records.length > 0 && bytes + record.body.length > query.limitBytes) {
+    if (records.length > 0 && bytes + weigh(record) > query.limitBytes) {
       more = true;
       break;
     }
-    bytes += record.body.length;
+    bytes += weigh(record);
     records.push(record);
   }
 
