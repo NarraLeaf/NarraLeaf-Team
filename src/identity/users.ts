@@ -11,6 +11,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import {
   booleanColumn,
+  inTransaction,
   integerColumn,
   optionalIntegerColumn,
   optionalTextColumn,
@@ -501,14 +502,9 @@ export async function createUser(
 ): Promise<UserRecord> {
   const prepared = await prepareUser(hasher, input);
 
-  database.exec("BEGIN IMMEDIATE");
-  try {
+  inTransaction(database, () => {
     insertUser(database, prepared);
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+  });
 
   return requireUser(database, prepared.username);
 }

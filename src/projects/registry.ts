@@ -196,17 +196,23 @@ export function createProject(database: DatabaseSync, input: NewProject): Projec
   }
   const now = Date.now();
 
-  database.exec("BEGIN IMMEDIATE");
+  // One statement, so no transaction: SQLite commits a statement outside one on
+  // its own, and there is nothing here for a second write to be atomic with.
   try {
     database
       .prepare(
         `INSERT INTO projects (id, name, description, created_by, created_at, client_id)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(input.id, input.name, input.description ?? "", input.createdBy, now, input.clientId ?? null);
-    database.exec("COMMIT");
+      .run(
+        input.id,
+        input.name,
+        input.description ?? "",
+        input.createdBy,
+        now,
+        input.clientId ?? null,
+      );
   } catch (error) {
-    database.exec("ROLLBACK");
     // SQLite reports the collision as a constraint failure naming the column.
     // Turning it into a sentence here keeps the caller from having to read
     // SQLite's wording to tell a taken name from a broken database.

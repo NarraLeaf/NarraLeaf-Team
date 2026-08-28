@@ -70,6 +70,31 @@ function store(connection: DatabaseSync, key: string, value: string): void {
     .run(key, value, Date.now());
 }
 
+/**
+ * Make one setting key impossible to write, and answer with what the table
+ * held before that was true.
+ *
+ * A trigger rather than a broken connection, because what is being asked about
+ * is a write that fails **part-way**: the rows before the refused one are
+ * already in the statement queue, so what the table holds afterwards says
+ * whether they were one commit or several. SQLite's `ABORT` undoes the
+ * statement and leaves the transaction open, which is also the case the
+ * rollback in `inTransaction` has to notice.
+ */
+function refuseWritesTo(connection: DatabaseSync, key: string): void {
+  connection.exec(
+    `CREATE TRIGGER refuse_${key.replace(/[^a-z]/g, "_")} BEFORE INSERT ON settings
+     WHEN NEW.key = '${key}'
+     BEGIN SELECT RAISE(ABORT, 'refused by this test'); END`,
+  );
+}
+
+/** How many rows the settings table holds. */
+function storedSettings(connection: DatabaseSync): number {
+  const row = connection.prepare("SELECT COUNT(*) AS count FROM settings").get();
+  return row === undefined ? 0 : Number(row["count"]);
+}
+
 describe("storedTokenLifetimes", () => {
   it("answers with the defaults on a Team server where nobody has stored anything", async () => {
     const connection = await database();
@@ -181,6 +206,46 @@ describe("setTokenLifetimes", () => {
       signInTokenLifetimeSeconds: DEFAULT_IDENTITY.signInTokenLifetimeSeconds,
       repositoryTokenLifetimeSeconds: 120,
     });
+  });
+});
+
+describe("what a half-written setting would cost", () => {
+  it("stores both lifetimes together or neither", async () => {
+    const connection = await database();
+    refuseWritesTo(connection, REPOSITORY_LIFETIME_KEY);
+
+    expect(() =>
+      setTokenLifetimes(connection, {
+        signInTokenLifetimeSeconds: 3600,
+        repositoryTokenLifetimeSeconds: 7200,
+      }),
+    ).toThrow(/refused by this test/);
+
+    // The sign-in lifetime is written first, so a caller writing one row at a
+    // time would leave it behind: an operator who set both and was told the
+    // call failed would be running on one changed lifetime and one unchanged.
+    expect(isSettingStored(connection, SIGN_IN_LIFETIME_KEY)).toBe(false);
+    expect(storedTokenLifetimes(connection)).toEqual({
+      signInTokenLifetimeSeconds: DEFAULT_IDENTITY.signInTokenLifetimeSeconds,
+      repositoryTokenLifetimeSeconds: DEFAULT_IDENTITY.repositoryTokenLifetimeSeconds,
+    });
+  });
+
+  it("writes the whole deployment identity or none of it", async () => {
+    const connection = await database();
+    // The last of the nine rows this writes, so everything else is already in
+    // the transaction by the time it is refused.
+    refuseWritesTo(connection, "identity.hostnames");
+
+    const config = identityConfig({ issuer: "https://team.example", hostnames: ["team.example"] });
+    expect(() => persistIdentity(connection, config)).toThrow(/refused by this test/);
+
+    // Nothing at all, rather than eight of nine. The issuer, the audience and
+    // the auth origin are read together by everything that mints or verifies a
+    // token, so a new one of them stored beside an old other would leave this
+    // server refusing tokens it had just issued.
+    expect(storedSettings(connection)).toBe(0);
+    expect(storedIdentity(connection)).toEqual({});
   });
 });
 

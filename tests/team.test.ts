@@ -1490,6 +1490,70 @@ describe("conversations", () => {
     expect(rest["cursor"]).toBeUndefined();
   });
 
+  it("reads a conversation in the order it was said, not the order of its ids", async () => {
+    const { project, ada, team } = await withProject();
+    const opened = await ada.value(TEAM_METHODS.threadsCreate, {
+      project,
+      anchor: { document: "story/act-one.json" },
+      body: "opening",
+    });
+    const thread = (opened["thread"] as { id: string }).id;
+
+    // Every one of them at the moment the thread was opened, which is what a
+    // run of replies actually looks like now that a write does not wait for a
+    // disk: an insert is well under a tenth of a millisecond, so several land
+    // in one. The ids are random, so a conversation tie-broken on them comes
+    // back shuffled — a reply above the remark it answers.
+    const now = (opened["comment"] as { createdAt: number }).createdAt;
+    const author = requireUser(team.database, "ada").id;
+    const said = ["first", "second", "third", "fourth", "fifth", "sixth"];
+    for (const body of said) {
+      addComment(team.database, { threadId: thread, authorId: author, body, now });
+    }
+
+    const answer = await ada.value(TEAM_METHODS.threadsGet, { thread, limit: 50 });
+    expect((answer["comments"] as { body: string }[]).map((comment) => comment.body)).toEqual([
+      "opening",
+      ...said,
+    ]);
+  });
+
+  it("pages a conversation written in one millisecond without repeating or skipping", async () => {
+    const { project, ada, team } = await withProject();
+    const opened = await ada.value(TEAM_METHODS.threadsCreate, {
+      project,
+      anchor: { document: "story/act-one.json" },
+      body: "opening",
+    });
+    const thread = (opened["thread"] as { id: string }).id;
+    const now = (opened["comment"] as { createdAt: number }).createdAt;
+    const author = requireUser(team.database, "ada").id;
+    const said = ["first", "second", "third", "fourth", "fifth", "sixth"];
+    for (const body of said) {
+      addComment(team.database, { threadId: thread, authorId: author, body, now });
+    }
+
+    // A cursor is only worth anything if it carries on from where the page
+    // stopped, and what it has to name is whatever the order sorts by — a
+    // moment shared by seven comments names none of them.
+    const read: string[] = [];
+    let after: unknown;
+    for (let page = 0; page < 5; page += 1) {
+      const answer = await ada.value(TEAM_METHODS.threadsGet, {
+        thread,
+        limit: 2,
+        ...(after === undefined ? {} : { after }),
+      });
+      read.push(...(answer["comments"] as { body: string }[]).map((comment) => comment.body));
+      after = answer["cursor"];
+      if (after === undefined) {
+        break;
+      }
+    }
+
+    expect(read).toEqual(["opening", ...said]);
+  });
+
   it("answers a thread longer than a page with a page of it", async () => {
     const { project, ada, team } = await withProject();
     const opened = await ada.value(TEAM_METHODS.threadsCreate, {

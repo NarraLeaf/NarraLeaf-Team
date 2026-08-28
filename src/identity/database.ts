@@ -599,11 +599,82 @@ function restrictToOwner(path: string): void {
 }
 
 /**
+ * What every commit on this connection waits for.
+ *
+ * SQLite's default is `FULL`, which fsyncs the write-ahead log on every commit,
+ * and outside a transaction every statement is its own commit. Measured on a
+ * Windows workstation with an NVMe disk, two thousand single-row inserts into a
+ * WAL database opened by {@link openDatabase}:
+ *
+ * ```
+ * synchronous = FULL     3999 ms   (2.000 ms a row)
+ * synchronous = NORMAL     38 ms   (0.019 ms a row)
+ * synchronous = OFF        20 ms   (0.010 ms a row)
+ * ```
+ *
+ * Nearly all of the difference between the first two is the fsync, and it is
+ * the same difference on every real write path here — each of these through the
+ * function this server actually calls, at `FULL` and then at `NORMAL`:
+ *
+ * ```
+ * recordDecision   1.750 ms   0.020 ms
+ * putOverlay       1.766 ms   0.079 ms
+ * addComment       1.824 ms   0.068 ms
+ * createProject    1.785 ms   0.065 ms
+ * ```
+ *
+ * Which is to say the disk is nearly the whole of what writing anything costs.
+ * It would be paid most often on the one path nobody asked for: a decision row
+ * is written on every repository access, so at `FULL` opening a project in
+ * Studio waits on a platter for a line of a log.
+ *
+ * **`NORMAL` cannot corrupt the file.** That is worth saying first because it is
+ * the thing this setting is assumed to risk, and in WAL mode it is a guarantee
+ * rather than a hope: a commit appends frames to the log, the log is replayed
+ * only as far as its last complete and checksummed frame, and `NORMAL` still
+ * syncs the log before a checkpoint copies any of it into the database file. Nor
+ * can a Team server process losing its footing lose a write — a crash, a kill, a
+ * fatal exception — because the pages are already with the operating system by
+ * the time the commit returned. What `NORMAL` gives up is the most recent
+ * commits, and only to an operating-system crash or a power cut.
+ *
+ * So the question is what losing the last second or two of *this* server's
+ * writes costs, and it is answered table by table rather than in general:
+ *
+ *  - **Decisions.** The largest table by far, and the cheapest to lose: a row is
+ *    the record of an access that already happened and was already allowed, the
+ *    log line beside it went out at the time, and the bound in
+ *    src/identity/audit.ts throws the oldest of them away as a matter of course.
+ *  - **Threads, comments and overlay records.** Whoever wrote one still has it
+ *    on screen; the loss is visible to the one person able to write it again.
+ *  - **Presence and rooms.** Not in this file at all — they are memory, and are
+ *    meant to be lost on a restart.
+ *  - **Accounts, settings and token revocations.** The ones worth thinking
+ *    hardest about, and each of them fails loudly rather than quietly. An
+ *    account that was created and lost cannot sign in, and the person holding
+ *    the password says so. A setting that was changed and lost reads back as
+ *    what it was, on the same screen it was set from. A revocation that was lost
+ *    leaves the account working, which is the operator's own next observation —
+ *    unlike the failure people fear here, which is a change that appears to have
+ *    landed and has not.
+ *
+ * And all of that is only reached through an operating-system crash or a power
+ * cut, on a server that has just lost whatever else was in flight.
+ *
+ * `OFF` is not on the table: it stops syncing the log before a checkpoint, so a
+ * power cut part-way through one can leave the database file holding pages the
+ * log never durably recorded. That is the ordering `NORMAL` keeps, and it is the
+ * whole of what stands between this file and corruption.
+ */
+const SYNCHRONOUS = "NORMAL";
+
+/**
  * Open `path`, creating it and its directory if they are not there.
  *
  * Foreign keys are switched on per connection — SQLite's default is off, and a
  * `REFERENCES` clause that nothing enforces is a comment. The write-ahead log
- * is what lets a reader run while the Team server process writes.
+ * is what lets a reader run while the Team server process writes, and it is
+ * also what {@link SYNCHRONOUS} depends on being set.
  *
  * The directory is made 0700 for the same reason the file is made 0600: it is
  * the storage root, and it holds the signing keys as well as the accounts. A
@@ -615,11 +686,83 @@ export async function openDatabase(path: string): Promise<DatabaseSync> {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 
   const database = new DatabaseSync(path);
+  // WAL first: `synchronous` means different things under the two journal
+  // modes, and everything said above SYNCHRONOUS is a property of this one.
   database.exec("PRAGMA journal_mode = WAL");
+  database.exec(`PRAGMA synchronous = ${SYNCHRONOUS}`);
   database.exec("PRAGMA foreign_keys = ON");
   database.exec("PRAGMA busy_timeout = 5000");
   restrictToOwner(path);
   return database;
+}
+
+/**
+ * Raised when a transaction is asked for inside one that is already open.
+ *
+ * See {@link inTransaction} for why this is refused rather than nested.
+ */
+export class NestedTransactionError extends Error {
+  constructor() {
+    super(
+      "a transaction is already open on this connection. Writes that belong " +
+        "together are wrapped once, at the outermost of them.",
+    );
+    this.name = "NestedTransactionError";
+  }
+}
+
+/**
+ * Run `work` with every write it makes committed together, or not at all.
+ *
+ * The rows a method writes to answer one call belong in one commit for two
+ * reasons, and the smaller of them is the cost. Outside a transaction SQLite
+ * commits each statement on its own, so a method writing three rows pays three
+ * commits — three fsyncs at `FULL`, three write barriers at the `NORMAL` this
+ * file opens at. The larger reason is the shape: a call that writes half of what
+ * it meant to leaves the server holding a state no reader has an opinion about,
+ * and it can only be reached by a crash nobody will be there for.
+ *
+ * **`work` is synchronous, and that is the point rather than a limitation.** One
+ * connection serves this whole process, so a transaction held open across an
+ * `await` is a transaction that unrelated work runs inside: a write that had
+ * nothing to do with this call would be committed by this call's commit, or
+ * thrown away by its rollback. A synchronous callback cannot yield to the event
+ * loop, so nothing else can reach the connection in the meantime. Work that has
+ * to await — hashing a password, asking loreserver for a repository — is done
+ * before the transaction opens or after it closes, never inside one.
+ *
+ * **It refuses to nest.** `node:sqlite` has no nested transactions; a second
+ * `BEGIN` is an error from SQLite, and the rollback that error triggers would
+ * throw away the outer transaction's writes as well. Refusing here names what
+ * happened instead of leaving somebody to read SQLite's wording for it — and a
+ * store function that has to be callable from inside a larger write should not
+ * open one at all, on the arrangement `insertUser` and `createUser` already use
+ * in ./users.ts.
+ *
+ * A throw rolls back and is passed on. That matters more than it looks: a
+ * transaction left open by a throw is a connection holding a write lock for the
+ * life of the process, which is a Team server that has stopped answering.
+ */
+export function inTransaction<T>(database: DatabaseSync, work: () => T): T {
+  if (database.isTransaction) {
+    throw new NestedTransactionError();
+  }
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = work();
+    database.exec("COMMIT");
+    return result;
+  } catch (error) {
+    // Asked of the connection rather than assumed: some failures — a constraint
+    // SQLite could only check at the end of a statement — have already rolled
+    // the transaction back, and a `ROLLBACK` with nothing to roll back is
+    // itself an error, which would replace the failure worth reporting with a
+    // meaningless one.
+    if (database.isTransaction) {
+      database.exec("ROLLBACK");
+    }
+    throw error;
+  }
 }
 
 /** The version an open database is at; 0 for one nothing has been applied to. */
@@ -659,19 +802,14 @@ export function migrate(database: DatabaseSync, path = "team.db"): number {
     if (migration.version <= current) {
       continue;
     }
-    database.exec("BEGIN IMMEDIATE");
-    try {
+    inTransaction(database, () => {
       for (const statement of migration.statements) {
         database.exec(statement);
       }
       database
         .prepare("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)")
         .run(migration.version, Date.now());
-      database.exec("COMMIT");
-    } catch (error) {
-      database.exec("ROLLBACK");
-      throw error;
-    }
+    });
     current = migration.version;
   }
 

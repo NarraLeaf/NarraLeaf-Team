@@ -129,50 +129,6 @@ export const DECISION_TRIM_SLACK = 500;
  */
 const writesSinceTrim = new WeakMap<DatabaseSync, number>();
 
-/** What this connection is currently set to sync at; 2 is SQLite's default. */
-function synchronousSetting(database: DatabaseSync): number {
-  const row = database.prepare("PRAGMA synchronous").get();
-  return row === undefined ? 2 : integerColumn(row, "synchronous");
-}
-
-/**
- * Write without waiting for the disk to confirm it.
- *
- * SQLite commits every statement outside a transaction on its own, and at the
- * default `synchronous = FULL` every commit is an fsync. Measured on Windows
- * that is 2.2ms, which would be 2.2ms added to every repository access on the
- * Team — for one row of a log. At `NORMAL`, in the WAL mode ./database.ts opens
- * with, the same insert is 0.02ms.
- *
- * What that trades is documented and small: WAL with `NORMAL` cannot corrupt
- * the file and cannot lose anything to a process that crashes or is killed. A
- * power cut or a kernel panic can lose the last few commits made this way —
- * meaning the last few decisions, and only those. Weighed against the
- * alternative, which is decisions that were never written down at all, and
- * against what it would cost to make every access wait for a platter, that is
- * the right side to be on. The setting is put back straight afterwards, so
- * nothing else Team writes — an account, an invitation, a grant — is affected by
- * it.
- *
- * Restored to whatever it was rather than to `FULL`, so a Team server whose connection
- * was opened at some other setting keeps it. SQLite ignores this pragma inside
- * a transaction; a caller that wrapped this in one would get a fully synced
- * write, which is slow rather than wrong.
- */
-function withoutWaitingForTheDisk(database: DatabaseSync, write: () => void): void {
-  const before = synchronousSetting(database);
-  if (before <= 1) {
-    write();
-    return;
-  }
-  database.exec("PRAGMA synchronous = NORMAL");
-  try {
-    write();
-  } finally {
-    database.exec(`PRAGMA synchronous = ${before}`);
-  }
-}
-
 function toDecision(row: Row): Decision {
   return {
     at: integerColumn(row, "at"),
@@ -221,9 +177,12 @@ export function trimDecisions(database: DatabaseSync): number {
  * Keep one decision, and answer with the row it became.
  *
  * This is called on the path that answers every repository access, so it is one
- * insert and, once in {@link DECISION_TRIM_SLACK} decisions, one delete —
- * neither of which waits for the disk, for the reason set out above
- * {@link withoutWaitingForTheDisk}.
+ * insert and, once in {@link DECISION_TRIM_SLACK} decisions, one delete. Neither
+ * waits for the disk: the connection is opened at `synchronous = NORMAL`, and
+ * this table is the clearest case for it — a decision is a record of an access
+ * that already happened and was already logged, and the bound above throws the
+ * oldest of them away as a matter of course. What that costs and what it does
+ * not is set out above `SYNCHRONOUS` in ./database.ts.
  *
  * The row rather than nothing, because a caller that wants to say a refusal
  * happened has to say *which* refusal, and the key is what tells one from the
@@ -240,27 +199,30 @@ export function recordDecision(
   decision: NewDecision,
 ): RecordedDecision {
   const at = decision.at ?? Date.now();
-  let id = 0;
-  withoutWaitingForTheDisk(database, () => {
-    const written = database
-      .prepare(
-        "INSERT INTO decisions (at, username, resource, allowed, detail) VALUES (?, ?, ?, ?, ?)",
-      )
-      .run(at, decision.username, decision.resource, decision.allowed ? 1 : 0, decision.detail);
-    // node:sqlite hands a row id back as a bigint once it is past what a double
-    // holds exactly. This table is bounded at a couple of thousand rows and the
-    // key is a running count, so that is not a number this can reach; narrowed
-    // rather than propagated, as every other integer read out of this file is.
-    id = Number(written.lastInsertRowid);
+  const written = database
+    .prepare(
+      "INSERT INTO decisions (at, username, resource, allowed, detail) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(at, decision.username, decision.resource, decision.allowed ? 1 : 0, decision.detail);
+  // node:sqlite hands a row id back as a bigint once it is past what a double
+  // holds exactly. This table is bounded at a couple of thousand rows and the
+  // key is a running count, so that is not a number this can reach; narrowed
+  // rather than propagated, as every other integer read out of this file is.
+  const id = Number(written.lastInsertRowid);
 
-    const since = (writesSinceTrim.get(database) ?? DECISION_TRIM_SLACK) + 1;
-    if (since > DECISION_TRIM_SLACK) {
-      trimDecisions(database);
-      writesSinceTrim.set(database, 0);
-      return;
-    }
+  // Left as its own commit rather than joined to the insert. The trim is
+  // housekeeping about the table, not part of the decision — one lost to a power
+  // cut runs on the next write instead — and a transaction opened here would be
+  // one on the path every repository access takes, waiting to be nested inside
+  // whatever a later caller wraps around it.
+  const since = (writesSinceTrim.get(database) ?? DECISION_TRIM_SLACK) + 1;
+  if (since > DECISION_TRIM_SLACK) {
+    trimDecisions(database);
+    writesSinceTrim.set(database, 0);
+  } else {
     writesSinceTrim.set(database, since);
-  });
+  }
+
   return {
     id,
     at,

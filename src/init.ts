@@ -17,7 +17,7 @@
  * of these racing end with one account and one refusal.
  */
 import type { WriteText } from "./cli.js";
-import { openMigratedDatabase } from "./identity/database.js";
+import { inTransaction, openMigratedDatabase } from "./identity/database.js";
 import { identityLayout } from "./identity/layout.js";
 import { defaultPasswordHasher } from "./identity/passwords.js";
 import {
@@ -80,17 +80,12 @@ export async function init(
       groups: [ADMIN_ROLE],
     });
 
-    database.exec("BEGIN IMMEDIATE");
-    try {
+    inTransaction(database, () => {
       if (countUsers(database) > 0) {
         throw new ServerAlreadyInitialisedError(layout.root);
       }
       insertUser(database, prepared);
-      database.exec("COMMIT");
-    } catch (error) {
-      database.exec("ROLLBACK");
-      throw error;
-    }
+    });
 
     const user = requireUser(database, prepared.username);
     stdout(`created ${user.username} (${user.id})\n`);
