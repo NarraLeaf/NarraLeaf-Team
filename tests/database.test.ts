@@ -6,7 +6,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 import {
+  inTransaction,
+  integerColumn,
   migrate,
+  NestedTransactionError,
   openDatabase,
   openMigratedDatabase,
   schemaVersion,
@@ -163,6 +166,162 @@ describe("migrate", () => {
 
     expect(layout.databasePath).toBe(join(layout.root, "team.db"));
     expect(layout.keysDir).toBe(join(layout.root, "keys"));
+  });
+});
+
+/**
+ * What one `PRAGMA` answers on this connection, as a number.
+ *
+ * The column is named separately because SQLite does not always name it after
+ * the pragma: `busy_timeout` answers in a column called `timeout`.
+ */
+function pragma(database: DatabaseSync, name: string, column = name): number {
+  const row = database.prepare(`PRAGMA ${name}`).get();
+  if (row === undefined) {
+    throw new Error(`no answer for PRAGMA ${name}`);
+  }
+  return integerColumn(row, column);
+}
+
+describe("what every connection is opened at", () => {
+  it("keeps the four settings the rest of this server assumes", async () => {
+    const database = await openDatabase(identityLayout(await temporaryRoot()).databasePath);
+    try {
+      // These four are read back rather than taken on trust, because each of
+      // them is a promise something else in this server is written against,
+      // and none of them says so where it is relied on.
+      //
+      // `journal_mode` is what lets a read run beside a write, and it is what
+      // makes `synchronous = NORMAL` safe rather than merely fast.
+      expect(
+        textColumn(
+          database.prepare("PRAGMA journal_mode").get() ?? { journal_mode: "" },
+          "journal_mode",
+        ),
+      ).toBe("wal");
+      // `synchronous = NORMAL`, which SQLite numbers 1. FULL is 2 and is the
+      // default; the note above SYNCHRONOUS in the database module weighs what
+      // this trades, and it is not a setting to change on the way past.
+      expect(pragma(database, "synchronous")).toBe(1);
+      // Off by default in SQLite, so a REFERENCES clause enforces nothing
+      // unless this is on.
+      expect(pragma(database, "foreign_keys")).toBe(1);
+      expect(pragma(database, "busy_timeout", "timeout")).toBe(5000);
+    } finally {
+      database.close();
+    }
+  });
+});
+
+describe("inTransaction", () => {
+  /** A connection with one table to write rows nobody else cares about into. */
+  async function scratch(): Promise<DatabaseSync> {
+    const database = await openDatabase(identityLayout(await temporaryRoot()).databasePath);
+    database.exec("CREATE TABLE marks (id INTEGER NOT NULL PRIMARY KEY) STRICT");
+    return database;
+  }
+
+  function marks(database: DatabaseSync): number {
+    const row = database.prepare("SELECT COUNT(*) AS count FROM marks").get();
+    return row === undefined ? 0 : integerColumn(row, "count");
+  }
+
+  it("commits every write together, and hands back what the work answered", async () => {
+    const database = await scratch();
+    try {
+      const answer = inTransaction(database, () => {
+        database.prepare("INSERT INTO marks (id) VALUES (1)").run();
+        database.prepare("INSERT INTO marks (id) VALUES (2)").run();
+        return "written";
+      });
+
+      expect(answer).toBe("written");
+      expect(marks(database)).toBe(2);
+      expect(database.isTransaction).toBe(false);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("leaves nothing behind when the work throws part-way", async () => {
+    const database = await scratch();
+    try {
+      expect(() =>
+        inTransaction(database, () => {
+          database.prepare("INSERT INTO marks (id) VALUES (1)").run();
+          throw new Error("halfway");
+        }),
+      ).toThrow("halfway");
+
+      // The point of the whole helper: a call that wrote half of what it meant
+      // to is a state no reader here has an opinion about.
+      expect(marks(database)).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("leaves the connection answering after a throw rather than holding the lock", async () => {
+    const database = await scratch();
+    try {
+      expect(() =>
+        inTransaction(database, () => {
+          throw new Error("halfway");
+        }),
+      ).toThrow("halfway");
+
+      // A transaction left open by a throw is a write lock held for the life of
+      // the process, which is a Team server that has stopped answering. So the
+      // next write has to work.
+      expect(database.isTransaction).toBe(false);
+      inTransaction(database, () => {
+        database.prepare("INSERT INTO marks (id) VALUES (7)").run();
+      });
+      expect(marks(database)).toBe(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rolls back a statement SQLite itself refused, and says what refused it", async () => {
+    const database = await scratch();
+    try {
+      expect(() =>
+        inTransaction(database, () => {
+          database.prepare("INSERT INTO marks (id) VALUES (1)").run();
+          // The same key twice: SQLite aborts the statement and leaves the
+          // transaction open, which is the case the rollback has to notice.
+          database.prepare("INSERT INTO marks (id) VALUES (1)").run();
+        }),
+      ).toThrow(/UNIQUE|PRIMARY KEY/i);
+
+      expect(database.isTransaction).toBe(false);
+      expect(marks(database)).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("refuses to nest rather than letting SQLite throw away the outer writes", async () => {
+    const database = await scratch();
+    try {
+      expect(() =>
+        inTransaction(database, () => {
+          database.prepare("INSERT INTO marks (id) VALUES (1)").run();
+          inTransaction(database, () => {
+            database.prepare("INSERT INTO marks (id) VALUES (2)").run();
+          });
+        }),
+      ).toThrow(NestedTransactionError);
+
+      // The outer one is rolled back with it, which is the honest outcome: a
+      // store function that opens a transaction of its own cannot be part of a
+      // larger write, and finding that out quietly would be worse.
+      expect(database.isTransaction).toBe(false);
+      expect(marks(database)).toBe(0);
+    } finally {
+      database.close();
+    }
   });
 });
 

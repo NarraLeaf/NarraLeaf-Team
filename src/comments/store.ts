@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import {
+  inTransaction,
   integerColumn,
   optionalIntegerColumn,
   optionalTextColumn,
@@ -52,8 +53,25 @@ import type {
 const SELECT_THREAD = `SELECT id, project_id, document, element, revision, kind, status,
   created_by, created_at, updated_at, resolved_by, resolved_at FROM threads`;
 
-const SELECT_COMMENT = `SELECT id, thread_id, author_id, body, suggestion, created_at,
-  edited_at, deleted_at FROM comments`;
+const SELECT_COMMENT = `SELECT rowid AS seq, id, thread_id, author_id, body, suggestion,
+  created_at, edited_at, deleted_at FROM comments`;
+
+/**
+ * The order a conversation is read in.
+ *
+ * When each comment was written, and then **the order they were written in** —
+ * not the order of their ids, which are random and would put a reply above the
+ * remark it answers. Two comments share a millisecond more often than it
+ * sounds: a reply is one insert, one insert is well under a tenth of a
+ * millisecond, and a conversation is exactly the collection whose order carries
+ * meaning.
+ *
+ * `rowid` is what says which was written first. It is SQLite's own key for a
+ * row, it counts upward as rows are inserted, and nothing here renumbers it —
+ * only `VACUUM` could, and Team never runs one. A column of this server's own
+ * would be the same counter kept by hand.
+ */
+const COMMENT_ORDER = "ORDER BY created_at, rowid";
 
 /** What a thread is, before its comments are counted. */
 export interface ThreadRecord {
@@ -173,8 +191,7 @@ export function createThread(database: DatabaseSync, input: NewThread): ThreadCr
 
   const threadId = randomUUID();
   const commentId = randomUUID();
-  database.exec("BEGIN IMMEDIATE");
-  try {
+  inTransaction(database, () => {
     database
       .prepare(
         `INSERT INTO threads (id, project_id, document, element, revision, kind, status,
@@ -207,11 +224,7 @@ export function createThread(database: DatabaseSync, input: NewThread): ThreadCr
         input.now,
         openingKey,
       );
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+  });
 
   return {
     thread: requireThread(database, threadId),
@@ -248,8 +261,7 @@ export function addComment(
   }
 
   const id = randomUUID();
-  database.exec("BEGIN IMMEDIATE");
-  try {
+  inTransaction(database, () => {
     database
       .prepare(
         `INSERT INTO comments (id, thread_id, author_id, body, suggestion, created_at, client_id)
@@ -265,11 +277,7 @@ export function addComment(
         commentKey,
       );
     touch(database, input.threadId, input.now);
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+  });
   return { comment: requireComment(database, id), repeated: false };
 }
 
@@ -305,17 +313,12 @@ export function editComment(
   now: number,
 ): CommentRecord {
   const comment = requireComment(database, commentId);
-  database.exec("BEGIN IMMEDIATE");
-  try {
+  inTransaction(database, () => {
     database
       .prepare("UPDATE comments SET body = ?, suggestion = ?, edited_at = ? WHERE id = ?")
       .run(body, suggestion ?? null, now, commentId);
     touch(database, comment.threadId, now);
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+  });
   return requireComment(database, commentId);
 }
 
@@ -335,17 +338,12 @@ export function deleteComment(
   if (comment.deletedAt !== undefined) {
     return comment;
   }
-  database.exec("BEGIN IMMEDIATE");
-  try {
+  inTransaction(database, () => {
     database
       .prepare("UPDATE comments SET body = '', suggestion = NULL, deleted_at = ? WHERE id = ?")
       .run(now, commentId);
     touch(database, comment.threadId, now);
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+  });
   return requireComment(database, commentId);
 }
 
@@ -430,12 +428,15 @@ export interface CommentQuery {
    */
   readonly limitBytes: number;
   /**
-   * Where the previous page ended, as `<createdAt>:<id>`.
+   * Where the previous page ended, as `<createdAt>:<row key>`.
    *
    * Forwards, where a thread cursor goes back, because a conversation is read
    * in the order it was said. Two parts for the reason a thread cursor has two:
    * a reply can be written in the same millisecond as the one before it, and a
-   * cursor that was only a time would either repeat one or skip one.
+   * cursor that was only a time would either repeat one or skip one. The second
+   * part is the row key rather than the comment's id, because it has to be the
+   * same thing {@link COMMENT_ORDER} sorts on or a page would skip what it
+   * meant to carry on from.
    */
   readonly after?: string;
 }
@@ -463,17 +464,24 @@ export function threadComments(
   const conditions: string[] = ["thread_id = ?"];
   const values: (string | number)[] = [threadId];
   const cursor = parseCursor(query.after);
-  if (cursor !== undefined) {
-    conditions.push("(created_at > ? OR (created_at = ? AND id > ?))");
-    values.push(cursor.at, cursor.at, cursor.id);
+  // The key is read as a number because that is what it is compared against. A
+  // cursor whose second half is not one is treated as no cursor, which is what
+  // parseCursor already does with anything it cannot read.
+  const from = cursor === undefined ? undefined : Number(cursor.id);
+  if (cursor !== undefined && from !== undefined && Number.isInteger(from)) {
+    conditions.push("(created_at > ? OR (created_at = ? AND rowid > ?))");
+    values.push(cursor.at, cursor.at, from);
   }
   values.push(query.limit + 1);
 
   const comments: CommentRecord[] = [];
+  // Carried beside the comments rather than on them: it is the key of a row in
+  // this file's table, which is nothing a caller has any use for.
+  let lastSeq: number | undefined;
   let bytes = 0;
   let more = false;
   for (const row of database
-    .prepare(`${SELECT_COMMENT} WHERE ${conditions.join(" AND ")} ORDER BY created_at, id LIMIT ?`)
+    .prepare(`${SELECT_COMMENT} WHERE ${conditions.join(" AND ")} ${COMMENT_ORDER} LIMIT ?`)
     .iterate(...values)) {
     if (comments.length === query.limit) {
       more = true;
@@ -489,18 +497,21 @@ export function threadComments(
     }
     bytes += weighComment(comment);
     comments.push(comment);
+    lastSeq = integerColumn(row as Row, "seq");
   }
 
   const last = comments.at(-1);
   return {
     comments,
-    ...(more && last !== undefined ? { cursor: `${last.createdAt}:${last.id}` } : {}),
+    ...(more && last !== undefined && lastSeq !== undefined
+      ? { cursor: `${last.createdAt}:${lastSeq}` }
+      : {}),
   };
 }
 
 function openingComment(database: DatabaseSync, threadId: string): CommentRecord | undefined {
   const row = database
-    .prepare(`${SELECT_COMMENT} WHERE thread_id = ? ORDER BY created_at, id LIMIT 1`)
+    .prepare(`${SELECT_COMMENT} WHERE thread_id = ? ${COMMENT_ORDER} LIMIT 1`)
     .get(threadId);
   return row === undefined ? undefined : toComment(row);
 }
@@ -628,11 +639,14 @@ export function listThreads(database: DatabaseSync, query: ThreadQuery): ThreadP
 }
 
 /**
- * A cursor as both lists here write one: a moment, a colon, and a row's id.
+ * A cursor as both lists here write one: a moment, a colon, and what the list
+ * sorts by after the moment — a thread's id, a comment's row key.
  *
  * One reader for both, because a client is handed cursors from two methods of
  * the same family and passes back whatever it was given; two spellings would be
- * two chances for one of them to stop round-tripping.
+ * two chances for one of them to stop round-tripping. The second half is left as
+ * text here and read by whichever list wrote it, since only that list knows what
+ * it put there.
  */
 function parseCursor(
   value: string | undefined,

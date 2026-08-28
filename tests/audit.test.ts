@@ -102,9 +102,8 @@ describe("recordDecision", () => {
     expect(listDecisions(connection).map((decision) => decision.username)).toEqual(["bob", "ada"]);
   });
 
-  it("leaves the connection as durable as it found it", async () => {
+  it("writes at the durability the file was opened at, and leaves it there", async () => {
     const connection = await database();
-    const before = connection.prepare("PRAGMA synchronous").get();
 
     recordDecision(connection, {
       username: "ada",
@@ -113,11 +112,12 @@ describe("recordDecision", () => {
       detail: "owner",
     });
 
-    // A decision is written without waiting for the disk, and that is the whole
-    // of what it applies to. A setting left relaxed would make every account,
-    // invitation and grant Team writes afterwards less durable than the file was
-    // opened to be, and nothing would say so.
-    expect(connection.prepare("PRAGMA synchronous").get()).toEqual(before);
+    // How durable a decision is, is decided once where the file is opened —
+    // `synchronous = NORMAL`, which SQLite numbers 1 — and this path neither
+    // relaxes it for its own sake nor leaves it changed for the account,
+    // project or setting written next. A write path that reached for the pragma
+    // itself would be doing both, quietly.
+    expect(connection.prepare("PRAGMA synchronous").get()).toEqual({ synchronous: 1 });
   });
 
   it("takes the moment from the clock when nobody names one", async () => {
