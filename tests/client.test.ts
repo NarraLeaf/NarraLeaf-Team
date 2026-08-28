@@ -26,7 +26,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { run } from "../src/cli.js";
 import {
-  configDirectory,
   readCredentials,
   rememberServer,
   type ServerCredential,

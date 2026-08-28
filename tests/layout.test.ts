@@ -59,6 +59,19 @@ describe("instanceLayout", () => {
     );
   });
 
+  it("asks for the pinned version when nobody names one", async () => {
+    // The import that named this constant was here already and nothing used it,
+    // which is how the gap was found. It is worth closing: the default and the
+    // pin drifting apart would put an installed loreserver in a directory
+    // nothing looks in, and the symptom would be a download on every start
+    // rather than an error anybody could read.
+    const root = await temporaryRoot();
+
+    expect(instanceLayout(root, "loreserver").binDir).toBe(
+      instanceLayout(root, "loreserver", LORESERVER_VERSION).binDir,
+    );
+  });
+
   it("makes a relative root absolute once, here", () => {
     // loreserver is started with a different working directory in mind than
     // the shell that typed the path; a relative path resolved twice would

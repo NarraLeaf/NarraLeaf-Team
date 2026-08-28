@@ -177,7 +177,7 @@ describe("setTokenLifetimes", () => {
     const connection = await database();
 
     expect(() => setTokenLifetimes(connection, { repositoryTokenLifetimeSeconds: 1 })).toThrow(
-      new RegExp(REPOSITORY_LIFETIME_KEY.replace(".", "\.")),
+      new RegExp(REPOSITORY_LIFETIME_KEY.replaceAll(".", String.raw`\.`)),
     );
   });
 

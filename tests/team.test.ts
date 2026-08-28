@@ -239,6 +239,23 @@ interface Waiting {
 }
 
 /** Everything a test does with a session, over node's own WebSocket. */
+/**
+ * The `kind` of the one event a client has been told about.
+ *
+ * Written out rather than reached for inline. The inline form was
+ * `(client.events[0]?.payload as { kind: string }).kind`, which reads as careful
+ * and is not: where there is no event the optional chain answers `undefined`
+ * and the `.kind` after it throws, so an assertion about which event arrived
+ * fails as a TypeError about something else entirely.
+ */
+function firstEventKind(client: Client): string {
+  const [first] = client.events;
+  if (first === undefined) {
+    throw new Error("the client was told nothing, and something was expected");
+  }
+  return (first.payload as { kind: string }).kind;
+}
+
 class Client {
   readonly events: { topic: string; seq: number; payload: unknown }[] = [];
   readonly byes: { code: string; message: string }[] = [];
@@ -346,7 +363,6 @@ function open(url: string, token: string): Promise<Client> {
     } as unknown as string[]);
     const client = new Client(ws);
     ws.onerror = () => reject(new Error("the socket would not open"));
-    ws.onmessage = ws.onmessage;
     const started = Date.now();
     const settle = (): void => {
       if (client.hello !== undefined) {
@@ -1430,7 +1446,7 @@ describe("conversations", () => {
     await ada.value(TEAM_METHODS.threadsResolve, { thread });
     await bob.until(() => bob.events.length > 0);
     expect(bob.events).toHaveLength(1);
-    expect((bob.events[0]?.payload as { kind: string }).kind).toBe("thread-updated");
+    expect(firstEventKind(bob)).toBe("thread-updated");
 
     // Resolving an already-resolved thread moves nothing, so it announces
     // nothing: a client that redraws on every event must not be made to redraw
@@ -1985,7 +2001,7 @@ describe("which installation is on the other end", () => {
 
     await ada.until(() => ada.events.length > 0);
     expect(ada.events[0]?.topic).toBe(projectClientsTopic(project));
-    expect((ada.events[0]?.payload as { kind: string }).kind).toBe("client-here");
+    expect(firstEventKind(ada)).toBe("client-here");
   });
 
   it("moves a machine that opened a different project, saying so on both", async () => {
@@ -2491,7 +2507,7 @@ describe("a live session", () => {
     await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
 
     await bob.until(() => bob.events.length > 0);
-    expect((bob.events[0]?.payload as { kind: string }).kind).toBe("live-opened");
+    expect(firstEventKind(bob)).toBe("live-opened");
   });
 
   it("gains a second machine when it joins", async () => {
@@ -2776,7 +2792,7 @@ describe("what is attached to a project without being in it", () => {
     // by the time another round trip has been and gone.
     await ada.value(TEAM_METHODS.overlayList, { project });
     expect(bob.events).toHaveLength(1);
-    expect((bob.events[0]?.payload as { kind: string }).kind).toBe("overlay-put");
+    expect(firstEventKind(bob)).toBe("overlay-put");
   });
 
   it("moves a record forward onto a new revision, which is what following the head is", async () => {
@@ -3985,7 +4001,7 @@ describe("changing an account over the session", () => {
 
     expect(enabled["disabled"]).toBe(false);
     expect(watcher.events).toHaveLength(1);
-    expect((watcher.events[0]?.payload as { kind: string }).kind).toBe("user-enabled");
+    expect(firstEventKind(watcher)).toBe("user-enabled");
   });
 
   it("grants administration, and says nothing granting it to an operator", async () => {
@@ -4001,7 +4017,7 @@ describe("changing an account over the session", () => {
     expect(granted["operator"]).toBe(true);
     expect(granted["groups"]).toContain(ADMIN_ROLE);
     expect(watcher.events).toHaveLength(1);
-    expect((watcher.events[0]?.payload as { kind: string }).kind).toBe("user-granted-admin");
+    expect(firstEventKind(watcher)).toBe("user-granted-admin");
   });
 
   it("revokes it again", async () => {
@@ -4014,7 +4030,7 @@ describe("changing an account over the session", () => {
 
     expect(revoked["operator"]).toBe(false);
     await watcher.until(() => watcher.events.length > 0);
-    expect((watcher.events[0]?.payload as { kind: string }).kind).toBe("user-revoked-admin");
+    expect(firstEventKind(watcher)).toBe("user-revoked-admin");
   });
 
   it("refuses every token an account holds, and answers with when that was", async () => {
@@ -4028,7 +4044,7 @@ describe("changing an account over the session", () => {
     expect(revoked["tokensInvalidatedAt"]).toBeTypeOf("number");
     expect(requireUser(team.database, "bob").tokenEpoch).toBe(before + 1);
     await watcher.until(() => watcher.events.length > 0);
-    expect((watcher.events[0]?.payload as { kind: string }).kind).toBe("user-tokens-revoked");
+    expect(firstEventKind(watcher)).toBe("user-tokens-revoked");
   });
 
   it("does not refuse them a second time for one client id", async () => {

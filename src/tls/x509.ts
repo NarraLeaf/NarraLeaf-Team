@@ -221,7 +221,11 @@ export function encodeIpAddress(address: string): Buffer {
   const groups =
     tail === undefined
       ? left
-      : [...left, ...new Array<number>(8 - left.length - right.length).fill(0), ...right];
+      : [
+          ...left,
+          ...Array.from<number>({ length: 8 - left.length - right.length }).fill(0),
+          ...right,
+        ];
   if (groups.length !== 8 || groups.some((group) => group < 0)) {
     throw new UnencodableValueError(`"${address}" is not eight groups of an IPv6 address`);
   }

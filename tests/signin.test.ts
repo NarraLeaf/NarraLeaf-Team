@@ -11,13 +11,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { SignInLimiter } from "../src/identity/signin.js";
 
-/** Let every microtask and every already-resolved promise run out. */
-function settle(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 /** Refuse `times` in a row, so that a pair has spent what it is allowed. */
 function refuseSeveral(limiter: SignInLimiter, times: number): void {
   for (let attempt = 0; attempt < times; attempt += 1) {

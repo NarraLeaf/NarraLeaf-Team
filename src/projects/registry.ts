@@ -18,7 +18,6 @@ import type { DatabaseSync } from "node:sqlite";
 
 import {
   integerColumn,
-  optionalTextColumn,
   textColumn,
   type Row,
 } from "../identity/database.js";

@@ -23,12 +23,14 @@
     "build": "node scripts/build.mjs",
     "dev": "node scripts/build.mjs --watch",
     "contract": "node scripts/gen-contract.mjs",
+    "lint": "oxlint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
     "esbuild": "^0.25.4",
+    "oxlint": "1.80.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.3"
   },

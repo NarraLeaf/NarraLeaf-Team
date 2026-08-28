@@ -1,0 +1,55 @@
+{
+  // What a linter is for here, and what it is not.
+  //
+  // The checker already refuses a great deal: `strict`, `noUncheckedIndexedAccess`,
+  // `exactOptionalPropertyTypes` and the rest of tsconfig.json between them catch most of
+  // what a rule about types could. What this adds is the class of mistake that type-checks
+  // perfectly and still means nothing - a self-assignment, a regular expression whose
+  // escape was eaten by the string literal it was written in, an import nothing uses.
+  // Both of those were in this repository, past a thousand passing tests, until this file
+  // existed.
+  //
+  // So: correctness, and almost nothing else. The categories below it - style, pedantic -
+  // are a linter's opinion about how code should read, and this repository already has
+  // one, written down in docs/contributing.md and visible on every page. Turning them on
+  // reported twelve thousand disagreements, all of them about taste and none of them
+  // about a defect. A rule nobody agrees with is a rule somebody silences, and a silenced
+  // linter catches nothing.
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    // Three that are not in `correctness` and cost nothing: no occurrence of any of them
+    // exists today, so each is a wall rather than a chore.
+    "eqeqeq": "error",
+    "no-constant-binary-expression": "error",
+    "no-return-assign": "error",
+
+    // Deliberately off, with the reason, so that nobody turns them on twice.
+    //
+    // `no-await-in-loop` is the one this repository most obviously breaks and most
+    // deliberately: the project reader takes one repository at a time on purpose, because
+    // two clones at once compete for the same bandwidth to say the same thing later.
+    // See src/projects/refresh.ts.
+    "no-await-in-loop": "off",
+    // `no-unmodified-loop-condition` cannot see a flag set by another task on the same
+    // event loop, which is exactly how the reader loops in scripts/bench.ts are stopped.
+    // It reported that one, and it was wrong.
+    "no-unmodified-loop-condition": "off",
+    // `require-await` would have us take `async` off functions whose signature is a
+    // promise because today's body happens not to await anything. The signature is the
+    // contract; what the body does this week is not.
+    "require-await": "off",
+    // `no-shadow` finds eighteen, every one of them a `database` or a `harness` inside a
+    // test that has a `database` or a `harness` outside it. Renaming those would make the
+    // tests read worse to prevent a confusion nobody has had.
+    "no-shadow": "off",
+    // `no-useless-spread` is wrong here every time it fires, and it is worth saying why
+    // once rather than arguing with it six times. `for (const x of [...set])` is not a
+    // wasteful copy in this repository; it is a snapshot, because the body of every one of
+    // those loops deletes from the thing being walked, and a collection written to while
+    // it is walked is how an entry gets missed. The rule cannot see the delete.
+    "no-useless-spread": "off"
+  },
+  "ignorePatterns": ["dist", "node_modules"]
+}

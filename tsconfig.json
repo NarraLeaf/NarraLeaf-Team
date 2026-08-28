@@ -20,6 +20,13 @@
 
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    // An unused local is not a style question. Every one of the four found when
+    // these were switched on was a leftover: three imports of things that had
+    // moved, and one import of a constant naming the pinned loreserver version
+    // that nothing compared against - which was a missing test rather than a
+    // spare line, and is now tests/layout.test.ts's.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "exactOptionalPropertyTypes": true,
