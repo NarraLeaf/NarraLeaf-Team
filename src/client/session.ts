@@ -22,6 +22,7 @@
  * than a change of shape.
  */
 import {
+  ANSWER_BYTES_LIMIT,
   TEAM_PROTOCOL_VERSION,
   TEAM_SOCKET_PATH,
   type TeamCapability,
@@ -38,10 +39,19 @@ import { openWebSocket, type ClientWebSocket } from "./websocket.js";
  *
  * Larger than the bound the server puts on what it will read, and deliberately:
  * that one is about how much memory one client may make a shared server hold,
- * and this one is about how much a server may make one command line hold. A list
- * of every project on a large deployment is bigger than anything a client sends.
+ * and this one is about how much a server may make one command line hold. A page
+ * of a busy project's conversations is bigger than anything a client sends.
+ *
+ * **It has to be at least the largest answer a server composes, or this program
+ * refuses what its own server built.** So it is twice ANSWER_BYTES_LIMIT rather
+ * than a figure of its own — one whole answer, and as much again for the two
+ * answers that figure does not bound, a history page carrying commit messages
+ * out of a repository and a key list that grows with rotations. Moving what a
+ * page may weigh moves this with it; a test says so, because a client's ceiling
+ * falling under a server's answer is not a failure either side reports until
+ * somebody's list is long enough.
  */
-const MAXIMUM_MESSAGE_BYTES = 8 * 1024 * 1024;
+export const MAXIMUM_MESSAGE_BYTES = 2 * ANSWER_BYTES_LIMIT;
 
 /** How long the opening frame has to arrive before the server is called silent. */
 const HELLO_TIMEOUT_MS = 30_000;

@@ -51,6 +51,7 @@ import {
 import {
   ANCHOR_FIELD_LIMIT,
   COMMENT_BODY_LIMIT,
+  PAGE_BYTES_LIMIT,
   SUGGESTION_LIMIT,
   TEAM_METHODS,
   projectThreadsTopic,
@@ -76,6 +77,13 @@ export const DEFAULT_PAGE = 50;
  * One figure for both lists here. A page of threads and a page of one thread's
  * comments are read by the same panel and cost the same order of work to build,
  * and a second number would only be a second thing for a client to learn.
+ *
+ * **It is a count, and a count is not a bound on an answer.** Two hundred
+ * threads each carrying an opening comment of COMMENT_BODY_LIMIT with a
+ * suggestion of SUGGESTION_LIMIT beside it is an answer of well over ten
+ * megabytes to compose, serialise and hold while a slow socket drains, which was
+ * the largest single answer any method here could produce. So both lists carry
+ * PAGE_BYTES_LIMIT beside this, and a page ends at whichever is reached first.
  */
 export const MAXIMUM_PAGE = 200;
 
@@ -177,14 +185,18 @@ export function commentMethods(): TeamMethod[] {
             ? {}
             : { status: oneOf(read, "status", THREAD_STATUSES) }),
           limit: boundedCount(read, "limit", DEFAULT_PAGE, MAXIMUM_PAGE),
+          limitBytes: PAGE_BYTES_LIMIT,
           ...(before === undefined ? {} : { before }),
         });
         // One resolver for the whole page, so a list naming the same three people
         // fifty times reads three rows rather than fifty.
         const nameOf = nameResolver(context.options.database);
         return {
-          threads: page.threads.map((thread) =>
-            threadView(context.options.database, thread, nameOf),
+          // Each row's opening comment comes from the page, which read one in
+          // order to weigh the row. Looking it up again here would double the
+          // reads a list costs to answer the same thing twice.
+          threads: page.threads.map((row) =>
+            threadView(context.options.database, row.thread, nameOf, row.opening),
           ),
           ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
         };
@@ -213,8 +225,14 @@ export function commentMethods(): TeamMethod[] {
         // the newest replies, which is the part somebody came for. So a page
         // and a cursor. `thread.comments` still says how many there are in all,
         // so a reader knows what it is a page of.
+        //
+        // The count is not the whole of the bound, for the reason the list above
+        // carries a byte ceiling too: a page of the maximum count, each comment
+        // a full body with a full suggestion beside it, is megabytes. So the
+        // same PAGE_BYTES_LIMIT ends this page, whichever comes first.
         const page = threadComments(context.options.database, threadId, {
           limit: boundedCount(read, "limit", DEFAULT_PAGE, MAXIMUM_PAGE),
+          limitBytes: PAGE_BYTES_LIMIT,
           ...(after === undefined ? {} : { after }),
         });
         const nameOf = nameResolver(context.options.database);

@@ -385,8 +385,50 @@ function requireComment(database: DatabaseSync, id: string): CommentRecord {
   return comment;
 }
 
+/**
+ * What one comment adds to an answer, in UTF-8 bytes.
+ *
+ * The two fields a client wrote, and nothing else. What is left over - an id, a
+ * thread id, three timestamps - is the same handful of bytes on every comment
+ * there is, and the count ceiling beside the byte one is what bounds that.
+ */
+function weighComment(comment: CommentRecord): number {
+  return (
+    Buffer.byteLength(comment.body, "utf-8") +
+    (comment.suggestion === undefined ? 0 : Buffer.byteLength(comment.suggestion, "utf-8"))
+  );
+}
+
+/**
+ * What one thread adds to an answer, in UTF-8 bytes.
+ *
+ * A thread on a list is not the row: it carries the comment that opened it, and
+ * that comment is nearly all of its weight - a body and, on a suggestion, up to
+ * SUGGESTION_LIMIT beside it. The anchor is counted too, because three fields of
+ * ANCHOR_FIELD_LIMIT each on however many rows a count ceiling allows is larger
+ * than the bodies it was sitting beside.
+ */
+function weighThread(thread: ThreadRecord, opening: CommentRecord | undefined): number {
+  const anchor = thread.anchor;
+  return (
+    Buffer.byteLength(anchor.document ?? "", "utf-8") +
+    Buffer.byteLength(anchor.element ?? "", "utf-8") +
+    Buffer.byteLength(anchor.revision ?? "", "utf-8") +
+    (opening === undefined ? 0 : weighComment(opening))
+  );
+}
+
 export interface CommentQuery {
   readonly limit: number;
+  /**
+   * The most the comments on one page may weigh.
+   *
+   * A second ceiling because the first one is not a bound on memory: a body may
+   * be COMMENT_BODY_LIMIT and a suggestion beside it SUGGESTION_LIMIT, so a page
+   * of the maximum count could be a hundred times the size of a page of
+   * ordinary replies. Whichever of the two is reached first ends the page.
+   */
+  readonly limitBytes: number;
   /**
    * Where the previous page ended, as `<createdAt>:<id>`.
    *
@@ -407,8 +449,11 @@ export interface CommentPage {
 /**
  * A page of one thread's comments, oldest first, withdrawn ones in their place.
  *
- * One more row than asked for is read, which is how "is there more" is answered
- * without counting the table.
+ * Read a row at a time rather than all at once, which is what makes the byte
+ * ceiling worth having: a query that handed back every matching row and left the
+ * ceiling to be applied afterwards would have held them all first, which is the
+ * thing being bounded. One row past the page is read either way, which is how
+ * "is there more" is answered without counting the table.
  */
 export function threadComments(
   database: DatabaseSync,
@@ -422,18 +467,34 @@ export function threadComments(
     conditions.push("(created_at > ? OR (created_at = ? AND id > ?))");
     values.push(cursor.at, cursor.at, cursor.id);
   }
+  values.push(query.limit + 1);
 
-  const rows = database
+  const comments: CommentRecord[] = [];
+  let bytes = 0;
+  let more = false;
+  for (const row of database
     .prepare(`${SELECT_COMMENT} WHERE ${conditions.join(" AND ")} ORDER BY created_at, id LIMIT ?`)
-    .all(...values, query.limit + 1);
+    .iterate(...values)) {
+    if (comments.length === query.limit) {
+      more = true;
+      break;
+    }
+    const comment = toComment(row as Row);
+    // The first comment of a page goes on it whatever it weighs, or a
+    // conversation holding one reply larger than the budget would be a cursor
+    // that never moved and a reader who could never read past it.
+    if (comments.length > 0 && bytes + weighComment(comment) > query.limitBytes) {
+      more = true;
+      break;
+    }
+    bytes += weighComment(comment);
+    comments.push(comment);
+  }
 
-  const comments = rows.slice(0, query.limit).map((row) => toComment(row));
   const last = comments.at(-1);
   return {
     comments,
-    ...(rows.length > query.limit && last !== undefined
-      ? { cursor: `${last.createdAt}:${last.id}` }
-      : {}),
+    ...(more && last !== undefined ? { cursor: `${last.createdAt}:${last.id}` } : {}),
   };
 }
 
@@ -452,6 +513,17 @@ export interface ThreadQuery {
   readonly status?: TeamThreadStatus;
   readonly limit: number;
   /**
+   * The most the threads on one page may weigh.
+   *
+   * The count above bounds how many threads a page holds and says nothing about
+   * how large each is. A thread on a list carries the comment that opened it,
+   * and that comment may be COMMENT_BODY_LIMIT with SUGGESTION_LIMIT beside it,
+   * so the count alone asks this server to compose an answer of well over ten
+   * megabytes - the largest single answer any method here could produce.
+   * Whichever of the two ceilings is reached first ends the page.
+   */
+  readonly limitBytes: number;
+  /**
    * Where the previous page ended, as `<updatedAt>:<id>`.
    *
    * The id is in it because two threads can be touched in the same millisecond,
@@ -461,8 +533,26 @@ export interface ThreadQuery {
   readonly before?: string;
 }
 
+/**
+ * One thread on a page, with the comment that opened it already read.
+ *
+ * The opening comment is carried rather than looked up again because weighing a
+ * thread means reading it: the byte ceiling is mostly a ceiling on opening
+ * comments, so the page cannot decide where to stop without them. Handing it on
+ * keeps the whole list to one read of each rather than a second one when the
+ * answer is composed.
+ */
+export interface ThreadRow {
+  readonly thread: ThreadRecord;
+  /**
+   * Absent only for a thread whose comments are all gone, which the writes here
+   * never produce - a thread and its opening comment are written together.
+   */
+  readonly opening?: CommentRecord;
+}
+
 export interface ThreadPage {
-  readonly threads: ThreadRecord[];
+  readonly threads: ThreadRow[];
   /** Where to carry on from, absent when this is the end. */
   readonly cursor?: string;
 }
@@ -471,8 +561,14 @@ export interface ThreadPage {
  * A page of a project's threads, by what changed last.
  *
  * Newest activity first, because a panel showing conversations is showing what
- * is live rather than what is oldest. One more row than asked for is read, which
- * is how "is there more" is answered without counting the table.
+ * is live rather than what is oldest.
+ *
+ * Read a row at a time rather than all at once, which is what makes the byte
+ * ceiling worth having: a query that handed back every matching row and left the
+ * ceiling to be applied afterwards would have held them all first - and read an
+ * opening comment for each - which is the thing being bounded. One row past the
+ * page is read either way, which is how "is there more" is answered without
+ * counting the table.
  */
 export function listThreads(database: DatabaseSync, query: ThreadQuery): ThreadPage {
   const conditions: string[] = ["project_id = ?"];
@@ -495,21 +591,39 @@ export function listThreads(database: DatabaseSync, query: ThreadQuery): ThreadP
     conditions.push("(updated_at < ? OR (updated_at = ? AND id < ?))");
     values.push(cursor.at, cursor.at, cursor.id);
   }
+  values.push(query.limit + 1);
 
-  const rows = database
+  const threads: ThreadRow[] = [];
+  let bytes = 0;
+  let more = false;
+  for (const row of database
     .prepare(
       `${SELECT_THREAD} WHERE ${conditions.join(" AND ")}
        ORDER BY updated_at DESC, id DESC LIMIT ?`,
     )
-    .all(...values, query.limit + 1);
+    .iterate(...values)) {
+    if (threads.length === query.limit) {
+      more = true;
+      break;
+    }
+    const thread = toThread(row as Row);
+    const opening = openingComment(database, thread.id);
+    // The first thread of a page goes on it whatever it weighs. A page that
+    // could come back empty because one thread's suggestion was larger than the
+    // whole budget would be a cursor that never moved, and a project whose
+    // conversations nobody could read past it.
+    if (threads.length > 0 && bytes + weighThread(thread, opening) > query.limitBytes) {
+      more = true;
+      break;
+    }
+    bytes += weighThread(thread, opening);
+    threads.push({ thread, ...(opening === undefined ? {} : { opening }) });
+  }
 
-  const threads = rows.slice(0, query.limit).map((row) => toThread(row));
-  const last = threads.at(-1);
+  const last = threads.at(-1)?.thread;
   return {
     threads,
-    ...(rows.length > query.limit && last !== undefined
-      ? { cursor: `${last.updatedAt}:${last.id}` }
-      : {}),
+    ...(more && last !== undefined ? { cursor: `${last.updatedAt}:${last.id}` } : {}),
   };
 }
 
@@ -592,13 +706,21 @@ export function commentView(
   };
 }
 
-/** One thread as the protocol carries it, with its count and its opening comment. */
+/**
+ * One thread as the protocol carries it, with its count and its opening comment.
+ *
+ * The opening comment is taken as an argument where the caller has it - a page
+ * of threads has read one for every row in order to weigh it - and looked up
+ * where it does not. Passing it on rather than reading it twice is what keeps a
+ * list of two hundred threads to two hundred reads.
+ */
 export function threadView(
   database: DatabaseSync,
   record: ThreadRecord,
   nameOf: (userId: string) => string | undefined = nameResolver(database),
+  known?: CommentRecord,
 ): TeamThread {
-  const opening = openingComment(database, record.id);
+  const opening = known ?? openingComment(database, record.id);
   const createdBy = nameOf(record.createdBy);
   const resolvedBy = record.resolvedBy === undefined ? undefined : nameOf(record.resolvedBy);
   return {

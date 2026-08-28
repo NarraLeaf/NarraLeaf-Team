@@ -462,6 +462,68 @@ export const LIVE_PAYLOAD_LIMIT = 16 * 1024;
 /** The most any single field describing a client instance may be. */
 export const INSTANCE_FIELD_LIMIT = 256;
 
+/**
+ * The most the rows on one page may weigh, in UTF-8 bytes.
+ *
+ * The per-field limits above bound one row and say nothing about how many of
+ * them an answer holds; a count bounds how many and says nothing about how
+ * large each is. Multiply the two out and one call asks a server to compose
+ * megabytes, serialise them, and then hold them while a slow socket drains. So
+ * every list this protocol pages carries a second ceiling beside its count, and
+ * a page ends at whichever of the two is reached first.
+ *
+ * **A row's weight is the whole of its variable-length content**, not its
+ * largest field: a comment's body and the suggestion beside it, an overlay
+ * record's body and the anchor it is filed under. Counting one field and
+ * leaving the rest to the count cap is how an answer of two thousand small rows
+ * with long anchors comes out several times the ceiling that was meant to bound
+ * it.
+ *
+ * A mebibyte, because what these lists carry is notes and marks rather than
+ * documents: it holds the whole of an ordinary project's conversations in one
+ * page, and it is a dozen times the largest single row anybody may write, so a
+ * reader whose rows really are that large goes on making progress rather than
+ * being cut off.
+ *
+ * **The first row of a page goes on it whatever it weighs.** A page that came
+ * back empty because one row was larger than the whole budget would be a cursor
+ * that never moved, and a reader that could never get past that row.
+ */
+export const PAGE_BYTES_LIMIT = 1024 * 1024;
+
+/**
+ * The largest answer a server composes, and the smallest reader a client may have.
+ *
+ * This is the figure every transport ceiling on either side of the wire is
+ * derived from, and it is here rather than in one of them because both sides
+ * need the same number: a client whose reader is smaller than this refuses an
+ * answer its own server built, and a server that will not hold this much for one
+ * session drops a peer for being sent one.
+ *
+ * Two mebibytes, worked out from the limits above rather than chosen:
+ *
+ *  - the rows on a page weigh at most PAGE_BYTES_LIMIT, which is one mebibyte;
+ *  - one row goes on beyond that, because the first row of a page is admitted
+ *    whatever it weighs, and the heaviest is a thread carrying an opening
+ *    comment — COMMENT_BODY_LIMIT, SUGGESTION_LIMIT and an anchor, some
+ *    seventy-four kilobytes;
+ *  - and the fields around the rows are not weighed at all — ids, timestamps,
+ *    usernames, field names, the punctuation between them — which is a few
+ *    hundred bytes on a row and at most two thousand rows to a page, so under
+ *    six hundred kilobytes.
+ *
+ * That is a little over one and a half mebibytes; the rest is the room a JSON
+ * escape takes in text that needs one, and the frame the answer travels in.
+ *
+ * **Two answers are not bounded by it and are named here rather than left to be
+ * discovered.** A page of a project's history carries commit messages, which
+ * come out of a repository rather than out of a bounded column; and a server's
+ * key list grows with however many times it has rotated. Both are far inside
+ * this figure on any real deployment, and neither would be made safe by moving
+ * it — they need bounds of their own.
+ */
+export const ANSWER_BYTES_LIMIT = 2 * 1024 * 1024;
+
 /* --------------------------------------------------------- client instances */
 
 /**
@@ -1283,5 +1345,7 @@ export const CONTRACT = {
     overlayBody: OVERLAY_BODY_LIMIT,
     livePayload: LIVE_PAYLOAD_LIMIT,
     instanceField: INSTANCE_FIELD_LIMIT,
+    pageBytes: PAGE_BYTES_LIMIT,
+    answerBytes: ANSWER_BYTES_LIMIT,
   },
 } as const;

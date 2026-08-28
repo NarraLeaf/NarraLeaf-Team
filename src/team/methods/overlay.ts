@@ -56,6 +56,7 @@ import {
   ANCHOR_FIELD_LIMIT,
   INSTANCE_FIELD_LIMIT,
   OVERLAY_BODY_LIMIT,
+  PAGE_BYTES_LIMIT,
   projectOverlayTopic,
   TEAM_METHODS,
   type TeamOverlayEvent,
@@ -74,26 +75,16 @@ const DEFAULT_LIMIT = 500;
  * window that had to page would be a window that could not draw a count. A
  * project beyond this is one where somebody is using overlay as a database, and
  * the honest answer is the newest thousand.
+ *
+ * **It bounds how many, never how large.** A body may be OVERLAY_BODY_LIMIT, so
+ * the two multiplied out is an answer of well over a hundred megabytes for this
+ * server to build, serialise and then hold while a slow socket drains it. That
+ * is what PAGE_BYTES_LIMIT is beside it for, and a page ends at whichever of the
+ * two is reached first. The count is still worth keeping: it is the cheaper
+ * check, and it is the one that catches a project with a hundred thousand tiny
+ * records.
  */
 export const MAXIMUM_LIMIT = 2000;
-
-/**
- * The most the bodies on one page may total.
- *
- * The count above bounds how many records a page holds and says nothing about
- * how large they are: a body may be OVERLAY_BODY_LIMIT, so the two multiplied
- * out is an answer of well over a hundred megabytes for this server to build,
- * serialise and then hold while a slow socket drains it. So a page is filled
- * until either ceiling is reached, and the cursor carries the reader on.
- *
- * A mebibyte, because a record is a review mark or a flag rather than a
- * document: that holds the whole of an ordinary project's overlay in one page,
- * and it is sixteen of the largest record this server will store, so a reader
- * whose records really are that large goes on making progress rather than being
- * cut off. The count stays beside it - it is the cheaper check, and it is the
- * one that catches a project with a hundred thousand tiny records.
- */
-export const MAXIMUM_PAGE_BYTES = 1024 * 1024;
 
 export function overlayMethods(): TeamMethod[] {
   return [
@@ -115,7 +106,7 @@ export function overlayMethods(): TeamMethod[] {
           ...(kind === undefined ? {} : { kind }),
           ...(revision === undefined ? {} : { revision }),
           limit: boundedCount(read, "limit", DEFAULT_LIMIT, MAXIMUM_LIMIT),
-          limitBytes: MAXIMUM_PAGE_BYTES,
+          limitBytes: PAGE_BYTES_LIMIT,
           ...(before === undefined ? {} : { before }),
         });
         const head = context.options.readings?.get(projectId)?.history.head;

@@ -31,7 +31,12 @@ import {
   rememberServer,
   type ServerCredential,
 } from "../src/client/config.js";
-import { TeamCallError, TeamSessionClient, UnservedMethodError } from "../src/client/session.js";
+import {
+  MAXIMUM_MESSAGE_BYTES,
+  TeamCallError,
+  TeamSessionClient,
+  UnservedMethodError,
+} from "../src/client/session.js";
 import { recordDecision, type NewDecision } from "../src/identity/audit.js";
 import { identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
@@ -56,8 +61,8 @@ import {
   requireUser,
 } from "../src/identity/users.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
-import { createTeamSocket } from "../src/team/endpoint.js";
-import { TEAM_METHODS } from "../src/team/protocol.js";
+import { createTeamSocket, MAXIMUM_BUFFERED_BYTES } from "../src/team/endpoint.js";
+import { ANSWER_BYTES_LIMIT, TEAM_METHODS } from "../src/team/protocol.js";
 import type { TeamService } from "../src/team/service.js";
 import { ensureCertificates } from "../src/tls/authority.js";
 import { webHandler } from "../src/web/router.js";
@@ -604,7 +609,7 @@ describe("a session", () => {
         message: "there is no project of that id on this server",
       });
       // And it is still usable afterwards: a refusal is an answer, not an end.
-      expect(await open.call(TEAM_METHODS.projectsList)).toEqual({ projects: [] });
+      expect(await open.call(TEAM_METHODS.projectsList)).toEqual({ projects: [], total: 0 });
     } finally {
       open.close();
     }
@@ -1550,5 +1555,32 @@ describe("what a server refuses", () => {
     expect(code).toBe(0);
     expect(out).toContain("no longer an admin");
     expect(countEnabledAdmins(server.database)).toBe(0);
+  });
+});
+
+/**
+ * What a client will read, against what a server will send.
+ *
+ * The relationship that cannot be checked at a terminal: a ceiling too small
+ * refuses nothing until somebody's list is long enough, and then refuses an
+ * answer this program's own server composed. Both figures are derived from
+ * ANSWER_BYTES_LIMIT, and these are what fail if one is moved without the other.
+ */
+describe("the ceilings on one answer", () => {
+  it("lets this program read the largest answer a server composes", () => {
+    expect(MAXIMUM_MESSAGE_BYTES).toBeGreaterThanOrEqual(ANSWER_BYTES_LIMIT);
+  });
+
+  it("lets a server hold the largest answer it composes for one session", () => {
+    // Below one whole answer, a session would be ended for being sent one - the
+    // frames written to a socket that is not draining are what this bounds, and
+    // one answer is the smallest thing that can be waiting there.
+    expect(MAXIMUM_BUFFERED_BYTES).toBeGreaterThanOrEqual(ANSWER_BYTES_LIMIT);
+  });
+
+  it("lets a server hold as much as a client is willing to read", () => {
+    // A server that would queue less than a client will accept would drop the
+    // session rather than deliver what the client was ready for.
+    expect(MAXIMUM_BUFFERED_BYTES).toBeGreaterThanOrEqual(MAXIMUM_MESSAGE_BYTES);
   });
 });

@@ -27,10 +27,15 @@ import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
 import { mintToken } from "../src/identity/tokens.js";
 import { recordDecision } from "../src/identity/audit.js";
-import { addComment } from "../src/comments/store.js";
+import {
+  addComment,
+  createThread,
+  listThreads,
+  threadComments,
+} from "../src/comments/store.js";
 import { listOverlay, putOverlay } from "../src/overlay/store.js";
 import { MAXIMUM_PAGE } from "../src/team/methods/comments.js";
-import { MAXIMUM_LIMIT, MAXIMUM_PAGE_BYTES } from "../src/team/methods/overlay.js";
+import { MAXIMUM_LIMIT } from "../src/team/methods/overlay.js";
 import {
   ADMIN_ROLE,
   createUser,
@@ -52,6 +57,12 @@ import { discoveryDocument, type DiscoveryDocument } from "../src/identity/disco
 import { COORDINATION_CAPABILITIES } from "../src/team/collaboration.js";
 import { createTeamSocket, teamMethods, type TeamSocket } from "../src/team/endpoint.js";
 import {
+  ANCHOR_FIELD_LIMIT,
+  ANSWER_BYTES_LIMIT,
+  COMMENT_BODY_LIMIT,
+  INSTANCE_FIELD_LIMIT,
+  PAGE_BYTES_LIMIT,
+  SUGGESTION_LIMIT,
   TEAM_METHODS,
   TEAM_SOCKET_PATH,
   liveTopic,
@@ -564,6 +575,61 @@ describe("what a project row says about its repository", () => {
   });
 });
 
+describe("what the list of projects is bounded by", () => {
+  /** A project whose description is as long as the method will take one. */
+  async function fill(count: number, description: string): Promise<Harness> {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    for (let index = 0; index < count; index += 1) {
+      createProject(team.database, {
+        id: newProjectId(),
+        name: `project-${index}`,
+        description,
+        createdBy: ada,
+      });
+    }
+    return team;
+  }
+
+  it("answers with as many projects as the bytes allow, and says how many there are", async () => {
+    // Three hundred projects, each carrying a description of the size this
+    // method accepts one. The rows are small in the ordinary case, which is why
+    // nobody has minded, and "small in the ordinary case" is not a bound.
+    const team = await fill(300, "d".repeat(4 * 1024));
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.projectsList);
+    const projects = answer["projects"] as { name: string }[];
+
+    expect(projects.length).toBeLessThan(300);
+    expect(Buffer.byteLength(JSON.stringify(projects), "utf-8")).toBeLessThanOrEqual(
+      PAGE_BYTES_LIMIT + 4 * 1024,
+    );
+    // The honest field, which is what a client gets in place of a cursor: a list
+    // shorter than this was cut.
+    expect(answer["total"]).toBe(300);
+  });
+
+  it("puts one project on the answer even where that project is larger than the budget", async () => {
+    const team = await fill(1, "d".repeat(PAGE_BYTES_LIMIT * 2));
+    const ada = await account(team.database, "grace");
+    createProject(team.database, {
+      id: newProjectId(),
+      name: "zzz-small",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    // An answer that came back empty because one row was larger than the whole
+    // budget would leave a reader with nothing and, with no cursor to move,
+    // nothing to do about it.
+    const answer = await client.value(TEAM_METHODS.projectsList);
+    expect(answer["projects"]).toHaveLength(1);
+    expect(answer["total"]).toBe(2);
+  });
+});
+
 describe("the people on this server", () => {
   it("is every account, with the address a revision is signed with", async () => {
     const team = await harness();
@@ -606,6 +672,32 @@ describe("the people on this server", () => {
     // fallen out of would leave those revisions signed by a stranger.
     expect(members.map((member) => member.username)).toEqual(["ada", "grace"]);
     expect(members[1]).toMatchObject({ username: "grace", disabled: true });
+  });
+
+  it("answers with as many accounts as the bytes allow, and says how many there are", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    // Sixty accounts whose display names are long enough that the answer is
+    // bounded by its bytes rather than by the row ceiling above them. A display
+    // name is whatever an operator typed, and nothing under this method's own
+    // parameters bounds what is already in the table.
+    const displayName = "n".repeat(20 * 1024);
+    for (let index = 0; index < 60; index += 1) {
+      await account(team.database, `member-${String(index).padStart(2, "0")}`, { displayName });
+    }
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.membersList);
+    const members = answer["members"] as { username: string }[];
+
+    expect(members.length).toBeLessThan(61);
+    expect(Buffer.byteLength(JSON.stringify(members), "utf-8")).toBeLessThanOrEqual(
+      PAGE_BYTES_LIMIT + 20 * 1024,
+    );
+    // In name order, so what a bounded answer left out is the tail rather than
+    // an arbitrary handful.
+    expect(members[0]?.username).toBe("ada");
+    expect(answer["total"]).toBe(61);
   });
 
   it("keeps an operator's business out of it", async () => {
@@ -1333,6 +1425,148 @@ describe("conversations", () => {
     expect((answer["comments"] as unknown[]).length).toBe(MAXIMUM_PAGE);
     expect(typeof answer["cursor"]).toBe("string");
     expect((answer["thread"] as { comments: number }).comments).toBe(MAXIMUM_PAGE + 1);
+  });
+
+  it("ends a page of threads at the bytes on them rather than only at the count", async () => {
+    const { project, ada, team } = await withProject();
+    const author = requireUser(team.database, "ada").id;
+    // The case the count ceiling alone does not bound: every thread opens with
+    // a suggestion of the largest size this server stores, so two hundred of
+    // them would be an answer of well over ten megabytes. Written straight into
+    // the store, because what is being checked is the size of the answer rather
+    // than the write path.
+    const suggestion = "s".repeat(SUGGESTION_LIMIT);
+    for (let index = 0; index < 17; index += 1) {
+      createThread(team.database, {
+        projectId: project,
+        anchor: { document: "story/act-one.json" },
+        kind: "suggestion",
+        createdBy: author,
+        body: "opening",
+        suggestion,
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    // Asked for every one of them by count, and answered with as many as the
+    // bytes allow.
+    const first = await ada.value(TEAM_METHODS.threadsList, { project, limit: MAXIMUM_PAGE });
+    const page = first["threads"] as { id: string; opening: { suggestion?: string } }[];
+    expect(page.length).toBeLessThan(17);
+    expect(
+      page.reduce((total, thread) => total + (thread.opening.suggestion?.length ?? 0), 0),
+    ).toBeLessThanOrEqual(PAGE_BYTES_LIMIT);
+    expect(typeof first["cursor"]).toBe("string");
+
+    const rest = await ada.value(TEAM_METHODS.threadsList, {
+      project,
+      limit: MAXIMUM_PAGE,
+      before: first["cursor"],
+    });
+    const tail = rest["threads"] as { id: string }[];
+    expect(rest["cursor"]).toBeUndefined();
+    // No thread is on both pages and none was skipped between them.
+    expect(new Set([...page, ...tail].map((thread) => thread.id)).size).toBe(17);
+  });
+
+  it("puts one thread on a page even where that thread is larger than the budget", async () => {
+    const { project, team } = await withProject();
+    const author = requireUser(team.database, "ada").id;
+    for (let index = 0; index < 2; index += 1) {
+      createThread(team.database, {
+        projectId: project,
+        anchor: { document: "story/act-one.json" },
+        kind: "comment",
+        createdBy: author,
+        body: "b".repeat(64),
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    // Read with a budget smaller than one thread, which the field limits mean
+    // the method itself cannot produce. A page that came back empty here would
+    // be a cursor that never moved and a conversation nobody could ever read
+    // past.
+    const query = { projectId: project, limit: MAXIMUM_PAGE, limitBytes: 8 };
+    const first = listThreads(team.database, query);
+    expect(first.threads).toHaveLength(1);
+    expect(first.cursor).toBeDefined();
+
+    const rest = listThreads(team.database, { ...query, before: first.cursor as string });
+    expect(rest.threads).toHaveLength(1);
+    expect(rest.cursor).toBeUndefined();
+  });
+
+  it("ends a page of one thread's comments at the bytes on them", async () => {
+    const { project, ada, team } = await withProject();
+    const opened = await ada.value(TEAM_METHODS.threadsCreate, {
+      project,
+      anchor: { document: "story/act-one.json" },
+      body: "opening",
+    });
+    const thread = (opened["thread"] as { id: string }).id;
+    const author = requireUser(team.database, "ada").id;
+    // Bodies at the size this server stores one, so that the count ceiling is
+    // reached long after the byte one.
+    const body = "r".repeat(COMMENT_BODY_LIMIT);
+    for (let index = 0; index < MAXIMUM_PAGE; index += 1) {
+      addComment(team.database, {
+        threadId: thread,
+        authorId: author,
+        body,
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    const answer = await ada.value(TEAM_METHODS.threadsGet, { thread, limit: MAXIMUM_PAGE });
+    const comments = answer["comments"] as { id: string; body: string }[];
+    expect(comments.length).toBeLessThan(MAXIMUM_PAGE);
+    expect(comments.reduce((total, comment) => total + comment.body.length, 0)).toBeLessThanOrEqual(
+      PAGE_BYTES_LIMIT,
+    );
+    expect(typeof answer["cursor"]).toBe("string");
+    // The count on the thread is still the whole conversation, so a reader
+    // knows what it holds a page of.
+    expect((answer["thread"] as { comments: number }).comments).toBe(MAXIMUM_PAGE + 1);
+
+    const rest = await ada.value(TEAM_METHODS.threadsGet, {
+      thread,
+      limit: MAXIMUM_PAGE,
+      after: answer["cursor"],
+    });
+    const tail = rest["comments"] as { id: string }[];
+    // Every comment is reachable by paging, and none is on two pages.
+    expect(new Set([...comments, ...tail].map((comment) => comment.id)).size).toBe(
+      comments.length + tail.length,
+    );
+  });
+
+  it("puts one comment on a page even where that comment is larger than the budget", async () => {
+    const { project, ada, team } = await withProject();
+    const opened = await ada.value(TEAM_METHODS.threadsCreate, {
+      project,
+      anchor: { document: "story/act-one.json" },
+      body: "opening",
+    });
+    const thread = (opened["thread"] as { id: string }).id;
+    addComment(team.database, {
+      threadId: thread,
+      authorId: requireUser(team.database, "ada").id,
+      body: "second",
+      now: 1_700_000_000_001,
+    });
+
+    const query = { limit: MAXIMUM_PAGE, limitBytes: 2 };
+    const first = threadComments(team.database, thread, query);
+    expect(first.comments).toHaveLength(1);
+    expect(first.cursor).toBeDefined();
+
+    const rest = threadComments(team.database, thread, {
+      ...query,
+      after: first.cursor as string,
+    });
+    expect(rest.comments).toHaveLength(1);
+    expect(rest.cursor).toBeUndefined();
   });
 
   it("refuses to let one person edit another's words", async () => {
@@ -2474,10 +2708,11 @@ describe("what is attached to a project without being in it", () => {
   it("ends a page at the bytes on it rather than only at the count", async () => {
     const { ada, team, project } = await withTwo();
     const author = requireUser(team.database, "ada").id;
-    // Ten of these are the page budget exactly, so the eleventh is what the
-    // ceiling has to stop. Written straight into the store: what is being
-    // checked is the size of the answer, not the write path.
-    const body = "b".repeat(MAXIMUM_PAGE_BYTES / 10);
+    // Ten of these are the page budget, so the eleventh is what the ceiling has
+    // to stop. A little under a tenth each, because a record weighs its anchor
+    // and its kind as well as its body. Written straight into the store: what is
+    // being checked is the size of the answer, not the write path.
+    const body = "b".repeat(PAGE_BYTES_LIMIT / 10 - 64);
     for (let index = 0; index < 12; index += 1) {
       putOverlay(team.database, {
         projectId: project,
@@ -2496,7 +2731,7 @@ describe("what is attached to a project without being in it", () => {
     const page = first["records"] as { id: string; body: string }[];
     expect(page).toHaveLength(10);
     expect(page.reduce((total, record) => total + record.body.length, 0)).toBeLessThanOrEqual(
-      MAXIMUM_PAGE_BYTES,
+      PAGE_BYTES_LIMIT,
     );
     expect(typeof first["cursor"]).toBe("string");
     // The count beside the page is still the whole of what the project holds.
@@ -2540,6 +2775,124 @@ describe("what is attached to a project without being in it", () => {
     const rest = listOverlay(team.database, { ...query, before: first.cursor as string });
     expect(rest.records).toHaveLength(1);
     expect(rest.cursor).toBeUndefined();
+  });
+});
+
+/**
+ * What the figure every client is sized from is measured against.
+ *
+ * ANSWER_BYTES_LIMIT is derived from the page limits rather than measured, and a
+ * derivation nobody checks is a number. These compose the largest answer each
+ * list can be made to produce - once with rows as heavy as this server stores
+ * one, once with as many rows as it will put on a page - and weigh what actually
+ * went on the wire. They are what fails if a field limit or a page limit is
+ * raised without moving the figure the transport ceilings are taken off.
+ */
+describe("the largest answer this server composes", () => {
+  async function withProject(): Promise<{ team: Harness; ada: Client; project: string }> {
+    const team = await harness();
+    const adaId = await account(team.database, "ada");
+    const made = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: adaId,
+    });
+    return { team, ada: await team.connect(team.tokenFor("ada")), project: made.id };
+  }
+
+  /** How large the answer was, as the socket carried it. */
+  function sent(answer: Record<string, unknown>): number {
+    return Buffer.byteLength(JSON.stringify(answer), "utf-8");
+  }
+
+  it("fits a page of the heaviest threads it stores", async () => {
+    const { team, ada, project } = await withProject();
+    const author = requireUser(team.database, "ada").id;
+    const field = "a".repeat(ANCHOR_FIELD_LIMIT);
+    for (let index = 0; index < 15; index += 1) {
+      createThread(team.database, {
+        projectId: project,
+        anchor: { document: field, element: field, revision: field },
+        kind: "suggestion",
+        createdBy: author,
+        body: "b".repeat(COMMENT_BODY_LIMIT),
+        suggestion: "s".repeat(SUGGESTION_LIMIT),
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    const answer = await ada.value(TEAM_METHODS.threadsList, { project, limit: MAXIMUM_PAGE });
+    expect((answer["threads"] as unknown[]).length).toBeGreaterThan(0);
+    expect(sent(answer)).toBeLessThanOrEqual(ANSWER_BYTES_LIMIT);
+  });
+
+  it("fits a page of the heaviest overlay records it stores", async () => {
+    const { team, ada, project } = await withProject();
+    const author = requireUser(team.database, "ada").id;
+    const field = "a".repeat(ANCHOR_FIELD_LIMIT);
+    // Enough to fill a page by weight. An anchor of three full fields is most of
+    // what one of these records weighs, which is why the anchor is weighed.
+    for (let index = 0; index < 700; index += 1) {
+      putOverlay(team.database, {
+        projectId: project,
+        revision: field,
+        anchor: { document: field, element: field, revision: field },
+        kind: "k".repeat(INSTANCE_FIELD_LIMIT),
+        body: "b".repeat(64),
+        authorId: author,
+        instance: "i".repeat(INSTANCE_FIELD_LIMIT),
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    const answer = await ada.value(TEAM_METHODS.overlayList, { project, limit: MAXIMUM_LIMIT });
+    expect((answer["records"] as unknown[]).length).toBeGreaterThan(0);
+    expect(sent(answer)).toBeLessThanOrEqual(ANSWER_BYTES_LIMIT);
+  });
+
+  it("fits a page of as many overlay records as it will carry", async () => {
+    const { team, ada, project } = await withProject();
+    const author = requireUser(team.database, "ada").id;
+    // The other extreme, and the one the byte ceiling never reaches: rows small
+    // enough that the count is what ends the page, so what is weighed here is
+    // the fields around two thousand rows rather than what is in them.
+    for (let index = 0; index < MAXIMUM_LIMIT + 10; index += 1) {
+      putOverlay(team.database, {
+        projectId: project,
+        revision: "r",
+        anchor: { document: "d", element: "e", revision: "r" },
+        kind: "k",
+        body: "b",
+        authorId: author,
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    const answer = await ada.value(TEAM_METHODS.overlayList, { project, limit: MAXIMUM_LIMIT });
+    expect((answer["records"] as unknown[]).length).toBe(MAXIMUM_LIMIT);
+    expect(sent(answer)).toBeLessThanOrEqual(ANSWER_BYTES_LIMIT);
+  });
+
+  it("fits the project list and the member list it answers with", async () => {
+    const team = await harness();
+    const author = await account(team.database, "ada");
+    for (let index = 0; index < 400; index += 1) {
+      createProject(team.database, {
+        id: newProjectId(),
+        name: `project-${index}`,
+        description: "d".repeat(4 * 1024),
+        createdBy: author,
+      });
+    }
+    const client = await team.connect(team.tokenFor("ada"));
+
+    expect(sent(await client.value(TEAM_METHODS.projectsList))).toBeLessThanOrEqual(
+      ANSWER_BYTES_LIMIT,
+    );
+    expect(sent(await client.value(TEAM_METHODS.membersList))).toBeLessThanOrEqual(
+      ANSWER_BYTES_LIMIT,
+    );
   });
 });
 
