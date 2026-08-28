@@ -1,7 +1,8 @@
 # The shape of a Team server
 
 What Team is, before any of how it works. The mechanism is
-[internals.md](internals.md); running one is [operations.md](operations.md).
+[internals.md](internals.md); running one is [operations.md](operations.md); what
+the planes below do and do not protect is [security.md](security.md).
 
 ## One server, one team's work
 

@@ -12,6 +12,8 @@ terminal on the machine it is on.
 - **[Running a Team server](docs/operations.md)** — the ports, the certificate,
   and every command in full.
 - **[How Team works](docs/internals.md)** — why the parts are the shape they are.
+- **[What a Team server protects](docs/security.md)** — and what it does not,
+  before you put one on a network.
 
 ## Requirements
 
