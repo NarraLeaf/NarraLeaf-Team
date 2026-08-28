@@ -1,5 +1,5 @@
 /**
- * What happens around a password check, on both of the doors that take one.
+ * What happens around a password check on the door that takes one from anybody.
  *
  * Checking the password itself is src/identity/passwords.ts, and it is
  * deliberately expensive: scrypt at OWASP's parameters is about 128 MiB and a
@@ -10,11 +10,18 @@
  * simultaneous attempts stall everything else this server does and eight cost
  * about a gigabyte of resident memory.
  *
- * Two doors reach it, both without a credential: the sign-in a Studio
- * installation posts to, and the operator's own. An unknown username is hashed
- * against a decoy so that it costs what a real one does — which is what stops
- * anybody enumerating the accounts, and which also means an attacker needs no
- * valid account to spend this.
+ * One door reaches it without a credential: the sign-in a Studio installation
+ * posts to, in src/web/studio.ts. An unknown username is hashed against a decoy
+ * so that it costs what a real one does — which is what stops anybody
+ * enumerating the accounts, and which also means an attacker needs no valid
+ * account to spend this.
+ *
+ * `nlteam token mint --root` checks a password too and is deliberately not
+ * guarded by any of this. It is reached only by somebody holding the storage
+ * root, who holds the signing keys with it and can already mint a token for any
+ * account without knowing a password — `nlteam project create --root` does
+ * exactly that. A limiter in front of that door would slow down the one person
+ * it cannot keep out.
  *
  * So three things live here, in front of the check rather than behind it:
  *

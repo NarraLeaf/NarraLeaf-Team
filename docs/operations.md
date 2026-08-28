@@ -706,8 +706,8 @@ rather than sending each of them a token.
 Checking a password is the most expensive thing this server does for somebody
 who has presented nothing — scrypt at the parameters here is about 128 MiB and a
 few hundred milliseconds — and an unknown username costs the same as a known one
-because it is hashed against a decoy. So both doors that take a password, this
-one and the operator's own, are guarded before the check rather than after it:
+because it is hashed against a decoy. So the one door that takes a password from
+the network — this one — is guarded before the check rather than after it:
 
 - A name refused several times from one address is answered `429` with a
   `Retry-After`, and the wait doubles with each refusal after that up to five
