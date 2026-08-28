@@ -1290,6 +1290,156 @@ describe("project create", () => {
     expect(listed.out).toContain("no projects yet");
   });
 
+  it("carries --repository to the method, and adopts without asking loreserver", async () => {
+    // Nothing is listening on this server's data port, so a create that asked
+    // loreserver for a repository would fail exactly as the test above does.
+    // This one succeeds, which is the assertion: `--repository` reached
+    // `projects.create` as its `repositoryId`, and that path asks loreserver
+    // for nothing.
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+    const existing = newProjectId();
+
+    const { code, out, err } = await invoke([
+      "project",
+      "create",
+      "harbour",
+      "--repository",
+      existing,
+      "--server",
+      server.address,
+    ]);
+
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    // "adopted" and not "created", because those are different things to have
+    // happened and nobody should have to infer which from a line that is missing.
+    expect(out).toContain("adopted harbour");
+    expect(out).toContain(`repository ${existing}`);
+    expect(out).toContain("The repository already existed");
+    // The row is on the list the other method answers with, under that id.
+    const listed = await invoke(["project", "list", "--server", server.address]);
+    expect(listed.out).toContain(existing);
+  });
+
+  it("adopts from a storage root too, and says what the protocol path says", async () => {
+    // The same command on the other plane. Both reach one implementation, so
+    // what is compared is the whole of what each printed with its own id taken
+    // out: what a command prints does not depend on which plane it took.
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+    const overProtocolId = newProjectId();
+    const onDiskId = newProjectId();
+
+    const overProtocol = await invoke([
+      "project",
+      "create",
+      "harbour",
+      "--repository",
+      overProtocolId,
+      "--server",
+      server.address,
+    ]);
+    const onDisk = await invoke([
+      "project",
+      "create",
+      "lighthouse",
+      "--repository",
+      onDiskId,
+      "--root",
+      server.root,
+    ]);
+
+    expect(onDisk.err).toBe("");
+    expect(onDisk.code).toBe(0);
+    expect(onDisk.out).toContain("adopted lighthouse");
+    // The names differ because one server will not hold two projects of one
+    // name; everything else about the two answers is the same text.
+    expect(onDisk.out.replace(onDiskId, "id").replace("lighthouse", "harbour")).toBe(
+      overProtocol.out.replace(overProtocolId, "id"),
+    );
+    // No default branch line on either, and for the better of the two reasons:
+    // neither asked loreserver anything, so neither has a branch to name.
+    expect(onDisk.out).not.toContain("default branch");
+  });
+
+  it("refuses a repository id that is not one, in the same sentence on both paths", async () => {
+    // A sentence rather than a stack, and the same sentence either way. The two
+    // are worded in different files — one by the method, one by the command that
+    // opened the database — so this is what keeps them from drifting apart.
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+
+    const overProtocol = await invoke([
+      "project",
+      "create",
+      "harbour",
+      "--repository",
+      "not-a-repository-id",
+      "--server",
+      server.address,
+    ]);
+    const onDisk = await invoke([
+      "project",
+      "create",
+      "harbour",
+      "--repository",
+      "not-a-repository-id",
+      "--root",
+      server.root,
+    ]);
+
+    expect(overProtocol.code).toBe(1);
+    expect(overProtocol.out).toBe("");
+    expect(overProtocol.err).toBe("nlteam: a repository id is thirty-two hexadecimal characters\n");
+    expect(onDisk.err).toBe(overProtocol.err);
+    expect(onDisk.code).toBe(overProtocol.code);
+    expect(onDisk.out).toBe("");
+    // Nothing was written on either path.
+    const listed = await invoke(["project", "list", "--server", server.address]);
+    expect(listed.out).toContain("no projects yet");
+  });
+
+  it("refuses a repository already on this server, the same way on both paths", async () => {
+    const server = await harness();
+    await credentialDirectory();
+    await signedIn(server);
+    const existing = newProjectId();
+    createProject(server.database, {
+      id: existing,
+      name: "harbour",
+      createdBy: requireUser(server.database, "ada").id,
+    });
+
+    const overProtocol = await invoke([
+      "project",
+      "create",
+      "lighthouse",
+      "--repository",
+      existing,
+      "--server",
+      server.address,
+    ]);
+    const onDisk = await invoke([
+      "project",
+      "create",
+      "lighthouse",
+      "--repository",
+      existing,
+      "--root",
+      server.root,
+    ]);
+
+    expect(overProtocol.code).toBe(1);
+    expect(overProtocol.err).toBe(
+      `nlteam: the repository ${existing} is already a project on this server\n`,
+    );
+    expect(onDisk.err).toBe(overProtocol.err);
+  });
+
   it("refuses --as beside an address rather than dropping it", async () => {
     const { code, err } = await invoke([
       "project",
@@ -1304,6 +1454,28 @@ describe("project create", () => {
     expect(code).toBe(2);
     expect(err).toContain("--as");
     expect(err).toContain("--root");
+  });
+
+  it("takes --repository beside an address, because the method has always taken it", async () => {
+    // The counterpart of the refusal above, and the rule behind both: the
+    // command line grows no verb the protocol lacks, so an option the protocol
+    // already carries belongs on both halves of it rather than on one.
+    await credentialDirectory();
+
+    const { code, err } = await invoke([
+      "project",
+      "create",
+      "harbour",
+      "--server",
+      "team.example.lan:41402",
+      "--repository",
+      newProjectId(),
+    ]);
+
+    // It got as far as looking for a token for that address, which is past
+    // every refusal the command line makes on its own.
+    expect(code).toBe(1);
+    expect(err).not.toContain("--repository");
   });
 });
 

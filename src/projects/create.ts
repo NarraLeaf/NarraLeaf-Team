@@ -30,7 +30,20 @@ import { loreserverUrl, repositoryCreate } from "./repository.js";
  * what it announces and on which topic — is the caller's.
  */
 export type ProjectCreation =
-  | { readonly kind: "made"; readonly project: ProjectRecord; readonly adopted: boolean }
+  | {
+      readonly kind: "made";
+      readonly project: ProjectRecord;
+      readonly adopted: boolean;
+      /**
+       * The branch loreserver named, present only where loreserver was asked.
+       *
+       * An adoption asks it for nothing, so there is nothing here to report: the
+       * repository is on the author's own disk with whatever branches they have
+       * made, and a default filled in with the name that is usually right would
+       * be a claim about a repository nobody looked at.
+       */
+      readonly defaultBranch?: string;
+    }
   /** A create that already happened, so this is the project it made, not a new one. */
   | { readonly kind: "repeat"; readonly project: ProjectRecord }
   | { readonly kind: "invalid-repository-id" }
@@ -51,6 +64,25 @@ export interface ProjectCreationRequest {
   /** What the client called this write, so a repeat of it is not a second project. */
   readonly clientId?: string;
 }
+
+/**
+ * What making a project is done with.
+ *
+ * The database the row goes in, the keys and the settings the token to
+ * loreserver is minted from, and the port loreserver answers on. Written as a
+ * `Pick` of {@link TeamService}, on the precedent of src/team/status.ts and for
+ * the same reason: the second caller is a command line, which reaches this with
+ * a storage root rather than with a running server. It has no health port, no
+ * sign-in limiter and no repository reader, and a parameter demanding those
+ * would force it to invent them — an invented port inside a struct is
+ * indistinguishable from a real one. Nothing below is duplicated for it; both
+ * paths call this function, so there is one ordering of "write the row, ask
+ * loreserver, roll the row back" rather than two to keep right.
+ */
+export type ProjectCreationSource = Pick<
+  TeamService,
+  "database" | "keys" | "config" | "namedLifetimes" | "dataPort"
+>;
 
 /**
  * The create key a repeatable create is scoped by.
@@ -74,7 +106,7 @@ function projectCreateKey(clientId: string): string {
  * id, and what is missing is only the row.
  */
 export async function makeOrAdoptProject(
-  options: TeamService,
+  options: ProjectCreationSource,
   user: UserRecord,
   request: ProjectCreationRequest,
 ): Promise<ProjectCreation> {
@@ -139,9 +171,13 @@ export async function makeOrAdoptProject(
   }
 
   const config = mintingConfig(options);
+  // The repository lifetime and not the sign-in one: this token is handed
+  // straight to loreserver for a single create call and then dropped, and a
+  // token that outlives its one use by a month is one to be found later.
   const minted = mintToken(user, options.keys.signingKey, config, { purpose: "repository" });
+  let repository;
   try {
-    await repositoryCreate({
+    repository = await repositoryCreate({
       url: loreserverUrl(options.dataPort),
       token: minted.token,
       id: project.id,
@@ -155,5 +191,14 @@ export async function makeOrAdoptProject(
       message: error instanceof Error ? error.message : String(error),
     };
   }
-  return { kind: "made", project, adopted: false };
+  // The branch is loreserver's answer rather than this server's record, which is
+  // why it travels with the outcome and not in the row: a caller that has asked
+  // for a repository and been told what its first branch is called can say so,
+  // and one that adopted has nothing of the kind to say.
+  return {
+    kind: "made",
+    project,
+    adopted: false,
+    defaultBranch: repository.defaultBranchName,
+  };
 }

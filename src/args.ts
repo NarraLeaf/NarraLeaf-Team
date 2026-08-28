@@ -150,11 +150,14 @@ export type Invocation =
       readonly overrides: IdentityOverrides;
     }
   /**
-   * Make a project: a repository on loreserver, and the record of it.
+   * Make a project: a repository on loreserver, and the record of it. Or record
+   * a repository that is already there.
    *
    * `as`, `dataPort` and `overrides` belong to the local path alone. Over the
    * protocol the account that asked is the account it belongs to, and where
-   * loreserver is is the server's own business.
+   * loreserver is is the server's own business. `repository` belongs to both:
+   * `projects.create` has carried it since Studio published its first
+   * repository, so a command line taking it grows no verb the protocol lacks.
    */
   | {
       readonly kind: "project-create";
@@ -163,6 +166,15 @@ export type Invocation =
       readonly description: string | undefined;
       /** The account it is created for; absent when the Team server has only one. */
       readonly as: string | undefined;
+      /**
+       * A repository that already exists, to record rather than create.
+       *
+       * Whatever was typed, unchecked. What a repository id may be is the
+       * registry's rule, and both paths answer a bad one with the same sentence
+       * about hexadecimal — one from the server, one from the create itself —
+       * which is a sentence about a project rather than about a command line.
+       */
+      readonly repository: string | undefined;
       readonly dataPort: number;
       readonly overrides: IdentityOverrides;
     }
@@ -1086,7 +1098,7 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
   if (verb === "create") {
     const result = readTokens(
       rest,
-      ["--root", "--server", "--description", "--as", ...IDENTITY_OPTIONS],
+      ["--root", "--server", "--description", "--as", "--repository", ...IDENTITY_OPTIONS],
       [],
       IDENTITY_LIST_OPTIONS,
     );
@@ -1132,6 +1144,10 @@ function parseProject(argv: readonly string[], env: NodeJS.ProcessEnv): Invocati
       name,
       description: tokens.values.get("--description"),
       as: tokens.values.get("--as"),
+      // Not in the list refused beside --server: this is the one thing on this
+      // command line that both planes carry, because the method has always taken
+      // it.
+      repository: tokens.values.get("--repository"),
       // Where loreserver is, and also what a token's audience says about it.
       dataPort: overrides.dataPort ?? DEFAULT_PORTS.dataPort,
       overrides,

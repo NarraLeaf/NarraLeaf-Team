@@ -102,7 +102,8 @@ Commands:
                             Take that away, leaving the account otherwise as it
                             was
   token mint <username>     Sign a token for an account
-  project create <name>     Create a repository and record it
+  project create <name>     Create a repository and record it, or record one
+                            that already exists
   project list              List the projects
   settings list             Show the settings this server keeps, and whether
                             each is the default or was set here
@@ -193,6 +194,13 @@ Options for project create:
                             server has more than one. --root only: over the
                             protocol the account that asked is the one it
                             belongs to
+      --repository <id>     Record a repository that already exists rather than
+                            asking loreserver for a new one. Thirty-two
+                            hexadecimal characters. This is how a project taken
+                            off the list is put back: taking one off leaves the
+                            repository and every revision in it where they were,
+                            so what is missing is the row alone. Both paths take
+                            it
 
 Options for status:
       --health-port <port>  loreserver's HTTP health check port (default ${DEFAULT_PORTS.healthPort}).
@@ -434,6 +442,7 @@ export async function run(
               server: invocation.target.server,
               name: invocation.name,
               description: invocation.description,
+              repositoryId: invocation.repository,
             },
             stdout,
             stderr,
@@ -444,6 +453,7 @@ export async function run(
               name: invocation.name,
               description: invocation.description,
               as: invocation.as,
+              repositoryId: invocation.repository,
               dataPort: invocation.dataPort,
               overrides: invocation.overrides,
             },

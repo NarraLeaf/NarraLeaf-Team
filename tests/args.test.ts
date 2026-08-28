@@ -568,6 +568,35 @@ describe("parseArgs, the project commands", () => {
     });
   });
 
+  it("takes a repository to record on either path, unread", () => {
+    // The one option on this command line that both planes carry, because
+    // `projects.create` has taken `repositoryId` since Studio published its
+    // first repository — so it is not in the list refused beside --server.
+    expect(
+      parseArgs(["project", "create", "harbour", "--repository", "ABC", "--root", "/srv/team"]),
+    ).toMatchObject({ repository: "ABC" });
+    expect(
+      parseArgs([
+        "project",
+        "create",
+        "harbour",
+        "--repository",
+        "ABC",
+        "--server",
+        "team.example.lan:41402",
+      ]),
+    ).toMatchObject({
+      target: { kind: "server", server: "team.example.lan:41402" },
+      repository: "ABC",
+    });
+    // Whatever was typed, unchecked and unfolded. What a repository id may be is
+    // the registry's rule, and both paths answer a bad one with the same
+    // sentence about a project rather than one about a command line.
+    expect(
+      parseArgs(["project", "create", "harbour", "--repository", "nope", "--root", "/srv/team"]),
+    ).toMatchObject({ repository: "nope" });
+  });
+
   it("lists what the server holds, and takes no account to list it for", () => {
     expect(parseArgs(["project", "list", "--root", "/srv/team"])).toEqual({
       kind: "project-list",

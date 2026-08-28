@@ -1,11 +1,19 @@
+import { createServer } from "node:net";
+import type { AddressInfo } from "node:net";
 import type { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
+import { KeyStore } from "../src/identity/keys.js";
 import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
-import { createUser } from "../src/identity/users.js";
+import { createUser, type UserRecord } from "../src/identity/users.js";
+import {
+  makeOrAdoptProject,
+  type ProjectCreationSource,
+} from "../src/projects/create.js";
 import {
   createProject,
   forgetProject,
@@ -42,11 +50,59 @@ async function database(): Promise<DatabaseSync> {
 }
 
 async function account(connection: DatabaseSync, username: string): Promise<string> {
-  const user = await createUser(connection, hasher, {
+  return (await member(connection, username)).id;
+}
+
+/** The whole account, for the tests that hand one to a create. */
+async function member(connection: DatabaseSync, username: string): Promise<UserRecord> {
+  return await createUser(connection, hasher, {
     username,
     password: "a password nobody guesses",
   });
-  return user.id;
+}
+
+/**
+ * A port number nothing is listening on, borrowed and given straight back.
+ *
+ * The same reasoning as its twin in tests/client.test.ts: loreserver's usual
+ * port is one a machine with a Team server running answers on, so a test naming
+ * it would be asserting about whatever happened to be there. What these tests
+ * want is a port that refuses at once, so that "loreserver was asked" and
+ * "loreserver was not asked" are told apart by an outcome rather than a wait.
+ */
+async function unusedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+/**
+ * What a create is done with, pointed at a loreserver that is not there.
+ *
+ * The narrowed source `makeOrAdoptProject` takes, assembled the way a command
+ * line holding a storage root assembles one: a database, the signing keys
+ * beside it, the settings a token is minted from, and the port loreserver would
+ * be on.
+ */
+async function creationSource(): Promise<{
+  source: ProjectCreationSource;
+  database: DatabaseSync;
+}> {
+  const layout = identityLayout(await temporaryRoot());
+  const connection = await openMigratedDatabase(layout.databasePath);
+  open.push(connection);
+  const dataPort = await unusedPort();
+  return {
+    database: connection,
+    source: {
+      database: connection,
+      keys: await KeyStore.open(layout.keysDir),
+      config: identityConfig({ dataPort }),
+      dataPort,
+    },
+  };
 }
 
 describe("resource ids", () => {
@@ -137,6 +193,104 @@ describe("what an account may do", () => {
     // One rule, one answer. The claim is filled in because loreserver's data
     // plane reads it; the repository authorizer never looks at the verbs.
     expect([...PROJECT_PERMISSIONS]).toEqual(["read", "write"]);
+  });
+});
+
+describe("makeOrAdoptProject", () => {
+  it("asks loreserver for a repository when none is named, and takes the row back", async () => {
+    // Nothing is listening on the port the source names, so the create cannot
+    // get its repository. What is asserted is both halves of the ordering: the
+    // outcome says loreserver refused, and the row written before it was asked
+    // is gone again.
+    const { source, database } = await creationSource();
+    const ada = await member(database, "ada");
+
+    const outcome = await makeOrAdoptProject(source, ada, { name: "harbour" });
+
+    expect(outcome.kind).toBe("repository-refused");
+    expect(listProjects(database)).toEqual([]);
+  });
+
+  it("adopts a repository that already exists, and asks loreserver for nothing", async () => {
+    // The same source, pointed at the same absent loreserver. This one succeeds,
+    // which is the whole assertion: an adoption cannot have made a call that
+    // would have failed.
+    const { source, database } = await creationSource();
+    const ada = await member(database, "ada");
+    const existing = newProjectId();
+
+    const outcome = await makeOrAdoptProject(source, ada, {
+      name: "harbour",
+      repositoryId: existing,
+    });
+
+    expect(outcome).toMatchObject({ kind: "made", adopted: true });
+    if (outcome.kind === "made") {
+      expect(outcome.project.id).toBe(existing);
+      // Nothing asked loreserver anything, so there is no branch to name. A
+      // default filled in here would be a claim about a repository this never
+      // looked at.
+      expect(outcome.defaultBranch).toBeUndefined();
+    }
+    expect(listProjects(database).map((row) => row.id)).toEqual([existing]);
+  });
+
+  it("takes a repository id in either case, and records the one hex is written in", async () => {
+    // Hex is hex, and everything downstream compares this character by
+    // character: it is the primary key and half the resource id loreserver asks
+    // permission questions about.
+    const { source, database } = await creationSource();
+    const ada = await member(database, "ada");
+    const existing = newProjectId();
+
+    const outcome = await makeOrAdoptProject(source, ada, {
+      name: "harbour",
+      repositoryId: existing.toUpperCase(),
+    });
+
+    expect(outcome).toMatchObject({ kind: "made", adopted: true });
+    expect(listProjects(database).map((row) => row.id)).toEqual([existing]);
+  });
+
+  it("refuses a repository id that is not one, without writing a row", async () => {
+    const { source, database } = await creationSource();
+    const ada = await member(database, "ada");
+
+    expect(
+      await makeOrAdoptProject(source, ada, { name: "harbour", repositoryId: "not-hex" }),
+    ).toEqual({ kind: "invalid-repository-id" });
+    expect(listProjects(database)).toEqual([]);
+  });
+
+  it("refuses a repository this server already holds rather than taking it over", async () => {
+    // Somebody is publishing what they believe is theirs alone, and the server
+    // already having it means somebody else has it. That has to be said rather
+    // than silently adopted.
+    const { source, database } = await creationSource();
+    const ada = await member(database, "ada");
+    const existing = newProjectId();
+    createProject(database, { id: existing, name: "harbour", createdBy: ada.id });
+
+    const outcome = await makeOrAdoptProject(source, ada, {
+      name: "lighthouse",
+      repositoryId: existing,
+    });
+
+    expect(outcome).toEqual({ kind: "repository-taken", repositoryId: existing });
+    expect(listProjects(database).map((row) => row.name)).toEqual(["harbour"]);
+  });
+
+  it("refuses a name loreserver would not take, before anything is adopted", async () => {
+    const { source, database } = await creationSource();
+    const ada = await member(database, "ada");
+
+    const outcome = await makeOrAdoptProject(source, ada, {
+      name: "a name with spaces",
+      repositoryId: newProjectId(),
+    });
+
+    expect(outcome.kind).toBe("invalid-name");
+    expect(listProjects(database)).toEqual([]);
   });
 });
 

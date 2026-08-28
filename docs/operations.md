@@ -878,6 +878,7 @@ nlteam project create harbour --root /srv/team --as ada --description "..."
 nlteam project list --root /srv/team
 nlteam project create harbour --server team.example.lan:41402 --description "..."
 nlteam project list --server team.example.lan:41402
+nlteam project create harbour --repository 19c0d42… --root /srv/team --as ada
 ```
 
 **Every account of this server reaches every project on it.** There is no
@@ -900,6 +901,13 @@ lock on it, and a second process opening the same directory does not fail, it
 waits for ever. What Team reads instead is a checkout of its own — see
 [Reading what is inside a project](internals.md#reading-what-is-inside-a-project).
 
+`--repository <id>` makes it the other command: given one, nothing is created.
+Team records the row under that id and asks `loreserver` for nothing, because the
+repository is already in the store. It prints `adopted` rather than `created`,
+and says so in a sentence, because a repository with years of history in it and
+one made a moment ago are different things to be holding. Both paths take the
+option — see "Taking a project off the list" below, which is what it is for.
+
 `--as` is refused with `--server`, and there is no equivalent: over the protocol
 the account that asked is the account it belongs to, because a method letting
 anybody attribute work to somebody else is not one worth having. `--root` has it
@@ -907,7 +915,9 @@ for the opposite reason — whoever runs that is acting on behalf of a team rath
 than as one of them. The line naming the repository's default branch is left out
 over the protocol too: that is `loreserver`'s answer to the command that asked it
 directly, and this server's record of a project says nothing about a
-repository's branches.
+repository's branches. An adoption leaves it out on either path, and for a
+better reason — nothing asked `loreserver` anything, so there is nothing to
+report about a repository this command did not look at.
 
 Making a project is not an operator's privilege, and `project create --server`
 is not one of the `admin` methods. Every account of this server may make one, and
@@ -927,11 +937,59 @@ can open.
 
 `repositoryId` is optional and says which of two things the call is. Left out,
 Team generates an id and asks `loreserver` for the repository, exactly as
-`project create` does. Given, the repository already exists on the author's own
-machine and they are publishing it: Team records the row under that id and asks
-`loreserver` for nothing, because the copy that will fill it is the one the
-author pushes. It is thirty-two hexadecimal characters, and one that is already
-a project here is refused as a conflict rather than taken over.
+`project create` does. Given, the repository already exists — on the author's own
+machine and they are publishing it, or in this server's own store and it is
+being recorded again: Team records the row under that id and asks `loreserver`
+for nothing. It is thirty-two hexadecimal characters, and one that is already a
+project here is refused as a conflict rather than taken over.
+
+### Taking a project off the list
+
+Taking a project off a server takes the row away and nothing else. The
+repository stays in `loreserver`'s store with every revision in it exactly as
+they were; what has gone is this server's record that the repository is a
+project of its. `projects.forget` on a session is what does it;
+there is no `nlteam project forget`, because the command line grows no verb the
+protocol lacks and has not been given every verb the protocol has.
+
+What it does reach is real, though, because the record is what the rest of this
+server is written against:
+
+- **Nobody can open it.** A repository with no row is not one of this server's
+  projects, so the question `loreserver` asks on each access is answered "no"
+  for everybody, whatever their account. That is the same rule as above, seen
+  from the other side.
+- **The conversations go with it.** Threads, their comments and the attachments
+  hang off the project row with `ON DELETE CASCADE`, and `team.db` is opened
+  with `PRAGMA foreign_keys = ON`, so they are deleted in the same statement.
+  They do not come back with the project, because they were not left anywhere.
+
+Putting the project back is recording one against the repository that is still
+there, and it needs the repository's id:
+
+```sh
+# while it is still a project. The id is the second column
+nlteam project list --root /srv/team
+
+# afterwards, against the repository that never moved
+nlteam project create harbour --repository 19c0d42… --root /srv/team --as ada
+```
+
+Which makes the id the thing to have kept. Nothing left on the list holds it
+once the row has gone, and a project is named rather than numbered everywhere
+else — including in the `lore://` remote an author clones — so **read it off
+`nlteam project list` before taking a project off, not after**. Failing that it
+is in a backup of `team.db`, which is one of the things the rescue plane is for.
+
+Give the project the name it had, too. The remote Team hands every author is
+built from the row's name, so recording the repository under a different one
+changes the address this server advertises for work that has not moved.
+
+The row that comes back is a new row: today's date, and the account `--as` named
+as its creator rather than whoever made the old one, because this server kept
+nothing about a project it was told to forget. What an author opens is
+unchanged — every revision and every branch — because none of it was ever in the
+row.
 
 ## Who may administer this server
 

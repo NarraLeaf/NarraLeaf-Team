@@ -26,15 +26,9 @@ import { openMigratedDatabase } from "./identity/database.js";
 import { KeyStore } from "./identity/keys.js";
 import { identityLayout } from "./identity/layout.js";
 import { storedIdentity, storedTokenLifetimes } from "./identity/settings.js";
-import { mintToken } from "./identity/tokens.js";
 import { countUsers, listUsers, requireUser, type UserRecord } from "./identity/users.js";
-import { loreserverUrl, repositoryCreate } from "./projects/repository.js";
-import {
-  createProject,
-  forgetProject,
-  listProjects,
-  newProjectId,
-} from "./projects/registry.js";
+import { makeOrAdoptProject } from "./projects/create.js";
+import { listProjects } from "./projects/registry.js";
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -46,6 +40,15 @@ export interface ProjectCreateOptions {
   readonly description: string | undefined;
   /** The account the project is created for and belongs to. */
   readonly as: string | undefined;
+  /**
+   * A repository that already exists, to record rather than create.
+   *
+   * Absent is the ordinary case and means a repository is asked for. Present, it
+   * is the id of one already in this server's store — most often one that was
+   * taken off the list, since taking a project off leaves the repository and
+   * every revision in it exactly where they were.
+   */
+  readonly repositoryId: string | undefined;
   /** The port loreserver serves gRPC on. */
   readonly dataPort: number;
   readonly overrides: Partial<IdentityConfig>;
@@ -60,6 +63,8 @@ export interface ProjectCreateOnServerOptions {
   readonly server: string;
   readonly name: string;
   readonly description: string | undefined;
+  /** A repository that already exists, carried as `projects.create`'s `repositoryId`. */
+  readonly repositoryId: string | undefined;
 }
 
 export interface ProjectListOnServerOptions {
@@ -103,12 +108,22 @@ interface MadeProject {
   /** The account it belongs to, or undefined where the answer named none. */
   readonly owner: string | undefined;
   /**
+   * Whether the repository was already there, rather than asked for.
+   *
+   * Said rather than left to be worked out from the missing branch line: a
+   * repository with years of history in it and a repository created a moment ago
+   * are different things to be holding, and the person who ran the command
+   * should not have to infer which one they now have.
+   */
+  readonly adopted: boolean;
+  /**
    * The branch the repository was created with, where the path that made it knew.
    *
-   * Only the local path does. It asks loreserver for the repository itself and
-   * is told what loreserver named the first branch; `projects.create` answers
-   * with the project, which is a record on this server and carries nothing about
-   * the repository's branches. The line is therefore left out rather than filled
+   * Only the local path making a new repository does. It asks loreserver for the
+   * repository itself and is told what loreserver named the first branch;
+   * `projects.create` answers with the project, which is a record on this server
+   * and carries nothing about the repository's branches, and an adoption asks
+   * loreserver nothing at all. The line is therefore left out rather than filled
    * in with the name that is usually right — a default this program does not read
    * is a claim, and the one thing this command must not do is describe a
    * repository it did not look at.
@@ -121,13 +136,25 @@ interface MadeProject {
  *
  * Same reasoning as {@link renderProjects}: an operator who makes one project
  * over ssh and the next over the protocol is reading one thing.
+ *
+ * An adoption gets a different first word and a sentence of its own, because
+ * "created" would be false: nothing was created, an existing repository was
+ * recorded. The sentence says what was not done as well as what was — loreserver
+ * was not asked for anything — since the whole risk with this option is somebody
+ * believing a fresh repository is waiting for them.
  */
 function renderMadeProject(project: MadeProject, stdout: WriteText): void {
-  stdout(`created ${project.name}\n`);
+  stdout(`${project.adopted ? "adopted" : "created"} ${project.name}\n`);
   stdout(`repository ${project.id}\n`);
   stdout(`${`owner ${project.owner ?? ""}`.trimEnd()}\n`);
   if (project.defaultBranch !== undefined) {
     stdout(`default branch ${project.defaultBranch}\n`);
+  }
+  if (project.adopted) {
+    stdout(
+      "The repository already existed and was recorded as it stands, with every revision " +
+        "in it; loreserver was asked for nothing.\n",
+    );
   }
 }
 
@@ -158,12 +185,16 @@ function resolveOperator(database: DatabaseSync, username: string | undefined): 
 }
 
 /**
- * Create a repository on loreserver and record the project it belongs to.
+ * Create a repository on loreserver and record the project it belongs to, or
+ * record one that already exists.
  *
- * The row is written first and removed again if loreserver refuses. That order
- * matters: loreserver announces the new repository back to Team while the create
- * call is still open, and a Team server that had not recorded the project yet would
- * have nothing to say about it.
+ * The ordering that makes this work — the row written before loreserver is asked
+ * and removed again if it refuses — is not here. It is in
+ * ./projects/create.ts, which is what `projects.create` calls too, because two
+ * orderings of the same three steps would be two to keep right and only one of
+ * them is exercised by a Studio installation. What is left here is a storage
+ * root's half of the arrangements: which account this is for, the settings the
+ * token is minted from, and a sentence for each way it can end.
  */
 export async function projectCreate(
   options: ProjectCreateOptions,
@@ -185,48 +216,67 @@ export async function projectCreate(
       ...options.overrides,
     });
     const owner = resolveOperator(database, options.as);
-    const keys = await KeyStore.open(layout.keysDir);
-    // Minted without a password, unlike `token mint`. Whoever runs this already
+    // Opened here rather than inside the create, because this is the half that
+    // knows where a storage root keeps them. The token minted from them is
+    // minted without a password, unlike `token mint`: whoever runs this already
     // has the storage root and could sign anything they liked with the key in
-    // it; a prompt here would be a formality, not a check.
-    //
-    // The repository lifetime and not the sign-in one: this token is handed
-    // straight to loreserver for a single create call and then dropped, and a
-    // token that outlives its one use by a month is one to be found later.
-    const minted = mintToken(owner, keys.signingKey, config, { purpose: "repository" });
+    // it, so a prompt would be a formality rather than a check.
+    const keys = await KeyStore.open(layout.keysDir);
 
-    const id = newProjectId();
-    const project = createProject(database, {
-      id,
-      name: options.name,
-      ...(options.description === undefined ? {} : { description: options.description }),
-      createdBy: owner.id,
-    });
-
-    let repository;
-    try {
-      repository = await repositoryCreate({
-        url: loreserverUrl(options.dataPort),
-        token: minted.token,
-        id: project.id,
-        name: project.name,
-        description: project.description,
-      });
-    } catch (error) {
-      forgetProject(database, project.id);
-      throw error;
-    }
-
-    renderMadeProject(
+    const outcome = await makeOrAdoptProject(
+      // Four fields and not a service, because this is a command line and not a
+      // running server — see ProjectCreationSource on why the parameter is
+      // narrowed to what the function reads rather than widened to what this
+      // path would have to invent.
+      { database, keys, config, dataPort: options.dataPort },
+      owner,
       {
-        name: repository.name,
-        id: repository.id,
-        owner: owner.username,
-        defaultBranch: repository.defaultBranchName,
+        name: options.name,
+        ...(options.description === undefined ? {} : { description: options.description }),
+        ...(options.repositoryId === undefined ? {} : { repositoryId: options.repositoryId }),
       },
-      stdout,
     );
-    return 0;
+
+    switch (outcome.kind) {
+      case "invalid-repository-id":
+        // Worded as `projects.create` words it, and a test drives both paths
+        // with the same bad id and compares them: what a command prints must
+        // not depend on which plane it took.
+        throw new Error("a repository id is thirty-two hexadecimal characters");
+      case "repository-taken":
+        throw new Error(
+          `the repository ${outcome.repositoryId} is already a project on this server`,
+        );
+      case "invalid-name":
+      case "name-taken":
+        // Worded by the registry, which is what refused, and carried through
+        // unedited for the same reason a server's refusal is.
+        throw new Error(outcome.message);
+      case "repository-refused":
+        // loreserver's own sentence, and the row it was about is already gone.
+        // It is the other server that said no, so it says so in its own words
+        // rather than being reported as a fault of this one.
+        throw new Error(outcome.message);
+      case "made":
+      case "repeat":
+        renderMadeProject(
+          {
+            name: outcome.project.name,
+            id: outcome.project.id,
+            owner: owner.username,
+            // A repeat cannot arrive here: it is what a create labelled with a
+            // client id answers when that create already happened, and nothing
+            // on the command line labels one. It is rendered beside the other
+            // because the row it names is the project either way, and whether
+            // loreserver was asked for it follows from the option that was given.
+            adopted:
+              outcome.kind === "made" ? outcome.adopted : options.repositoryId !== undefined,
+            defaultBranch: outcome.kind === "made" ? outcome.defaultBranch : undefined,
+          },
+          stdout,
+        );
+        return 0;
+    }
   } catch (error) {
     stderr(`nlteam: ${describeError(error)}\n`);
     return 1;
@@ -249,6 +299,10 @@ export async function projectCreate(
  * a method that let anybody attribute work to somebody else. The local path has
  * `--as` for the opposite reason: whoever runs it holds the storage root and is
  * acting on behalf of a team rather than as one of them.
+ *
+ * `--repository` is on both paths, because `repositoryId` was on this method
+ * before the command line had an option for it. Nothing was added to the
+ * protocol to reach it, which is the rule this file was written to.
  */
 export async function projectCreateOverProtocol(
   options: ProjectCreateOnServerOptions,
@@ -260,9 +314,7 @@ export async function projectCreateOverProtocol(
       return await session.call(TEAM_METHODS.projectsCreate, {
         name: options.name,
         ...(options.description === undefined ? {} : { description: options.description }),
-        // No `repositoryId`: that field is for an author publishing a repository
-        // they already have on their own machine, which is Studio's path and not
-        // a thing a command line has in front of it.
+        ...(options.repositoryId === undefined ? {} : { repositoryId: options.repositoryId }),
       });
     });
     const project = readCreatedProject(answer);
@@ -271,6 +323,13 @@ export async function projectCreateOverProtocol(
         name: project.name,
         id: project.id,
         owner: project.createdBy,
+        // Read off what was asked for rather than out of the answer, which
+        // carries the project and nothing about how it came to be. It is the
+        // same fact: a create naming a repository adopts, one naming none asks
+        // loreserver, and a repository already registered comes back as a
+        // refusal rather than as a project. Nothing here sends a client id, so
+        // there is no third outcome to confuse it with.
+        adopted: options.repositoryId !== undefined,
         // Not carried by this answer; see the note on MadeProject.
         defaultBranch: undefined,
       },

@@ -68,6 +68,18 @@ describe("run", () => {
     expect(out).toContain("token.repository_lifetime_seconds");
   });
 
+  it("documents recording a repository that already exists, and what it is for", async () => {
+    const { out } = await invoke(["--help"]);
+
+    // Not discoverable by trying it, and the moment somebody wants it is the
+    // moment a project has gone off a list — so the help says what taking one
+    // off leaves behind rather than only naming the flag.
+    expect(out).toContain("--repository <id>");
+    expect(out).toContain("Thirty-two");
+    expect(out).toContain("repository and every revision in it where they were");
+    expect(out).toContain("Both paths take");
+  });
+
   it("documents the up command and its options", async () => {
     const { out } = await invoke(["--help"]);
 

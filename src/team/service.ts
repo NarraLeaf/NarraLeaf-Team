@@ -166,6 +166,20 @@ export function serviceCapabilities(options: TeamService): TeamCapability[] {
 }
 
 /**
+ * What a token is minted from.
+ *
+ * The three fields {@link mintingConfig} reads and none of the rest, written as
+ * a `Pick` of {@link TeamService} so it cannot come to name a field the service
+ * spells differently. It is narrowed for the reason src/team/status.ts narrows
+ * the same way, and so that the narrowed sources built on this one can be handed
+ * to it: a caller holding a storage root is not a running server, has no
+ * listeners, sign-in limiter or repository reader to give, and a parameter
+ * demanding them would be answered with invented values. Every running caller
+ * still hands its whole self, because a `TeamService` already is one of these.
+ */
+export type MintingSource = Pick<TeamService, "database" | "config" | "namedLifetimes">;
+
+/**
  * The settings to mint a token with, as they stand now.
  *
  * The base is what this server was brought up as. The stored lifetimes are read
@@ -175,7 +189,7 @@ export function serviceCapabilities(options: TeamService): TeamCapability[] {
  * setting it names. This is the same order the authorization service mints by,
  * so a token handed out here and one handed out there last the same time.
  */
-export function mintingConfig(options: TeamService): IdentityConfig {
+export function mintingConfig(options: MintingSource): IdentityConfig {
   return {
     ...options.config,
     ...storedTokenLifetimes(options.database),
