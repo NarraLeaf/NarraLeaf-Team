@@ -319,7 +319,6 @@ describe("the deployment identity a token's audience depends on", () => {
         env: "staging",
         idp: "example",
         teamPort: 41500,
-        authPort: 41501,
         authTlsPort: 41502,
         dataPort: 41337,
         hostnames: ["team.example.com", "team.internal"],
@@ -333,7 +332,6 @@ describe("the deployment identity a token's audience depends on", () => {
       env: "staging",
       idp: "example",
       teamPort: 41500,
-      authPort: 41501,
       authTlsPort: 41502,
       dataPort: 41337,
       hostnames: ["team.example.com", "team.internal"],
@@ -347,9 +345,9 @@ describe("the deployment identity a token's audience depends on", () => {
     persistIdentity(connection, identityConfig({ hostnames: ["new.example.com"] }));
 
     expect(storedIdentity(connection).hostnames).toEqual(["new.example.com"]);
-    // Ten settings, one row each, however many times they are written.
+    // Nine settings, one row each, however many times they are written.
     expect(connection.prepare("SELECT COUNT(*) AS count FROM settings").get()).toEqual({
-      count: 10,
+      count: 9,
     });
   });
 

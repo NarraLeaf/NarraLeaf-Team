@@ -1,4 +1,5 @@
 import { createPublicKey, createVerify } from "node:crypto";
+import { createServer, type Server } from "node:http";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -8,6 +9,7 @@ import { KeyStore, type JwksDocument } from "../src/identity/keys.js";
 import { identityLayout } from "../src/identity/layout.js";
 import { mintToken } from "../src/identity/tokens.js";
 import type { UserRecord } from "../src/identity/users.js";
+import { webHandler } from "../src/web/router.js";
 import { useTemporaryRoots } from "./temporary.js";
 
 const temporaryRoot = useTemporaryRoots("nlteam-endpoint-");
@@ -137,5 +139,69 @@ describe("IdentityEndpoint", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ ok: true });
+  });
+});
+
+describe("the same two documents on the TLS listener", () => {
+  const listening: Server[] = [];
+
+  afterEach(async () => {
+    while (listening.length > 0) {
+      const server = listening.pop();
+      await new Promise<void>((resolve) => {
+        server?.close(() => resolve());
+        server?.closeAllConnections();
+      });
+    }
+  });
+
+  /**
+   * The router alone, over plain HTTP.
+   *
+   * TLS is what the listener in `up` puts underneath it and has nothing to do
+   * with which arm answers, so a test that wanted a certificate here would be
+   * testing node rather than this router.
+   */
+  async function router(): Promise<{ url: string; keys: KeyStore }> {
+    const keys = await KeyStore.open(identityLayout(await temporaryRoot()).keysDir);
+    const server = createServer(
+      webHandler(
+        () => {
+          throw new Error("this test asks for no discovery document");
+        },
+        { identity: { jwks: () => keys.jwks(), version: "0.1.0-test" } },
+      ),
+    );
+    listening.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    return { url: `http://127.0.0.1:${port}`, keys };
+  }
+
+  it("answers /health, so an operator asks the address they already have", async () => {
+    const { url } = await router();
+
+    const response = await fetch(`${url}/health`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, version: "0.1.0-test" });
+  });
+
+  it("serves the JWKS, which is the copy that cannot be interfered with", async () => {
+    const { url, keys } = await router();
+
+    const document = (await (await fetch(`${url}/.well-known/jwks.json`)).json()) as JwksDocument;
+
+    expect(document.keys.map((key) => key.kid)).toEqual([keys.signingKey.kid]);
+  });
+
+  it("still answers for an address it has nothing at", async () => {
+    const { url } = await router();
+
+    const response = await fetch(`${url}/health/../users`);
+
+    expect(response.status).toBe(404);
+    await response.body?.cancel();
   });
 });

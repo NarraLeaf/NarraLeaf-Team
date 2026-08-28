@@ -56,21 +56,13 @@ export interface IdentityConfig {
   /** The port Team's own HTTP endpoint listens on. */
   readonly teamPort: number;
   /**
-   * The port Team's authorization service listens on in plain HTTP/2.
+   * The port the authorization service listens on, over TLS.
    *
-   * This is where loreserver, on the same machine, asks whether a caller may
-   * touch a repository. It is a second port rather than a second path on
-   * {@link teamPort} because the two speak different protocols: one serves
-   * documents over HTTP/1.1, the other gRPC over HTTP/2.
-   */
-  readonly authPort: number;
-  /**
-   * The port the same service listens on over TLS.
-   *
-   * A Studio installation signs in here and will not use anything else: its
-   * client library accepts only `https` and `ucs-auth`, and refuses `http` and
-   * `grpc` by name. The two listeners serve identical methods; what differs is
-   * that one is reachable from another machine and one is not.
+   * The only one it listens on. A Studio installation signs in here and will
+   * not use anything else: its client library accepts only `https` and
+   * `ucs-auth`, and refuses `http` and `grpc` by name. loreserver is pointed at
+   * the same address and verifies the certificate there, so the plaintext copy
+   * that used to sit beside it on the loopback had no caller at all.
    */
   readonly authTlsPort: number;
   /**
@@ -111,7 +103,6 @@ export const DEFAULT_IDENTITY: IdentityConfig = {
   signInTokenLifetimeSeconds: 30 * 24 * 60 * 60,
   repositoryTokenLifetimeSeconds: 15 * 60,
   teamPort: 41400,
-  authPort: 41401,
   authTlsPort: 41402,
   dataPort: DEFAULT_PORTS.dataPort,
   hostnames: [],
@@ -141,8 +132,9 @@ export function identityConfig(overrides: Partial<IdentityConfig> = {}): Identit
  *
  * The scheme is fixed at `https`: the origin names an endpoint people
  * authenticate against from other machines, and a password may not travel in
- * clear. Team's own JWKS endpoint is a different thing and is plain HTTP —
- * public keys are not a secret, and loreserver fetches them over the loopback.
+ * clear. The same listener serves the JWKS, and a second loopback listener
+ * serves it in plain HTTP as well — src/identity/endpoint.ts says which caller
+ * needs that and what was measured before it was left there.
  */
 export function authUrl(config: IdentityConfig): string {
   return `https://${config.authOrigin}`;
@@ -234,20 +226,13 @@ export function tokenAudience(config: IdentityConfig): string[] {
   return [...new Set(entries)];
 }
 
-/** Where Team publishes its JWKS, as loreserver is told to fetch it. */
+/**
+ * Where Team publishes its JWKS, as loreserver is told to fetch it.
+ *
+ * Plain HTTP on the loopback, which is not a preference: src/identity/endpoint.ts
+ * records what happens when loreserver is pointed at the https listener instead,
+ * and why the same document is served there as well.
+ */
 export function jwksUrl(teamPort: number, host = "127.0.0.1"): string {
   return `http://${host}:${teamPort}/.well-known/jwks.json`;
-}
-
-/**
- * The plaintext address of the same authorization service, on the loopback.
- *
- * This is not what goes into loreserver's `auth_url`: that key is also how a
- * client is told where to sign in, so it has to be the https origin. This
- * address is the one loreserver can be pointed at when it cannot verify Team's
- * certificate itself, and it is what `nlteam project create` and the tests use,
- * because neither of them is a client that needs telling anything.
- */
-export function plaintextAuthUrl(config: IdentityConfig, host = "127.0.0.1"): string {
-  return `http://${host}:${config.authPort}`;
 }

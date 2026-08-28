@@ -552,7 +552,6 @@ const IDENTITY_AUTH_ORIGIN_KEY = "identity.auth_origin";
 const IDENTITY_ENV_KEY = "identity.env";
 const IDENTITY_IDP_KEY = "identity.idp";
 const IDENTITY_TEAM_PORT_KEY = "identity.team_port";
-const IDENTITY_AUTH_PORT_KEY = "identity.auth_port";
 const IDENTITY_AUTH_TLS_PORT_KEY = "identity.auth_tls_port";
 const IDENTITY_DATA_PORT_KEY = "identity.data_port";
 const IDENTITY_HOSTNAMES_KEY = "identity.hostnames";
@@ -641,7 +640,6 @@ export function storedIdentity(database: DatabaseSync): Partial<IdentityConfig> 
     env?: string;
     idp?: string;
     teamPort?: number;
-    authPort?: number;
     authTlsPort?: number;
     dataPort?: number;
     hostnames?: readonly string[];
@@ -670,10 +668,6 @@ export function storedIdentity(database: DatabaseSync): Partial<IdentityConfig> 
   const teamPort = storedPort(database, IDENTITY_TEAM_PORT_KEY);
   if (teamPort !== undefined) {
     identity.teamPort = teamPort;
-  }
-  const authPort = storedPort(database, IDENTITY_AUTH_PORT_KEY);
-  if (authPort !== undefined) {
-    identity.authPort = authPort;
   }
   const authTlsPort = storedPort(database, IDENTITY_AUTH_TLS_PORT_KEY);
   if (authTlsPort !== undefined) {
@@ -709,7 +703,6 @@ export function persistIdentity(database: DatabaseSync, config: IdentityConfig):
     [IDENTITY_ENV_KEY, config.env],
     [IDENTITY_IDP_KEY, config.idp],
     [IDENTITY_TEAM_PORT_KEY, String(config.teamPort)],
-    [IDENTITY_AUTH_PORT_KEY, String(config.authPort)],
     [IDENTITY_AUTH_TLS_PORT_KEY, String(config.authTlsPort)],
     [IDENTITY_DATA_PORT_KEY, String(config.dataPort)],
     [IDENTITY_HOSTNAMES_KEY, config.hostnames.join(",")],

@@ -19,8 +19,8 @@ import {
   type IdentityConfig,
 } from "./identity/config.js";
 import { openMigratedDatabase } from "./identity/database.js";
-import { discoveryDocument, type DiscoverySource } from "./identity/discovery.js";
 import { IdentityEndpoint } from "./identity/endpoint.js";
+import { discoveryDocument, type DiscoverySource } from "./identity/discovery.js";
 import { KeyStore } from "./identity/keys.js";
 import { identityLayout } from "./identity/layout.js";
 import { namedTokenLifetimes, persistIdentity } from "./identity/settings.js";
@@ -165,7 +165,6 @@ export async function up(
 
   let supervisor: Supervisor | undefined;
   let endpoint: IdentityEndpoint | undefined;
-  let authorization: GrpcServer | undefined;
   let authorizationTls: GrpcServer | undefined;
   let database: DatabaseSync | undefined;
   let readings: ProjectReadings | undefined;
@@ -200,23 +199,31 @@ export async function up(
     // that `up --hostname newname` is what moves the deployment's identity.
     persistIdentity(database, config);
     const keys = await KeyStore.open(identity.keysDir);
-    endpoint = await IdentityEndpoint.start({
-      port: config.teamPort,
-      // The keys directory is read again on every request, so that a
-      // `nlteam key rotate` in another terminal is published without this
-      // process being restarted. It is a handful of small files, and the
-      // document is fetched rarely.
+    // The keys directory is read again on every request, so that a
+    // `nlteam key rotate` in another terminal is published without this process
+    // being restarted. It is a handful of small files, and the document is
+    // fetched rarely.
+    const identityRoutes = {
       jwks: async () => {
         await keys.reload();
         return keys.jwks();
       },
       version: VERSION,
-    });
+    };
+    // Brought up first: it is quick, and a port already taken is worth
+    // discovering before a download rather than after one. What it serves is
+    // served on the TLS listener as well, and src/identity/endpoint.ts records
+    // why loreserver cannot be sent there for it.
+    endpoint = await IdentityEndpoint.start({ ...identityRoutes, port: config.teamPort });
     stdout(`identity endpoint on ${endpoint.url}, signing with ${keys.signingKey.kid}\n`);
 
-    // Both authorization listeners come up whether or not loreserver is told to
-    // use them, so that their ports are proved free at the same moment the
-    // others are, rather than on the first repository access somebody attempts.
+    // What answers every question about a caller, on the one listener this
+    // process opens for it. There was a second: a plaintext copy of this
+    // service on the loopback, for a caller that could not verify a
+    // certificate. There is no such caller — loreserver is told the https
+    // address and runs with this server's own authority as its trust anchor —
+    // so what that listener amounted to was this service, unencrypted and
+    // answering, on a port nothing was ever pointed at.
     const service = {
       database,
       keys,
@@ -238,9 +245,6 @@ export async function up(
       },
       onError: (error: Error) => stderr(`nlteam: authorization service: ${error.message}\n`),
     };
-    authorization = await startAuthorizationService({ ...service, port: config.authPort });
-    stdout(`authorization service on ${authorization.url}\n`);
-
     // The certificates are generated before the listener that needs them, and
     // on every start rather than only the first: the endpoint's own certificate
     // is reissued as it approaches its expiry or when a host name is added, and
@@ -375,13 +379,13 @@ export async function up(
       ...service,
       port: config.authTlsPort,
       // Every interface, not the loopback: this is the listener a Studio
-      // installation on somebody else's machine reaches, and one bound to
-      // 127.0.0.1 would be reachable by nobody but this machine — which is what
-      // the plaintext listener is already for.
+      // installation on somebody else's machine reaches, and it is the only one
+      // this process opens.
       anyInterface: true,
       portOption: "--auth-tls-port",
       tls: { cert: certificates.leafCertPem, key: certificates.leafKeyPem },
       http1: webHandler(() => discoveryDocument(discovery), {
+        identity: identityRoutes,
         studio,
         blobs: { store: blobStore, presence: socket.presence, service: studio },
       }),
@@ -563,9 +567,6 @@ export async function up(
     // of them would keep the process alive after the work is over.
     if (endpoint !== undefined) {
       await endpoint.close();
-    }
-    if (authorization !== undefined) {
-      await authorization.close();
     }
     if (authorizationTls !== undefined) {
       await authorizationTls.close();

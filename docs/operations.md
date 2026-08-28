@@ -79,28 +79,32 @@ interrupted, restarting `loreserver` if it exits, and stops it on the way out.
 | ----- | ------------------------ | ----------------------- | ---------------------------------- |
 | 41337 | `loreserver` data        | gRPC over TCP, and QUIC over UDP | Yes — this is what Studio opens a project through |
 | 41339 | `loreserver` health      | HTTP                    | No                                 |
-| 41400 | Team's endpoint and JWKS  | HTTP/1.1                | No                                 |
-| 41401 | Team's authorization service, in the clear | gRPC over plain HTTP/2 | **No, and it must not be** — see below |
-| 41402 | Team's auth endpoint, the discovery document, and the API Studio talks to | gRPC over TLS, with HTTP/1.1 beside it | Yes — this is where people sign in |
+| 41400 | Team's signing keys and its health, for `loreserver` | HTTP/1.1 | No |
+| 41402 | Team's auth endpoint, the discovery document, the same two documents as 41400, and the API Studio talks to | gRPC over TLS, with HTTP/1.1 beside it | Yes — this is where people sign in |
 
-Only 41337 and 41402 belong on a network a collaborator can reach. The other
-three are between programs on the Team server machine, and `up` binds them to the
+Only 41337 and 41402 belong on a network a collaborator can reach. The other two
+are between programs on the Team server machine, and `up` binds them to the
 loopback so that they are not reachable from anywhere else even if a firewall
 says they are.
 
-41401 deserves the emphasis. It serves the same methods as 41402 with no
-transport security at all, because that is what `loreserver` can speak to Team
-over the loopback; anything that could reach it could sign in as anybody whose
-token it had seen. It is bound to `127.0.0.1` for that reason and moving it to
-another interface is not a supported thing to do.
+41400 deserves a note, because it is the one thing this server says about itself
+in the clear. It carries two documents and nothing else: the public halves of the
+signing keys, and whether this process is answering. Both are served on 41402 as
+well, and that is where an operator should read them. 41400 exists because
+`loreserver` will not fetch the keys anywhere else: it is given Team's authority
+as its only trust anchor and verifies the certificate on the address it asks
+about callers at, but the client behind its `[server.auth.jwk]` setting does not
+use that anchor — pointed at the https address it fails the handshake and exits
+at startup. So the fetch stays in plain HTTP on the loopback, and what bounds the
+risk is that a tampered answer would have to come from the same machine.
 
-Each port is moved by an option: `--data-port`, `--health-port`, `--team-port`,
-`--auth-port` and `--auth-tls-port`. All five must differ, and `up` says so
+Each port is moved by an option: `--data-port`, `--health-port`, `--team-port`
+and `--auth-tls-port`. All four must differ, and `up` says so
 rather than letting whichever lost the race go silently missing. `--data-port`
 carries both of `loreserver`'s data listeners — one number, because gRPC listens
 on TCP and QUIC on UDP. Each option is read from an environment variable of the
-same name — `NLTEAM_DATA_PORT`, `NLTEAM_HEALTH_PORT`, `NLTEAM_TEAM_PORT`,
-`NLTEAM_AUTH_PORT` and `NLTEAM_AUTH_TLS_PORT` — for a container entrypoint that
+same name — `NLTEAM_DATA_PORT`, `NLTEAM_HEALTH_PORT`, `NLTEAM_TEAM_PORT` and
+`NLTEAM_AUTH_TLS_PORT` — for a container entrypoint that
 has no command line to compose; a flag on the line still wins over its variable,
 and where a stored value and the default fall in that order is set out with the
 token's audience under "Signing in" below.
@@ -519,7 +523,7 @@ reachable at
   sign in       https://team.example.lan:41402
   data          lore://team.example.lan:41337
   fingerprint   AB:CD:EF:...
-  loopback      41339 health, 41400 jwks, 41401 authz
+  loopback      41339 health, 41400 jwks
 
 on this server
   accounts      3

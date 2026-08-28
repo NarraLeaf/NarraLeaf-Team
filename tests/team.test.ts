@@ -2829,7 +2829,9 @@ describe("what this server is", () => {
     expect(status["decisions"]).toBe(1);
     expect(status["signingKeys"]).toBe(1);
     expect(status["loreserver"]).toMatchObject({ healthy: true });
-    expect((status["reach"] as { loopback: unknown[] }).loopback).toHaveLength(3);
+    // The health check and the keys. The plaintext authorization listener that
+    // was the third of these is gone, and nothing was ever pointed at it.
+    expect((status["reach"] as { loopback: unknown[] }).loopback).toHaveLength(2);
   });
 
   it("says a loreserver that is not answering is not answering", async () => {

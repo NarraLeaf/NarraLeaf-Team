@@ -227,8 +227,6 @@ mints from what it was started with:
                             audience. Repeatable; the loopback and localhost are
                             always included
       --team-port <port>    Team's own HTTP port (default ${DEFAULT_IDENTITY.teamPort})
-      --auth-port <port>    Port loreserver asks about permissions on, in plain
-                            HTTP/2 on the loopback (default ${DEFAULT_IDENTITY.authPort})
       --auth-tls-port <port>
                             Port clients sign in on, over TLS
                             (default ${DEFAULT_IDENTITY.authTlsPort})

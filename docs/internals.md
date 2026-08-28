@@ -100,12 +100,12 @@ ucs.auth.RebacApi/CreateResource            a repository now exists
 ucs.auth.RebacApi/DeleteResource            a repository is gone
 ```
 
-The same methods are served twice: on 41402 over TLS, which is what a client and
-a Team server-supervised `loreserver` both reach, and on 41401 in plain HTTP/2 on the
-loopback, which is what a `loreserver` that cannot be given Team's authority can
-be pointed at instead. Neither listener is given anything the other is not —
-every method decides from the token it was presented, not from where the
-connection came.
+They are served on one listener, 41402, over TLS. A client reaches it and so
+does the `loreserver` Team supervises, which is given Team's own certificate
+authority and verifies against it. There was a second listener carrying the same
+methods in plain HTTP/2 on the loopback, for a `loreserver` that could not be
+given that authority; nothing was ever pointed at it, so what it amounted to was
+this service answering, unencrypted, on a port with no caller.
 
 Team identifies the caller by verifying the token against its own signing keys,
 and answers with the projects of this server, since every account of it reaches

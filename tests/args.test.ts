@@ -174,10 +174,10 @@ describe("parseArgs, up", () => {
     // Four listeners come up on one machine, so the check covers Team's two as
     // well: whichever lost the race would be silently absent.
     expect(
-      messageFor(["up", "--root", "/srv/team", "--team-port", "9000", "--auth-port", "9000"]),
+      messageFor(["up", "--root", "/srv/team", "--team-port", "9000", "--auth-tls-port", "9000"]),
     ).toContain("cannot both be 9000");
     expect(
-      messageFor(["up", "--root", "/srv/team", "--auth-port", String(DEFAULT_PORTS.dataPort)]),
+      messageFor(["up", "--root", "/srv/team", "--auth-tls-port", String(DEFAULT_PORTS.dataPort)]),
     ).toContain("cannot both be");
   });
 
@@ -241,7 +241,6 @@ describe("parseArgs, the ports and identity from the environment", () => {
         NLTEAM_IDP: "example",
         NLTEAM_TOKEN_LIFETIME: "5m",
         NLTEAM_TEAM_PORT: "41500",
-        NLTEAM_AUTH_PORT: "41501",
         NLTEAM_AUTH_TLS_PORT: "41502",
         NLTEAM_DATA_PORT: "41337",
         NLTEAM_HEALTH_PORT: "41339",
@@ -259,7 +258,6 @@ describe("parseArgs, the ports and identity from the environment", () => {
         idp: "example",
         signInTokenLifetimeSeconds: 300,
         teamPort: 41500,
-        authPort: 41501,
         authTlsPort: 41502,
         dataPort: 41337,
         hostnames: ["team.example.com", "team.internal"],

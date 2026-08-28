@@ -161,7 +161,6 @@ async function gather(options: StatusSource): Promise<TeamAdminStatus> {
       loopback: [
         { port: options.healthPort, what: "health" },
         { port: config.teamPort, what: "jwks" },
-        { port: config.authPort, what: "authz" },
       ],
     },
     // Counts rather than the collections themselves: each of these has a method

@@ -119,7 +119,7 @@ export interface GrpcServerOptions {
 
 /** Raised when the server could not take its port. */
 export class GrpcListenError extends Error {
-  constructor(address: string, cause: Error, portOption = "--auth-port") {
+  constructor(address: string, cause: Error, portOption = "--auth-tls-port") {
     super(
       `Team's authorization service could not listen on ${address}: ${cause.message}. ` +
         `Another program may hold that port; ${portOption} moves it.`,

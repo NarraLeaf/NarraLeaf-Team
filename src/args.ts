@@ -42,7 +42,6 @@ export interface IdentityOverrides {
   /** The sign-in token's lifetime; the repository token's has no option. */
   readonly signInTokenLifetimeSeconds?: number;
   readonly teamPort?: number;
-  readonly authPort?: number;
   readonly authTlsPort?: number;
   readonly dataPort?: number;
   readonly hostnames?: readonly string[];
@@ -285,7 +284,6 @@ const ENVIRONMENT: Readonly<Record<string, string>> = {
   "--idp": "NLTEAM_IDP",
   "--token-lifetime": "NLTEAM_TOKEN_LIFETIME",
   "--team-port": "NLTEAM_TEAM_PORT",
-  "--auth-port": "NLTEAM_AUTH_PORT",
   "--auth-tls-port": "NLTEAM_AUTH_TLS_PORT",
   "--data-port": "NLTEAM_DATA_PORT",
   "--health-port": "NLTEAM_HEALTH_PORT",
@@ -657,7 +655,6 @@ const IDENTITY_OPTIONS = [
   "--idp",
   "--token-lifetime",
   "--team-port",
-  "--auth-port",
   "--auth-tls-port",
   // Not only loreserver's setting: a token's audience has to name the data
   // remote, so every command that mints one has to know the port.
@@ -702,7 +699,6 @@ function readIdentityOverrides(tokens: Tokens, env: NodeJS.ProcessEnv): Identity
     idp?: string;
     signInTokenLifetimeSeconds?: number;
     teamPort?: number;
-    authPort?: number;
     authTlsPort?: number;
     dataPort?: number;
     hostnames?: readonly string[];
@@ -751,14 +747,6 @@ function readIdentityOverrides(tokens: Tokens, env: NodeJS.ProcessEnv): Identity
       return port;
     }
     overrides.teamPort = port;
-  }
-  const authPort = optionValue(tokens, env, "--auth-port");
-  if (authPort !== undefined) {
-    const port = parsePort("--auth-port", authPort);
-    if (typeof port === "string") {
-      return port;
-    }
-    overrides.authPort = port;
   }
   const authTlsPort = optionValue(tokens, env, "--auth-tls-port");
   if (authTlsPort !== undefined) {
@@ -849,7 +837,7 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   // loreserver's, because a token's audience names it. It is read once, there.
   const dataPort = overrides.dataPort ?? DEFAULT_PORTS.dataPort;
 
-  // Five TCP listeners come up on one machine, and two on the same port would
+  // Four TCP listeners come up on one machine, and two on the same port would
   // leave whichever lost the race silently absent. loreserver's gRPC and QUIC
   // listeners deliberately share one number, one on TCP and one on UDP, which
   // is why only one of them is in this list.
@@ -857,7 +845,6 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
     ["--data-port", dataPort],
     ["--health-port", healthPort],
     ["--team-port", overrides.teamPort ?? DEFAULT_IDENTITY.teamPort],
-    ["--auth-port", overrides.authPort ?? DEFAULT_IDENTITY.authPort],
     ["--auth-tls-port", overrides.authTlsPort ?? DEFAULT_IDENTITY.authTlsPort],
   ];
   for (const [index, listener] of listeners.entries()) {
