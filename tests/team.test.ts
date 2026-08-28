@@ -28,7 +28,9 @@ import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/pas
 import { mintToken } from "../src/identity/tokens.js";
 import { recordDecision } from "../src/identity/audit.js";
 import { addComment } from "../src/comments/store.js";
+import { listOverlay, putOverlay } from "../src/overlay/store.js";
 import { MAXIMUM_PAGE } from "../src/team/methods/comments.js";
+import { MAXIMUM_LIMIT, MAXIMUM_PAGE_BYTES } from "../src/team/methods/overlay.js";
 import {
   ADMIN_ROLE,
   createUser,
@@ -2424,6 +2426,77 @@ describe("what is attached to a project without being in it", () => {
       total: number;
     };
     expect(rows.total).toBe(0);
+  });
+
+  it("ends a page at the bytes on it rather than only at the count", async () => {
+    const { ada, team, project } = await withTwo();
+    const author = requireUser(team.database, "ada").id;
+    // Ten of these are the page budget exactly, so the eleventh is what the
+    // ceiling has to stop. Written straight into the store: what is being
+    // checked is the size of the answer, not the write path.
+    const body = "b".repeat(MAXIMUM_PAGE_BYTES / 10);
+    for (let index = 0; index < 12; index += 1) {
+      putOverlay(team.database, {
+        projectId: project,
+        revision: "rev-1",
+        anchor: { document: "story/act-one.json", revision: "rev-1" },
+        kind: "review",
+        body,
+        authorId: author,
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    // Asked for every one of them by count, and answered with as many as the
+    // bytes allow.
+    const first = await ada.value(TEAM_METHODS.overlayList, { project, limit: MAXIMUM_LIMIT });
+    const page = first["records"] as { id: string; body: string }[];
+    expect(page).toHaveLength(10);
+    expect(page.reduce((total, record) => total + record.body.length, 0)).toBeLessThanOrEqual(
+      MAXIMUM_PAGE_BYTES,
+    );
+    expect(typeof first["cursor"]).toBe("string");
+    // The count beside the page is still the whole of what the project holds.
+    expect(first["total"]).toBe(12);
+
+    const rest = await ada.value(TEAM_METHODS.overlayList, {
+      project,
+      limit: MAXIMUM_LIMIT,
+      before: first["cursor"],
+    });
+    const tail = rest["records"] as { id: string }[];
+    expect(tail).toHaveLength(2);
+    expect(rest["cursor"]).toBeUndefined();
+    // No record is on both pages and none was skipped between them.
+    expect(new Set([...page, ...tail].map((record) => record.id)).size).toBe(12);
+  });
+
+  it("puts one record on a page even where that record is larger than the budget", async () => {
+    const { team, project } = await withTwo();
+    const author = requireUser(team.database, "ada").id;
+    for (let index = 0; index < 2; index += 1) {
+      putOverlay(team.database, {
+        projectId: project,
+        revision: "rev-1",
+        anchor: { document: "story/act-one.json", revision: "rev-1" },
+        kind: "review",
+        body: "b".repeat(64),
+        authorId: author,
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    // Read with a budget smaller than one record, which the field limits mean
+    // the method itself cannot produce. A page that came back empty here would
+    // be a cursor that never moved and a record nobody could ever read past.
+    const query = { projectId: project, limit: 500, limitBytes: 8 };
+    const first = listOverlay(team.database, query);
+    expect(first.records).toHaveLength(1);
+    expect(first.cursor).toBeDefined();
+
+    const rest = listOverlay(team.database, { ...query, before: first.cursor as string });
+    expect(rest.records).toHaveLength(1);
+    expect(rest.cursor).toBeUndefined();
   });
 });
 
