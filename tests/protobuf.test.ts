@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { encodeFrame, FrameAssembler, MAXIMUM_MESSAGE_BYTES } from "../src/grpc/framing.js";
+import {
+  encodeFrame,
+  FrameAssembler,
+  MAXIMUM_MESSAGE_BYTES,
+  UNARY_CALL_MESSAGES,
+} from "../src/grpc/framing.js";
 import {
   MalformedMessageError,
   MessageReader,
@@ -12,7 +17,12 @@ import {
   WIRE_FIXED64,
   WIRE_VARINT,
 } from "../src/grpc/protobuf.js";
-import { decodeStatusMessage, encodeStatusMessage, GrpcStatusError } from "../src/grpc/status.js";
+import {
+  decodeStatusMessage,
+  encodeStatusMessage,
+  GRPC_INVALID_ARGUMENT,
+  GrpcStatusError,
+} from "../src/grpc/status.js";
 
 /** The bytes of a message, as hex, which is how a wire format is compared. */
 function hex(writer: MessageWriter): string {
@@ -281,7 +291,7 @@ describe("gRPC framing", () => {
 
   it("reassembles a message split across chunks, one byte at a time", () => {
     const frame = encodeFrame(Buffer.from("a message worth splitting", "utf8"));
-    const assembler = new FrameAssembler();
+    const assembler = new FrameAssembler(UNARY_CALL_MESSAGES);
 
     const messages: Buffer[] = [];
     for (const byte of frame) {
@@ -293,8 +303,8 @@ describe("gRPC framing", () => {
     expect(assembler.incomplete).toBe(false);
   });
 
-  it("finds both messages when two arrive in one chunk", () => {
-    const assembler = new FrameAssembler();
+  it("finds every message a chunk completed, up to what the call may carry", () => {
+    const assembler = new FrameAssembler(2);
 
     const messages = assembler.push(
       Buffer.concat([encodeFrame(Buffer.from("one")), encodeFrame(Buffer.from("two"))]),
@@ -303,8 +313,27 @@ describe("gRPC framing", () => {
     expect(messages.map((message) => message.toString("utf8"))).toEqual(["one", "two"]);
   });
 
+  it("refuses a second message on a call that carries one, and never decodes it", () => {
+    const assembler = new FrameAssembler(UNARY_CALL_MESSAGES);
+    const frame = encodeFrame(Buffer.from("one"));
+
+    // Both in the same chunk, which is the case a reader that turned the second
+    // one away could not have helped with: by the time it saw the first, every
+    // message in that chunk would already have been decoded and held.
+    let refusal: unknown;
+    try {
+      assembler.push(Buffer.concat([frame, frame]));
+    } catch (error) {
+      refusal = error;
+    }
+
+    expect(refusal).toBeInstanceOf(GrpcStatusError);
+    expect((refusal as GrpcStatusError).status).toBe(GRPC_INVALID_ARGUMENT);
+    expect((refusal as GrpcStatusError).message).toContain("one message");
+  });
+
   it("says so when a stream stopped in the middle of a message", () => {
-    const assembler = new FrameAssembler();
+    const assembler = new FrameAssembler(UNARY_CALL_MESSAGES);
 
     expect(assembler.push(encodeFrame(Buffer.from("truncated")).subarray(0, 8))).toEqual([]);
     expect(assembler.incomplete).toBe(true);
@@ -314,14 +343,14 @@ describe("gRPC framing", () => {
     const frame = encodeFrame(Buffer.from("compressed"));
     frame.writeUInt8(1, 0);
 
-    expect(() => new FrameAssembler().push(frame)).toThrow(GrpcStatusError);
+    expect(() => new FrameAssembler(UNARY_CALL_MESSAGES).push(frame)).toThrow(GrpcStatusError);
   });
 
   it("refuses a length larger than it will ever accept, before allocating for it", () => {
     const header = Buffer.alloc(5);
     header.writeUInt32BE(MAXIMUM_MESSAGE_BYTES + 1, 1);
 
-    expect(() => new FrameAssembler().push(header)).toThrow(/larger than/);
+    expect(() => new FrameAssembler(UNARY_CALL_MESSAGES).push(header)).toThrow(/larger than/);
   });
 });
 

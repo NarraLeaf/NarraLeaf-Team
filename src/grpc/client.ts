@@ -13,7 +13,7 @@
  */
 import { connect, type ClientHttp2Session, type IncomingHttpHeaders } from "node:http2";
 
-import { encodeFrame, FrameAssembler } from "./framing.js";
+import { encodeFrame, FrameAssembler, UNARY_CALL_MESSAGES } from "./framing.js";
 import {
   decodeStatusMessage,
   GRPC_INTERNAL,
@@ -131,7 +131,10 @@ export async function unaryCall(options: UnaryCallOptions): Promise<Buffer> {
         request.close();
       });
 
-      const assembler = new FrameAssembler();
+      // A reply to a unary call is one message, and only the first is read
+      // below in any case. Saying so here means a service that sent more is
+      // refused rather than quietly held while this side ignores it.
+      const assembler = new FrameAssembler(UNARY_CALL_MESSAGES);
       const messages: Buffer[] = [];
       let outcome: { status: number; message: string } | undefined;
 

@@ -30,7 +30,7 @@ import {
   type ServerHttp2Session,
 } from "node:http2";
 
-import { encodeFrame, FrameAssembler } from "./framing.js";
+import { encodeFrame, FrameAssembler, UNARY_CALL_MESSAGES } from "./framing.js";
 import {
   encodeStatusMessage,
   GRPC_INTERNAL,
@@ -187,7 +187,7 @@ function handleStream(
 ): void {
   const path = headerValue(headers, ":path") ?? "";
   const method = options.methods[path];
-  const assembler = new FrameAssembler();
+  const assembler = new FrameAssembler(UNARY_CALL_MESSAGES);
   /** The one message a call carries, once enough of the stream has arrived. */
   let message: Buffer | undefined;
 
@@ -214,23 +214,13 @@ function handleStream(
       return;
     }
     try {
+      // At most one, because the assembler was told what a call to this service
+      // carries and refuses a second where it would otherwise have decoded it.
+      // So a caller that sends more is turned away by the same typed failure
+      // every other framing refusal travels as, rather than by a second
+      // mechanism written here.
       for (const decoded of assembler.push(chunk)) {
-        if (message === undefined) {
-          message = decoded;
-          continue;
-        }
-        // Every method this service serves is one message in and one message
-        // out, so a second is not part of a call this can answer. Keeping them
-        // to read the first would mean a four-mebibyte body of five-byte empty
-        // frames retaining the best part of a million buffers, for a call
-        // whose answer was decided by its first frame.
-        respondWithStatus(
-          stream,
-          GRPC_INVALID_ARGUMENT,
-          "this method takes one message, and this call carried more than one",
-        );
-        stream.close();
-        return;
+        message = decoded;
       }
     } catch (error) {
       const status = error instanceof GrpcStatusError ? error.status : GRPC_INTERNAL;
