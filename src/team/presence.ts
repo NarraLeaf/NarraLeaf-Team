@@ -188,6 +188,17 @@ export class TeamPresence {
      * file decides what changed, and the hub decides who hears about it.
      */
     private readonly publish: (topic: string, payload: unknown) => void,
+    /**
+     * That a topic addresses something which no longer exists.
+     *
+     * A room's own topic is named after a session id that is never reused, so
+     * the hub's count of it is worth nothing the moment the room ends. Said
+     * here because this is where a room ends, and left to the hub because what
+     * to do about a topic nobody will publish on again is its business.
+     *
+     * Optional, so that a test wanting a presence in one line still gets one.
+     */
+    private readonly forgetTopic?: (topic: string) => void,
   ) {}
 
   /* --------------------------------------------------------------- instances */
@@ -684,6 +695,10 @@ export class TeamPresence {
   private end(session: LiveEntry): void {
     this.sessions.delete(session.id);
     this.publish(projectLiveTopic(session.project), { kind: "live-closed", session: session.id });
+    // The project's topic goes on; the room's does not. Nothing will ever
+    // publish on a session id again, and a client still holding a subscription
+    // to it is holding one to a room it has just been told has closed.
+    this.forgetTopic?.(liveTopic(session.id));
   }
 
   private announceChange(session: LiveEntry): void {

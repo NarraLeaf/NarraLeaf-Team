@@ -5,6 +5,7 @@ import {
   TeamPresence,
   TooManyInstancesError,
 } from "../src/team/presence.js";
+import { liveTopic } from "../src/team/protocol.js";
 
 /**
  * The bookkeeping behind an announcement, tested without a socket.
@@ -54,5 +55,60 @@ describe("what a connection is holding", () => {
     presence.dropConnection("first");
 
     expect(presence.clients().map((client) => client.id)).toEqual(["her-laptop"]);
+  });
+});
+
+describe("what a room leaves behind it", () => {
+  /** A presence that writes down every topic it was told to stop counting. */
+  function watching(): { presence: TeamPresence; retired: string[] } {
+    const retired: string[] = [];
+    const presence = new TeamPresence(
+      () => undefined,
+      (topic) => {
+        retired.push(topic);
+      },
+    );
+    return { presence, retired };
+  }
+
+  const room = {
+    project: "a-project",
+    revision: "r1",
+    story: "editor/story/stories/one/storydoc.json",
+  };
+
+  it("retires its own topic when it is closed, and not the project's", () => {
+    const { presence, retired } = watching();
+    const her = presence.announce("hers", "ada", {
+      ...announcing("her-laptop"),
+      project: room.project,
+    });
+    const opened = presence.open(her, room);
+
+    // Nothing is retired while it is open: the room is still a thing a client
+    // can subscribe to and be told about.
+    expect(retired).toEqual([]);
+
+    expect(presence.close(her.id, opened.session.id)).toBe(true);
+
+    // A session id is minted per room and never used again, so its count is
+    // worth nothing the moment the room is over. The project's topics are not
+    // here, because the project has not gone anywhere.
+    expect(retired).toEqual([liveTopic(opened.session.id)]);
+  });
+
+  it("retires it when the last window goes as well as when it is closed", () => {
+    const { presence, retired } = watching();
+    const her = presence.announce("hers", "ada", {
+      ...announcing("her-laptop"),
+      project: room.project,
+    });
+    const opened = presence.open(her, room);
+
+    // Every way out of a room leads to the same place, so a socket closing has
+    // to leave as little behind as pressing the button does.
+    presence.dropConnection("hers");
+
+    expect(retired).toEqual([liveTopic(opened.session.id)]);
   });
 });

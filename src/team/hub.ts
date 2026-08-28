@@ -62,6 +62,26 @@ export class TeamHub {
   }
 
   /**
+   * Forget a topic's sequence, because there is no longer a thing it addressed.
+   *
+   * Every topic ever published on leaves an entry here, and most of them are
+   * addressed at something long-lived — this server, or a project. A live
+   * session is not: it is opened by somebody pressing something, ends when they
+   * go, and its id is never used again. Without this, a client opening and
+   * closing rooms in a loop would grow this map for as long as the process ran,
+   * at no cost to itself.
+   *
+   * Dropping a sequence is the same statement a restart makes: the number a
+   * subscriber is given next will not be the one it last saw, so it reads the
+   * collection again. For a room that has ended there is no collection and no
+   * subscriber that could act on one, which is why this is safe to do here and
+   * would not be for a project that is merely quiet.
+   */
+  forget(topic: string): void {
+    this.sequences.delete(topic);
+  }
+
+  /**
    * Say that something happened, to whoever is listening.
    *
    * The sequence moves whether or not anybody is listening, so a client that

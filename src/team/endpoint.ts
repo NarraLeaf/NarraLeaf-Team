@@ -131,12 +131,18 @@ export function createTeamSocket(options: TeamSocketOptions): TeamSocket {
   const capabilities = (): readonly TeamCapability[] =>
     serverCapabilities(methods, options.service);
   const hub = new TeamHub();
-  // Given the hub's publish rather than the hub, because what presence needs is
-  // a way to reach whoever is listening and nothing else. The one-way dependency
-  // is what keeps a room from being able to end a session or count them.
-  const presence = new TeamPresence((topic, payload) => {
-    hub.publish(topic, payload);
-  });
+  // Given two of the hub's methods rather than the hub itself, because what
+  // presence needs is a way to reach whoever is listening and a way to say that
+  // a topic has stopped addressing anything. The one-way dependency is what
+  // keeps a room from being able to end a session or count them.
+  const presence = new TeamPresence(
+    (topic, payload) => {
+      hub.publish(topic, payload);
+    },
+    (topic) => {
+      hub.forget(topic);
+    },
+  );
 
   const handleUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): boolean => {
     const path = new URL(request.url ?? "/", "http://team.invalid").pathname;
