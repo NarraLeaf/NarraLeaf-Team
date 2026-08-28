@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { chmod, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -162,5 +163,64 @@ describe("migrate", () => {
 
     expect(layout.databasePath).toBe(join(layout.root, "team.db"));
     expect(layout.keysDir).toBe(join(layout.root, "keys"));
+  });
+});
+
+// Windows has no POSIX mode bits and a chmod there does close to nothing, so
+// there is nothing on that platform for these two to assert. They are skipped
+// rather than weakened: an assertion that passes because it checked nothing is
+// worse than one that says which hosts it speaks for.
+describe.skipIf(process.platform === "win32")("the file the password hashes are in", () => {
+  /** Every file the database is, and the mode each of them is at. */
+  async function modes(path: string): Promise<Array<[string, number]>> {
+    const found: Array<[string, number]> = [];
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const file = `${path}${suffix}`;
+      if (existsSync(file)) {
+        found.push([suffix === "" ? "team.db" : `team.db${suffix}`, (await stat(file)).mode & 0o777]);
+      }
+    }
+    return found;
+  }
+
+  it("is readable by nobody but its owner, write-ahead log and all", async () => {
+    const root = await temporaryRoot();
+    const path = identityLayout(root).databasePath;
+    const database = await openMigratedDatabase(path);
+    try {
+      // The log is named on purpose. It holds the rows that have not been
+      // checkpointed yet, so a readable one beside an unreadable database
+      // hands over whatever was written most recently — which, on a server
+      // somebody has just made an account on, is that account.
+      const found = await modes(path);
+
+      expect(found.map(([name]) => name)).toContain("team.db");
+      for (const [, mode] of found) {
+        expect(mode).toBe(0o600);
+      }
+    } finally {
+      database.close();
+    }
+  });
+
+  it("is tightened when it was left readable by an older Team", async () => {
+    const root = await temporaryRoot();
+    const path = identityLayout(root).databasePath;
+
+    const first = await openMigratedDatabase(path);
+    first.close();
+    // What a server that predates this left on disk: a file created under
+    // whatever the umask allowed. Upgrading Team has to fix it, because
+    // nobody is going to be told to go and chmod it themselves.
+    await chmod(path, 0o644);
+
+    const second = await openDatabase(path);
+    try {
+      for (const [, mode] of await modes(path)) {
+        expect(mode).toBe(0o600);
+      }
+    } finally {
+      second.close();
+    }
   });
 });
