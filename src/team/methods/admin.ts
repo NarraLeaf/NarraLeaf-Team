@@ -80,9 +80,11 @@ import {
   DEFAULT_ROLE,
   disableUser,
   DISPLAY_NAME_LIMIT,
+  EMAIL_LIMIT,
   enableUser,
   findUser,
   InvalidDisplayNameError,
+  InvalidEmailError,
   InvalidRoleError,
   InvalidUsernameError,
   isOperator,
@@ -177,8 +179,6 @@ const USERNAME_LIMIT = 64;
  */
 const PASSWORD_LIMIT = 1024;
 
-/** The most an email address may be, which is what RFC 5321 allows a path to be. */
-const EMAIL_LIMIT = 320;
 
 /** The most a setting's label may be. They are short words; this is the gross bound. */
 const SETTING_LABEL_LIMIT = 64;
@@ -511,6 +511,7 @@ export function adminMethods(): TeamMethod[] {
           error instanceof InvalidUsernameError ||
           error instanceof WeakPasswordError ||
           error instanceof InvalidDisplayNameError ||
+          error instanceof InvalidEmailError ||
           error instanceof InvalidRoleError
         ) {
           // Carried through as they were written rather than reworded. These

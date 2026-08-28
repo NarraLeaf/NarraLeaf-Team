@@ -11,9 +11,11 @@ import {
   createUser,
   disableUser,
   DISPLAY_NAME_LIMIT,
+  EMAIL_LIMIT,
   enableUser,
   findUser,
   InvalidDisplayNameError,
+  InvalidEmailError,
   InvalidUsernameError,
   listUsers,
   pageUsers,
@@ -107,6 +109,32 @@ describe("createUser", () => {
       }),
     ).rejects.toBeInstanceOf(InvalidDisplayNameError);
     expect(countUsers(connection)).toBe(0);
+  });
+
+  it("refuses an email address longer than a token can carry", async () => {
+    const connection = await database();
+
+    // The other claim that rides in the same header, refused in the same place
+    // and for the same reason: an account this server stored and then could not
+    // issue a usable token for is one nothing on a client can repair.
+    await expect(
+      createUser(connection, hasher, {
+        username: "ada",
+        password: PASSWORD,
+        email: `${"a".repeat(EMAIL_LIMIT)}@example.com`,
+      }),
+    ).rejects.toBeInstanceOf(InvalidEmailError);
+    expect(countUsers(connection)).toBe(0);
+  });
+
+  it("stores an account with no email address at all", async () => {
+    const connection = await database();
+
+    // Absent is the ordinary case, and an account without an address carries no
+    // claim that could be too long. The bound must not turn into a requirement.
+    const ada = await createUser(connection, hasher, { username: "ada", password: PASSWORD });
+
+    expect(ada.email).toBeUndefined();
   });
 
   it("counts a display name in bytes, not in characters", async () => {

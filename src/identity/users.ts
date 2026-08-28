@@ -103,6 +103,25 @@ export class InvalidDisplayNameError extends Error {
   }
 }
 
+/**
+ * Raised when an email address is longer than one may be.
+ *
+ * The same failure as a display name too long, from the other claim: an address
+ * reaches the `email` claim of every token this account is issued, and a token
+ * travels in a header. What differs is only the figure.
+ */
+export class InvalidEmailError extends Error {
+  constructor() {
+    super(
+      `an email address must be at most ${EMAIL_LIMIT} bytes. It is carried by every ` +
+        "token this account is issued, tokens travel in an authorization header, and a " +
+        "header past what will be sent leaves the account unable to open a connection at " +
+        "all — so an address too long is an account locked out by its own address.",
+    );
+    this.name = "InvalidEmailError";
+  }
+}
+
 /** Raised when a role is not a name a group can have. */
 export class InvalidRoleError extends Error {
   constructor(role: string) {
@@ -134,6 +153,16 @@ export const MINIMUM_PASSWORD_LENGTH = 10;
  * takes their access away rather than merely looking wrong.
  */
 export const DISPLAY_NAME_LIMIT = 128;
+
+/**
+ * The most an email address may be, in bytes.
+ *
+ * What RFC 5321 allows a path to be, which is the figure the protocol method
+ * has always read one at. It is here beside the display name's because both
+ * ride in a token and both lock an account out at the same place if they are
+ * let past.
+ */
+export const EMAIL_LIMIT = 320;
 
 /** The group an account joins when no role is named. */
 export const DEFAULT_ROLE = "member";
@@ -381,6 +410,12 @@ export async function prepareUser(
   // in front of them at all.
   if (Buffer.byteLength(displayName, "utf-8") > DISPLAY_NAME_LIMIT) {
     throw new InvalidDisplayNameError();
+  }
+  // The address, for the same reason and at the figure the protocol method has
+  // always read one at. Absent is the ordinary case, and an account without one
+  // carries no claim to be too long.
+  if (input.email !== undefined && Buffer.byteLength(input.email, "utf-8") > EMAIL_LIMIT) {
+    throw new InvalidEmailError();
   }
   // Checked here rather than where a role is read from a command line, because
   // a group name reaches the `groups` claim of every token this account is

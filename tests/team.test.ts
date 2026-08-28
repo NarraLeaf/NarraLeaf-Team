@@ -3045,6 +3045,12 @@ describe("the largest answer this server composes", () => {
     // The other extreme, and the one the byte ceiling never reaches: rows small
     // enough that the count is what ends the page, so what is weighed here is
     // the fields around two thousand rows rather than what is in them.
+    //
+    // Written in one transaction, because otherwise this is two thousand
+    // commits and the setup takes several seconds of waiting on a disk while
+    // proving nothing. What is under test is the answer, not what it costs to
+    // arrange one.
+    team.database.exec("BEGIN");
     for (let index = 0; index < MAXIMUM_LIMIT + 10; index += 1) {
       putOverlay(team.database, {
         projectId: project,
@@ -3056,6 +3062,7 @@ describe("the largest answer this server composes", () => {
         now: 1_700_000_000_000 + index,
       });
     }
+    team.database.exec("COMMIT");
 
     const answer = await ada.value(TEAM_METHODS.overlayList, { project, limit: MAXIMUM_LIMIT });
     expect((answer["records"] as unknown[]).length).toBe(MAXIMUM_LIMIT);
