@@ -515,12 +515,16 @@ export const PAGE_BYTES_LIMIT = 1024 * 1024;
  * That is a little over one and a half mebibytes; the rest is the room a JSON
  * escape takes in text that needs one, and the frame the answer travels in.
  *
- * **Two answers are not bounded by it and are named here rather than left to be
- * discovered.** A page of a project's history carries commit messages, which
- * come out of a repository rather than out of a bounded column; and a server's
- * key list grows with however many times it has rotated. Both are far inside
- * this figure on any real deployment, and neither would be made safe by moving
- * it — they need bounds of their own.
+ * **Two answers stand outside that working-out and are named here rather than
+ * left to be discovered.** A server's key list grows with however many times it
+ * has rotated, and nothing weighs it at all. And a page of a project's history
+ * is weighed like every other page, but the one row a page admits beyond its
+ * budget is a commit message, which comes out of a repository rather than out
+ * of a field this protocol bounds — so one revision pushed with a message
+ * larger than this figure is one answer larger than this figure. Weighing the
+ * page is what makes that a single row rather than a hundred of them; the
+ * remedy for the row itself would be to report less of a message than the
+ * repository holds, which is not something this server does anywhere.
  */
 export const ANSWER_BYTES_LIMIT = 2 * 1024 * 1024;
 

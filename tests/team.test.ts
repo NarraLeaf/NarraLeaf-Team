@@ -790,6 +790,71 @@ describe("a project's history over the socket", () => {
     expect(second).not.toHaveProperty("cursor");
   });
 
+  it("hands the reader a byte ceiling as well as a count", async () => {
+    // The count on its own bounds nothing about how large this answer is: a
+    // revision carries the message it was pushed with, which comes out of a
+    // repository rather than out of a column this server bounds. So the method
+    // names both ceilings and the reader stops at whichever comes first - and a
+    // method that named only the count would leave the largest answer on this
+    // server weighed by nobody.
+    const asked: { limit: number; limitBytes: number }[] = [];
+    const team = await harness({
+      readings: {
+        get: () => undefined,
+        revisions: (_projectId, page) => {
+          asked.push({ limit: page.limit, limitBytes: page.limitBytes });
+          return Promise.resolve({ revisions: [], more: false });
+        },
+      },
+    });
+    const ada = await account(team.database, "ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    await client.value(TEAM_METHODS.projectsHistory, { project: project.id, limit: 7 });
+
+    expect(asked).toEqual([{ limit: 7, limitBytes: PAGE_BYTES_LIMIT }]);
+  });
+
+  it("carries on from the last revision the reader put on a page it cut short", async () => {
+    // A page the byte ceiling ended early is still a page, and the cursor is
+    // the revision it really ended at rather than the one the count would have
+    // reached. A cursor taken from what was asked for instead would skip
+    // whatever the budget left off.
+    const team = await harness({
+      readings: {
+        get: () => undefined,
+        // Two of the twenty asked for, because the messages on them filled the
+        // budget - which is what the reader does with a history of long ones.
+        revisions: () => Promise.resolve({ revisions: [{ id: "r9" }, { id: "r8" }], more: true }),
+      },
+    });
+    const ada = await account(team.database, "ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.projectsHistory, {
+      project: project.id,
+      limit: 20,
+    });
+
+    expect((answer["revisions"] as { id: string }[]).map((revision) => revision.id)).toEqual([
+      "r9",
+      "r8",
+    ]);
+    expect(answer["cursor"]).toBe("r8");
+  });
+
   it("answers an empty page for a project it has no checkout of", async () => {
     const team = await harness(pagedReader({}));
     const ada = await account(team.database, "ada");

@@ -282,6 +282,19 @@ export interface RevisionPageRequest {
   readonly projectId: string;
   /** How many revisions this page holds at most. */
   readonly limit: number;
+  /**
+   * The most the revisions on one page may weigh, in UTF-8 bytes.
+   *
+   * A second ceiling, because the count is not a bound on anything here. Every
+   * variable-length field of a revision — the message somebody wrote when they
+   * pushed, and the name they pushed as — comes out of a repository rather than
+   * out of a column this server writes, so there is no per-field limit standing
+   * behind the count the way there is on every other list this server answers
+   * with. A hundred revisions whose messages are each a release note is an
+   * answer nothing else would stop. Whichever of the two is reached first ends
+   * the page.
+   */
+  readonly limitBytes: number;
   /** The revision the last page ended at; this one starts after it. */
   readonly before?: string;
 }
@@ -326,23 +339,16 @@ export async function readRevisionPage(
     const start = after === undefined ? history.length : after + 1;
     const page = history.slice(start, start + request.limit);
 
-    const revisions: RevisionPageEntry[] = [];
-    for (const entry of page) {
-      // A revision whose metadata cannot be read still counts as a revision:
-      // the id is true either way, and the who and the when are absent rather
-      // than the page being lost.
-      const details: RevisionDetails = await revisionDetails(globals, entry.revision).catch(
-        () => ({}),
-      );
-      revisions.push({
-        id: entry.revision,
-        ...(details.timestamp === undefined ? {} : { at: details.timestamp }),
-        ...(details.author === undefined ? {} : { by: details.author }),
-        ...(details.message === undefined ? {} : { message: details.message }),
-      });
-    }
+    const revisions = await fillRevisionPage(
+      page.map((entry) => entry.revision),
+      request.limitBytes,
+      (revision) => revisionDetails(globals, revision),
+    );
 
-    return { revisions, more: start + page.length < history.length };
+    // Counted from what went on the page rather than from what was offered to
+    // it, so that a page the budget cut short says there is more — which there
+    // is, and the cursor beside it is the revision to carry on after.
+    return { revisions, more: start + revisions.length < history.length };
   } catch {
     // A project with no checkout, or one whose checkout is half made. Both are
     // "Team has not read this yet", and neither is an error a person can act on.
@@ -352,6 +358,70 @@ export async function readRevisionPage(
     // directory is one the refresh may be about to replace.
     await releaseRepository(globals).catch(() => undefined);
   }
+}
+
+/**
+ * What one revision adds to an answer, in UTF-8 bytes.
+ *
+ * The three fields that came out of the repository, which is the whole of what
+ * is not bounded elsewhere: the message somebody wrote when they pushed, the
+ * name they pushed as, and the id. The timestamp beside them is the same
+ * handful of bytes on every revision there is, and the count ceiling is what
+ * bounds that.
+ */
+function weigh(entry: RevisionPageEntry): number {
+  return (
+    Buffer.byteLength(entry.id, "utf-8") +
+    Buffer.byteLength(entry.by ?? "", "utf-8") +
+    Buffer.byteLength(entry.message ?? "", "utf-8")
+  );
+}
+
+/**
+ * Read the revisions of one page, and stop at the budget.
+ *
+ * Its own function because it is the half of a page that can be checked without
+ * a repository behind it: which revisions go on and where the page stops, apart
+ * from the calls that fill them in.
+ *
+ * **The metadata is read inside the loop rather than before it**, which is the
+ * reason a history is weighed here and not where the answer is composed: a page
+ * cut down afterwards would have read every revision it was offered first, and
+ * that reading is most of what a page of history costs. One revision past the
+ * budget is read, because a commit message cannot be weighed without being
+ * read - the same one row past the page that every other list here reads to
+ * find out whether there is more.
+ *
+ * The first revision goes on whatever it weighs, for the reason every page on
+ * this server admits its first: a page that came back empty because one message
+ * was larger than the whole budget would be a cursor that never moved, and a
+ * history nobody could read past.
+ */
+export async function fillRevisionPage(
+  revisions: readonly string[],
+  limitBytes: number,
+  detailsOf: (revision: string) => Promise<RevisionDetails>,
+): Promise<RevisionPageEntry[]> {
+  const page: RevisionPageEntry[] = [];
+  let bytes = 0;
+  for (const revision of revisions) {
+    // A revision whose metadata cannot be read still counts as a revision: the
+    // id is true either way, and the who and the when are absent rather than
+    // the page being lost.
+    const details: RevisionDetails = await detailsOf(revision).catch(() => ({}));
+    const entry: RevisionPageEntry = {
+      id: revision,
+      ...(details.timestamp === undefined ? {} : { at: details.timestamp }),
+      ...(details.author === undefined ? {} : { by: details.author }),
+      ...(details.message === undefined ? {} : { message: details.message }),
+    };
+    if (page.length > 0 && bytes + weigh(entry) > limitBytes) {
+      break;
+    }
+    bytes += weigh(entry);
+    page.push(entry);
+  }
+  return page;
 }
 
 /** Where a revision sits in a history, or undefined if it is not in one. */

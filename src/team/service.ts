@@ -39,10 +39,15 @@ export interface RepositoryReadings {
    * Optional because it is what decides whether this build says it serves a
    * history at all — see {@link serviceCapabilities}. Undefined from the call
    * means Team has no checkout of that project to read yet.
+   *
+   * Both ceilings on the page are the caller's, and the second is not the
+   * count's poor relation: a revision's message and author come out of a
+   * repository rather than out of a column this server bounds, so the count on
+   * its own bounds nothing about how large this answer is.
    */
   readonly revisions?: (
     projectId: string,
-    page: { readonly limit: number; readonly before?: string },
+    page: { readonly limit: number; readonly limitBytes: number; readonly before?: string },
   ) => Promise<RevisionPage | undefined>;
   /**
    * Drop what was read about one project, because it is no longer one.

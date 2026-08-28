@@ -16,13 +16,15 @@ import { join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { loadLoreLibrary } from "../src/lore/library.js";
+import type { RevisionDetails } from "../src/lore/verbs.js";
 import {
   discardCheckout,
   projectCacheDir,
   projectCheckoutPath,
   repositoryUrl,
 } from "../src/projects/cache.js";
-import { readProject, readRevisionPage } from "../src/projects/read.js";
+import { fillRevisionPage, readProject, readRevisionPage } from "../src/projects/read.js";
+import { PAGE_BYTES_LIMIT } from "../src/team/protocol.js";
 import { storageRootOf } from "../src/view.js";
 import { useTemporaryRoots } from "./temporary.js";
 
@@ -179,9 +181,97 @@ describe.skipIf(!libraryPresent)("a page of a project's revisions", () => {
       root,
       projectId: "0123456789abcdef0123456789abcdef",
       limit: 20,
+      limitBytes: PAGE_BYTES_LIMIT,
     });
 
     expect(page).toBeUndefined();
     await expect(stat(projectCheckoutPath(root, "0123456789abcdef0123456789abcdef"))).rejects.toThrow();
   }, 120_000);
+});
+
+describe("where a page of revisions stops", () => {
+  /** A metadata reader that remembers which revisions it was asked about. */
+  type Reader = ((revision: string) => Promise<RevisionDetails>) & { asked: string[] };
+
+  /** A history of `count` revisions, each pushed with a message of `bytes`. */
+  function history(count: number, bytes: number): { ids: string[]; read: Reader } {
+    const ids = Array.from({ length: count }, (_, index) => `r${String(index).padStart(4, "0")}`);
+    const asked: string[] = [];
+    return {
+      ids,
+      read: Object.assign(
+        (revision: string) => {
+          asked.push(revision);
+          return Promise.resolve({
+            timestamp: 1_700_000_000_000,
+            author: "ada",
+            message: "m".repeat(bytes),
+          });
+        },
+        { asked },
+      ),
+    };
+  }
+
+  it("ends at the bytes on the messages, not at the count", async () => {
+    // A commit message is whatever the version control that took it accepted,
+    // so a hundred of them is an answer with no figure behind it at all. Each
+    // of these is a hundred kilobytes, which is a long release note rather than
+    // an attack.
+    const { ids, read } = history(100, 100 * 1024);
+
+    const page = await fillRevisionPage(ids, PAGE_BYTES_LIMIT, read);
+
+    expect(page.length).toBeLessThan(100);
+    expect(Buffer.byteLength(JSON.stringify(page), "utf-8")).toBeLessThanOrEqual(
+      PAGE_BYTES_LIMIT + 100 * 1024,
+    );
+  });
+
+  it("never reads the revisions past the budget", async () => {
+    // The reason the ceiling is here rather than where the answer is composed.
+    // Reading a revision's metadata is most of what a page of history costs, so
+    // a page cut down afterwards would have paid for every row it then threw
+    // away. One row past the page is read, because a message cannot be weighed
+    // without being read, and that is the same one row every list here reads to
+    // find out whether there is more.
+    const { ids, read } = history(100, 100 * 1024);
+
+    const page = await fillRevisionPage(ids, PAGE_BYTES_LIMIT, read);
+
+    expect(read.asked).toHaveLength(page.length + 1);
+  });
+
+  it("puts one revision on the page even where its message is larger than the budget", async () => {
+    // A page that came back empty because one message was larger than the whole
+    // budget would be a cursor that never moved, and a history nobody could
+    // read past.
+    const { ids, read } = history(3, PAGE_BYTES_LIMIT * 2);
+
+    const page = await fillRevisionPage(ids, PAGE_BYTES_LIMIT, read);
+
+    expect(page).toHaveLength(1);
+  });
+
+  it("carries the whole page where the messages are ordinary", async () => {
+    const { ids, read } = history(100, 64);
+
+    const page = await fillRevisionPage(ids, PAGE_BYTES_LIMIT, read);
+
+    // The count is what ends an ordinary page, which is what it was there for
+    // before there was anything beside it.
+    expect(page.map((entry) => entry.id)).toEqual(ids);
+    expect(page[0]).toMatchObject({ by: "ada", at: 1_700_000_000_000 });
+  });
+
+  it("keeps a revision whose metadata could not be read", async () => {
+    const failing = (): Promise<RevisionDetails> => Promise.reject(new Error("no such object"));
+
+    const page = await fillRevisionPage(["r1", "r2"], PAGE_BYTES_LIMIT, failing);
+
+    // The id is true whether or not the rest of it could be read, and a page
+    // lost because one revision's metadata was unreadable would lose the
+    // revisions around it too.
+    expect(page).toEqual([{ id: "r1" }, { id: "r2" }]);
+  });
 });

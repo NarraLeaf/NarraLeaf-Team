@@ -138,17 +138,21 @@ export class ProjectReadings {
    */
   async revisions(
     projectId: string,
-    page: { readonly limit: number; readonly before?: string },
+    page: { readonly limit: number; readonly limitBytes: number; readonly before?: string },
   ): Promise<RevisionPage | undefined> {
     if (this.inside.has(projectId)) {
       return undefined;
     }
     this.inside.add(projectId);
     try {
+      // Both ceilings are the caller's, for the reason the count alone was: how
+      // large an answer this server composes is a question about the protocol,
+      // and this reader knows about repositories.
       return await readRevisionPage({
         root: this.options.root,
         projectId,
         limit: page.limit,
+        limitBytes: page.limitBytes,
         ...(page.before === undefined ? {} : { before: page.before }),
       });
     } finally {

@@ -60,6 +60,12 @@ const DEFAULT_HISTORY_LIMIT = 20;
  * Each one costs a read of its metadata, so a page is a bounded amount of work
  * rather than however much a client asked for. Somebody wanting the whole of a
  * long history pages through it, which is what the cursor is for.
+ *
+ * **It bounds how much work, never how large the answer.** A revision carries
+ * the message it was pushed with, which is a string out of a repository and not
+ * a column this server bounds, so the count multiplied out has no figure at all.
+ * That is what the byte ceiling beside it is for, and the reader stops at
+ * whichever of the two is reached first.
  */
 const MAXIMUM_HISTORY_LIMIT = 100;
 
@@ -209,6 +215,12 @@ export function projectMethods(): TeamMethod[] {
         // server.
         const page = await readings.revisions(project.id, {
           limit,
+          // The byte ceiling every other list here is held to, and the one this
+          // answer needs most: a revision carries the message somebody wrote
+          // when they pushed it, which comes out of a repository and is bounded
+          // by nothing this server writes. The reader stops at whichever of the
+          // two comes first and never reads the revisions past it.
+          limitBytes: PAGE_BYTES_LIMIT,
           ...(cursor === undefined ? {} : { before: cursor }),
         });
         if (page === undefined) {
