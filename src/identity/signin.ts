@@ -4,11 +4,10 @@
  * Checking the password itself is src/identity/passwords.ts, and it is
  * deliberately expensive: scrypt at OWASP's parameters is about 128 MiB and a
  * few hundred milliseconds. That is the right cost for one attempt and the
- * wrong cost for a thousand, and nothing about the algorithm bounds how many
- * run at once. Node's default threadpool is four threads, shared with every
- * file operation and every call into lorelib in the process, so four
- * simultaneous attempts stall everything else this server does and eight cost
- * about a gigabyte of resident memory.
+ * wrong cost for a thousand. How many may run at once is decided in that file
+ * too, because it is a limit on the process rather than on this door - a
+ * password an operator sets over the management plane costs exactly what one
+ * somebody types here does.
  *
  * One door reaches it without a credential: the sign-in a Studio installation
  * posts to, in src/web/studio.ts. An unknown username is hashed against a decoy
@@ -17,17 +16,23 @@
  * account to spend this.
  *
  * `nlteam token mint --root` checks a password too and is deliberately not
- * guarded by any of this. It is reached only by somebody holding the storage
- * root, who holds the signing keys with it and can already mint a token for any
- * account without knowing a password — `nlteam project create --root` does
- * exactly that. A limiter in front of that door would slow down the one person
- * it cannot keep out.
+ * held up by either of the waits below. It is reached only by somebody holding
+ * the storage root, who holds the signing keys with it and can already mint a
+ * token for any account without knowing a password — `nlteam project create
+ * --root` does exactly that. A limiter in front of that door would slow down
+ * the one person it cannot keep out.
  *
- * So three things live here, in front of the check rather than behind it:
+ * That exemption is from the waits and not from the cost limit in
+ * src/identity/passwords.ts, which that command is subject to like everything
+ * else. The two are different things: a wait is imposed on a caller because of
+ * how they have behaved, and costs a lone operator time they have not earned; a
+ * cost limit is a bound on what this process may spend at any moment, and a
+ * caller who is the only one asking never waits on it at all.
+ *
+ * So two things live here, in front of the check rather than behind it:
  *
  *   - {@link SignInLimiter}, which makes repeated refusals of one name from one
  *     place wait longer and longer, and is asked before a password is checked.
- *   - {@link verifyingPassword}, which lets two run at once and queues the rest.
  *   - {@link holdRefusedSignIn}, the flat pause every refusal is held for,
  *     which is about the rate one connection can guess at rather than the cost.
  */
@@ -220,62 +225,6 @@ export function sharedSignInLimiter(): SignInLimiter {
   return shared;
 }
 
-/**
- * How many password checks run at once, across everything in this process.
- *
- * Two rather than four, which is the size of the threadpool they run on: the
- * point is that this server goes on reading files and answering everything else
- * while somebody is signing in, and a limit equal to the pool would leave it
- * doing nothing but hashing.
- */
-const CONCURRENT_VERIFICATIONS = 2;
-
-/** Whoever is waiting for a turn, in the order they asked. */
-const waiting: Array<() => void> = [];
-let running = 0;
-
-/**
- * Take one of the places, waiting for it if both are taken.
- *
- * A caller that waits is handed the place of whoever released it rather than
- * taking one for itself. Counting it out and back in again would leave a gap
- * between a place being released and the waiter waking in which a third caller
- * could take it, and three would then be running.
- */
-async function takeAPlace(): Promise<void> {
-  if (running < CONCURRENT_VERIFICATIONS) {
-    running += 1;
-    return;
-  }
-  await new Promise<void>((resolve) => waiting.push(resolve));
-}
-
-/** Give a place back, to whoever is next for it or to nobody. */
-function giveThePlaceBack(): void {
-  const next = waiting.shift();
-  if (next === undefined) {
-    running -= 1;
-    return;
-  }
-  next();
-}
-
-/**
- * Run one password check, once fewer than {@link CONCURRENT_VERIFICATIONS} are
- * already running.
- *
- * A queue rather than a refusal: somebody signing in during a flood waits, and
- * the flood itself is what the limiter above is for. What this stops is the
- * memory and the threads, which no amount of answering quickly would give back.
- */
-export async function verifyingPassword<T>(work: () => Promise<T>): Promise<T> {
-  await takeAPlace();
-  try {
-    return await work();
-  } finally {
-    giveThePlaceBack();
-  }
-}
 
 /** Wait, without holding the process open if it is on its way out. */
 function pause(milliseconds: number): Promise<void> {

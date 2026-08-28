@@ -3,13 +3,13 @@
  *
  * Both are about cost. scrypt at the parameters this server uses is around
  * 128 MiB and a few hundred milliseconds of one of four threads, which is the
- * right price for one attempt and a way to stop the process for a hundred. The
- * two things below are what keep the number of attempts down and the number
- * running at once down, and neither of them is the algorithm's business.
+ * right price for one attempt and a way to stop the process for a hundred.
+ * What is below keeps the number of attempts down. How many run at once is the
+ * hasher's own budget, and is in ./passwords.test.ts with it.
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { SignInLimiter, verifyingPassword } from "../src/identity/signin.js";
+import { SignInLimiter } from "../src/identity/signin.js";
 
 /** Let every microtask and every already-resolved promise run out. */
 function settle(): Promise<void> {
@@ -93,45 +93,5 @@ describe("how often one place may guess at one password", () => {
     limiter.accepted("ada", "198.51.100.7");
 
     expect(limiter.waitFor("ada", "198.51.100.7")).toBe(0);
-  });
-});
-
-describe("how many passwords are checked at once", () => {
-  it("runs two and queues the rest, whoever asked", async () => {
-    const started: number[] = [];
-    const release: Array<() => void> = [];
-    const check = (which: number): Promise<void> =>
-      verifyingPassword(async () => {
-        started.push(which);
-        await new Promise<void>((resolve) => release.push(resolve));
-      });
-
-    const all = [check(1), check(2), check(3), check(4)];
-    await settle();
-
-    // Four at once would fill the threadpool this whole process shares and cost
-    // about half a gigabyte of memory while they ran.
-    expect(started).toEqual([1, 2]);
-
-    release[0]?.();
-    await settle();
-    expect(started).toEqual([1, 2, 3]);
-
-    release[1]?.();
-    release[2]?.();
-    await settle();
-    expect(started).toEqual([1, 2, 3, 4]);
-
-    release[3]?.();
-    await Promise.all(all);
-  });
-
-  it("gives a place back even when the check it was taken for failed", async () => {
-    await expect(
-      verifyingPassword(() => Promise.reject(new Error("a stored hash could not be read"))),
-    ).rejects.toThrow("a stored hash could not be read");
-
-    // If the place had been kept, this would never start.
-    await expect(verifyingPassword(() => Promise.resolve("done"))).resolves.toBe("done");
   });
 });

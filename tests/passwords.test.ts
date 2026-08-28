@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  derivingAKey,
   MalformedPasswordHashError,
   OWASP_SCRYPT_PARAMETERS,
   ScryptPasswordHasher,
@@ -106,5 +107,83 @@ describe("ScryptPasswordHasher", () => {
       expect(hasher.needsRehash("argon2id$m=65536,t=3,p=4$c2FsdA==$aGFzaA==")).toBe(true);
       expect(hasher.needsRehash("")).toBe(true);
     });
+  });
+});
+
+/**
+ * How much of this process one flood of passwords may spend.
+ *
+ * The cost is deliberate and the limit is not about any one door: an operator
+ * creating accounts over the management plane runs the same derivation as
+ * somebody signing in, and both are held to the same figure. Four at once fill
+ * the threadpool this whole process shares - measured, a file read beside them
+ * goes from half a millisecond to a fifth of a second - and cost about half a
+ * gigabyte of memory while they run.
+ */
+describe("how many key derivations run at once", () => {
+  /** Let every microtask and every already-resolved promise run out. */
+  const settle = (): Promise<void> =>
+    new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+  it("runs two and queues the rest, whoever asked", async () => {
+    const started: number[] = [];
+    const release: Array<() => void> = [];
+    const derive = (which: number): Promise<void> =>
+      derivingAKey(async () => {
+        started.push(which);
+        await new Promise<void>((resolve) => release.push(resolve));
+      });
+
+    const all = [derive(1), derive(2), derive(3), derive(4)];
+    await settle();
+
+    expect(started).toEqual([1, 2]);
+
+    release[0]?.();
+    await settle();
+    expect(started).toEqual([1, 2, 3]);
+
+    release[1]?.();
+    release[2]?.();
+    await settle();
+    expect(started).toEqual([1, 2, 3, 4]);
+
+    release[3]?.();
+    await Promise.all(all);
+  });
+
+  it("gives a turn back even when the derivation it was taken for failed", async () => {
+    await expect(
+      derivingAKey(() => Promise.reject(new Error("a stored hash could not be read"))),
+    ).rejects.toThrow("a stored hash could not be read");
+
+    // If the turn had been kept, this would never start.
+    await expect(derivingAKey(() => Promise.resolve("done"))).resolves.toBe("done");
+  });
+
+  it("holds a hash back, and not only whatever asks for a turn by name", async () => {
+    // The two above prove the gate counts. This proves the hasher is behind it,
+    // which is the whole of what makes the limit true of this server rather
+    // than of the one door that used to remember to ask.
+    const release: Array<() => void> = [];
+    const held = [1, 2].map(() =>
+      derivingAKey(() => new Promise<void>((resolve) => release.push(resolve))),
+    );
+    await settle();
+
+    let hashed = false;
+    const hashing = new ScryptPasswordHasher(CHEAP).hash("a-strong-passphrase").then((stored) => {
+      hashed = true;
+      return stored;
+    });
+    await settle();
+    expect(hashed).toBe(false);
+
+    release[0]?.();
+    release[1]?.();
+    await Promise.all(held);
+    await expect(hashing).resolves.toMatch(/^scrypt\$/);
   });
 });

@@ -32,7 +32,6 @@ import { defaultPasswordHasher } from "../identity/passwords.js";
 import {
   holdRefusedSignIn,
   sharedSignInLimiter,
-  verifyingPassword,
 } from "../identity/signin.js";
 import { mintToken } from "../identity/tokens.js";
 import { authenticate, SIGN_IN_REFUSED_MESSAGE } from "../identity/users.js";
@@ -271,8 +270,14 @@ async function answerSignIn(
     return;
   }
 
-  const result = await verifyingPassword(() =>
-    authenticate(options.database, defaultPasswordHasher(), username, password),
+  // Not wrapped in anything: how many password checks this process runs at once
+  // is the hasher's own business now, so this door and the management plane's
+  // `admin.users.create` are held to one budget rather than to two.
+  const result = await authenticate(
+    options.database,
+    defaultPasswordHasher(),
+    username,
+    password,
   );
   if (result.kind === "refused" || result.user.isServiceAccount) {
     if (result.kind === "refused") {

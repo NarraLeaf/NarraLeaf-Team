@@ -11,6 +11,12 @@
  * made with, and {@link PasswordHasher.needsRehash} tells the caller it is
  * worth replacing. The replacement happens on the next successful sign-in,
  * where the plain password is in hand for the only moment it ever is.
+ *
+ * The cost is the point, and it is why this file also decides how many of these
+ * may run at once — see {@link CONCURRENT_DERIVATIONS}. That limit lives here
+ * rather than in front of any one door because the thing it protects is the
+ * process, and a door that forgot to ask for it would take the whole server
+ * down with it.
  */
 import { randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 
@@ -30,6 +36,91 @@ function deriveKey(
       resolve(derivedKey);
     });
   });
+}
+
+/**
+ * How many scrypt derivations may run in this process at once.
+ *
+ * Two, and the number is libuv's rather than a guess. scrypt runs on the
+ * threadpool, which is four threads unless a deployment says otherwise, and
+ * every file this server reads and every call it makes into lorelib wants the
+ * same four. Measured on a default node with eight file reads in flight
+ * throughout, at the parameters below:
+ *
+ *     derivations at once   p99 of a file read beside them
+ *              1                       0.57 ms
+ *              2                       0.46 ms
+ *              4                     215.10 ms
+ *              8                     407.91 ms
+ *
+ * The cliff is at four because four is the pool. A derivation holding the last
+ * thread does not make a file read slower; it makes it wait for a whole
+ * derivation to finish, and a fifth of a second is a long time to answer
+ * nothing in.
+ *
+ * Raising `UV_THREADPOOL_SIZE` moves the cliff rather than removing the cost.
+ * At sixteen threads eight derivations at once keep a read at 1.46 ms — and
+ * take the process to 1.1 GiB resident, against 583 MiB when a pool of four
+ * held four of them back. The pool was doing two jobs, badly. This takes over
+ * the one that is properly a policy, so a deployment may size its pool for its
+ * own I/O without deciding how much memory a flood of sign-ins may reach.
+ *
+ * A queue rather than a refusal: whoever is third waits, which is what the
+ * limiter in ./signin.ts is for. What this stops is the memory and the threads,
+ * which answering quickly would not give back.
+ */
+const CONCURRENT_DERIVATIONS = 2;
+
+/** Whoever is waiting for a turn, in the order they asked. */
+const waiting: Array<() => void> = [];
+let running = 0;
+
+/**
+ * Take one of the turns, waiting for it if all of them are taken.
+ *
+ * A caller that waits is handed the turn of whoever released it rather than
+ * taking one for itself. Counting it out and back in again would leave a gap
+ * between a turn being released and the waiter waking, in which a third caller
+ * could take it, and three would then be running.
+ */
+async function takeATurn(): Promise<void> {
+  if (running < CONCURRENT_DERIVATIONS) {
+    running += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => waiting.push(resolve));
+}
+
+/** Give a turn back, to whoever is next for it or to nobody. */
+function giveTheTurnBack(): void {
+  const next = waiting.shift();
+  if (next === undefined) {
+    running -= 1;
+    return;
+  }
+  next();
+}
+
+/**
+ * Run one key derivation, once fewer than {@link CONCURRENT_DERIVATIONS} are
+ * already running.
+ *
+ * {@link ScryptPasswordHasher} puts every derivation it performs through this,
+ * so nothing that hashes or checks a password with it can spend more of this
+ * process than the figure above allows. It is exported so that a second
+ * algorithm added beside scrypt can be held to the same budget rather than to
+ * one of its own — the budget belongs to the machine, not to the algorithm.
+ *
+ * Not re-entrant, and it does not need to be: what it wraps is a single call
+ * into node's crypto, which asks for nothing else while it runs.
+ */
+export async function derivingAKey<T>(work: () => Promise<T>): Promise<T> {
+  await takeATurn();
+  try {
+    return await work();
+  } finally {
+    giveTheTurnBack();
+  }
 }
 
 /** Raised when a stored hash cannot be understood, and so cannot be checked. */
@@ -193,12 +284,19 @@ export class ScryptPasswordHasher implements PasswordHasher {
    * machine they set it on.
    */
   async #derive(password: string, salt: Buffer, parameters: ScryptParameters): Promise<Buffer> {
-    return await deriveKey(password.normalize("NFKC"), salt, parameters.keyLength, {
-      N: parameters.cost,
-      r: parameters.blockSize,
-      p: parameters.parallelism,
-      maxmem: maximumMemory(parameters),
-    });
+    // Every derivation this class performs passes through here, which is why
+    // the limit is taken here and not around any of the callers: hashing a new
+    // password and checking an old one cost the same, and a caller added later
+    // cannot forget to ask. Never nested — this is a leaf — so the turn is
+    // always given back before another is wanted.
+    return await derivingAKey(() =>
+      deriveKey(password.normalize("NFKC"), salt, parameters.keyLength, {
+        N: parameters.cost,
+        r: parameters.blockSize,
+        p: parameters.parallelism,
+        maxmem: maximumMemory(parameters),
+      }),
+    );
   }
 
   async hash(password: string): Promise<string> {

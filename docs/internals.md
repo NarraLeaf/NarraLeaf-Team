@@ -256,6 +256,58 @@ every method there survives it: a repeat re-reads the record rather than
 replaying a stored answer, and the two whose effect is not a database row at all
 are exactly the two no transaction could have covered.
 
+## What a password costs
+
+A write costs a disk. A password costs a core and a hundred and twenty-eight
+megabytes, and that is not an accident to be optimised away: scrypt at OWASP's
+2026 parameters is expensive precisely so that a stolen `team.db` is not a list
+of everybody's passwords. What can be got wrong is not the price of one, but how
+many are allowed to run at the same time.
+
+They run on libuv's threadpool, which is four threads unless a deployment says
+otherwise, and it is the same four threads every file this server reads and
+every call it makes into lorelib is waiting for. So the cost of a derivation is
+not only its own latency; past a point it is everybody else's. Measured here
+with eight file reads kept in flight throughout:
+
+```
+derivations at once   p99 of a file read beside them   peak RSS
+         1                       0.57 ms                198 MiB
+         2                       0.46 ms                327 MiB
+         4                     215.10 ms                583 MiB
+         8                     407.91 ms                583 MiB
+```
+
+The cliff is at four because four is the pool. Below it a derivation is simply
+one thread's work and nothing else notices; at it, a file read no longer waits a
+fraction of a millisecond, it waits for a whole derivation to finish.
+
+The obvious lever is the wrong one. Raising `UV_THREADPOOL_SIZE` to sixteen does
+flatten the cliff — eight at once then keep a read at 1.46 ms — but it takes the
+process to 1.1 GiB resident to do it, because the small pool had been quietly
+serving as a memory limit as well as a thread limit. Sizing a threadpool is a
+question about a deployment's I/O; how much memory a flood of sign-ins may reach
+is a question about this server. Answering the second by changing the first ties
+them together for whoever comes next.
+
+So the pool is left alone and the limit is Team's own: **at most two key
+derivations run in this process at once**, in `src/identity/passwords.ts`, taken
+inside the hasher rather than around any of its callers. A third waits. That
+placement is the whole point of it — the limit used to sit in front of the
+Studio sign-in route, which meant it was true of sign-ins and of nothing else,
+and `admin.users.create` hashed a new account's password on the management plane
+with nothing counting. One operator's import loop was enough to reach four. A
+limit a caller has to remember to ask for is a limit that holds until somebody
+adds a door.
+
+Two things are deliberately *not* behind a wait. `nlteam token mint --root`
+checks a password and is not rate-limited, because it is reached only by
+somebody who holds the storage root and could mint the token without a password
+anyway. And the derivation limit is not a rate limit: a caller who is the only
+one asking never waits on it. What imposes a wait on a caller for how they have
+behaved is `SignInLimiter`, in `src/identity/signin.ts`, and it guards the one
+door that takes a password from anybody.
+
 ## The Team protocol is a session, not a request
 
 Everything a Studio installation could ask this server, it once asked one request
