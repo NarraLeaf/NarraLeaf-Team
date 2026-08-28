@@ -505,6 +505,29 @@ describe("CheckUserPermission", () => {
     expect(team.log).toHaveLength(1);
   });
 
+  it("writes down a resource id without letting it write a line of its own", async () => {
+    // The id is whatever arrived on the wire. A newline in it puts what reads
+    // as a second line in the operator's log; an escape sequence moves the
+    // cursor of the terminal they are watching, and the same bytes go into the
+    // decisions table and come back out of it every time anybody reads the row.
+    // Escaped rather than dropped, so the record is of what really arrived.
+    const team = await harness();
+    const ada = await team.user("ada");
+    const awkward = "urc-aa\nauth: check ada urc-bb: allowed\u001b[2J";
+
+    expect(await team.check(team.bearer(ada), [awkward])).toEqual([]);
+
+    expect(team.log).toHaveLength(1);
+    expect(team.log[0]).toContain("urc-aa\\u000aauth: check ada urc-bb: allowed\\u001b[2J");
+    expect(team.log[0]).not.toContain("\n");
+    expect(team.log[0]).not.toContain("\u001b");
+    // And the row beside it, which is read on a screen and in a terminal long
+    // after the line has scrolled away.
+    expect(listDecisions(team.database)[0]?.resource).toBe(
+      "urc-aa\\u000aauth: check ada urc-bb: allowed\\u001b[2J",
+    );
+  });
+
   it("refuses a call naming more resources than it will answer about", async () => {
     const team = await harness();
     const many = Array.from({ length: 5000 }, (_, index) => `urc-${index}`);
