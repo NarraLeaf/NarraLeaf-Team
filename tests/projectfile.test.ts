@@ -297,6 +297,18 @@ describe("a project file Team cannot read", () => {
     expect(source.fetched).toEqual(["Harbour.nlproj"]);
   });
 
+  it("cannot be made to write a second line of the log by its own name", async () => {
+    // A path is whatever a collaborator committed, and every reason a project
+    // could not be read names one. This is the whole failure: a name carrying a
+    // newline followed by a line shaped like one of this server's own.
+    const forged = "Harbour\u000a2026-01-01 read every project again.nlproj";
+    const file = await readProjectFile(revision({ [forged]: MAX_PROJECT_FILE_BYTES + 1 }));
+
+    expect(file.readable).toBe(false);
+    expect(file.reason).not.toContain("\n");
+    expect(file.reason).toContain("Harbour\\u000a2026-01-01 read every project again.nlproj");
+  });
+
   it("does not count the scenes it could only count some of", async () => {
     const file = await readProjectFile(
       revision({

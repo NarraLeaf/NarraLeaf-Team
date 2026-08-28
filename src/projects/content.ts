@@ -22,6 +22,7 @@
  * is given a list of entries and something that can fetch one, which is what
  * lets it be driven by a repository, and by a test, in the same way.
  */
+import { forLog } from "../identity/audit.js";
 import { decodeMsgpack, MsgpackError } from "./msgpack.js";
 
 import type { ProjectFileView } from "../teamview.js";
@@ -132,6 +133,14 @@ export async function readProjectFile(source: RevisionSource): Promise<ProjectFi
     };
   }
 
+  // The path is whatever a collaborator committed, and every sentence below
+  // names it. Escaped once here rather than at each of them: these reasons are
+  // printed to whoever is watching the server and read back afterwards, and a
+  // path carrying a newline would write what looks like a second line of this
+  // server's own log, while one carrying an escape sequence would move the
+  // cursor of the terminal it was being watched in.
+  const named = forLog(configFile.path);
+
   if (configFile.size > MAX_PROJECT_FILE_BYTES) {
     // Refused from the tree, without the bytes ever being asked for. It goes
     // down the same road as a file Team could not make sense of, because to
@@ -140,7 +149,7 @@ export async function readProjectFile(source: RevisionSource): Promise<ProjectFi
     return {
       readable: false,
       reason:
-        `${configFile.path} is ${configFile.size.toLocaleString("en-US")} bytes, and Team reads a project file ` +
+        `${named} is ${configFile.size.toLocaleString("en-US")} bytes, and Team reads a project file ` +
         `up to ${MAX_PROJECT_FILE_BYTES.toLocaleString("en-US")}. A project file holds a project's settings rather ` +
         "than its content, so something this large is not one.",
     };
@@ -150,14 +159,14 @@ export async function readProjectFile(source: RevisionSource): Promise<ProjectFi
   try {
     config = await readConfig(source, configFile);
   } catch (error) {
-    return { readable: false, reason: describeUnreadable(configFile.path, error) };
+    return { readable: false, reason: describeUnreadable(named, error) };
   }
 
   const schema = numberAt(config, "schemaVersion");
   if (schema !== undefined && schema > PROJECT_FILE_SCHEMA) {
     return {
       readable: false,
-      reason: `${configFile.path} is schema ${schema}; Team reads up to ${PROJECT_FILE_SCHEMA}. A newer Studio wrote this project.`,
+      reason: `${named} is schema ${schema}; Team reads up to ${PROJECT_FILE_SCHEMA}. A newer Studio wrote this project.`,
     };
   }
 
@@ -218,15 +227,17 @@ async function readConfig(
 }
 
 /** A sentence about a file that could not be read, with no jargon in it. */
-function describeUnreadable(path: string, error: unknown): string {
+function describeUnreadable(named: string, error: unknown): string {
+  // The path arrives escaped; what an error says does not, and a decoder
+  // reporting on a file can quote what it found there.
   if (error instanceof MsgpackError) {
-    return `${path} could not be read: ${error.message}. It may have been written by a newer Studio, or only partly written.`;
+    return `${named} could not be read: ${forLog(error.message)}. It may have been written by a newer Studio, or only partly written.`;
   }
   if (error instanceof SyntaxError) {
-    return `${path} is not the JSON it is named as: ${error.message}`;
+    return `${named} is not the JSON it is named as: ${forLog(error.message)}`;
   }
   const detail = error instanceof Error ? error.message : String(error);
-  return `${path} could not be read: ${detail}`;
+  return `${named} could not be read: ${forLog(detail)}`;
 }
 
 /** What the asset registers and the content directory add up to. */

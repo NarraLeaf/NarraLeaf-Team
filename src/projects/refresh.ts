@@ -18,6 +18,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
+import { forLog } from "../identity/audit.js";
 import { audienceHosts, authUrl, dataRemoteUrl, type IdentityConfig } from "../identity/config.js";
 import { KeyStore } from "../identity/keys.js";
 import { identityLayout } from "../identity/layout.js";
@@ -297,7 +298,13 @@ export class ProjectReadings {
         // project that cannot be read must not cost the others theirs.
         const reading: ProjectReading = {
           history: {},
-          file: { readable: false, reason: `Team could not read this project: ${describe(error)}` },
+          file: {
+            readable: false,
+            // Escaped for the reason ./content.ts gives: this sentence is
+            // printed to whoever is watching, and what an error carries is not
+            // always this server's own words.
+            reason: `Team could not read this project: ${forLog(describe(error))}`,
+          },
           cloned: false,
         };
         this.readings.set(project.id, reading);
