@@ -14,6 +14,7 @@
  * HTTP/2 secure listener that `allowHTTP1` puts in front of the same port. What
  * is left over is the protocol, and the protocol does not know which it is on.
  */
+import { randomUUID } from "node:crypto";
 import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { DatabaseSync } from "node:sqlite";
@@ -33,7 +34,12 @@ import {
   listThreads,
   threadComments,
 } from "../src/comments/store.js";
-import { listOverlay, putOverlay } from "../src/overlay/store.js";
+import {
+  countOverlay,
+  listOverlay,
+  PROJECT_OVERLAY_LIMIT,
+  putOverlay,
+} from "../src/overlay/store.js";
 import { keyAnswer } from "../src/team/methods/admin.js";
 import { MAXIMUM_PAGE } from "../src/team/methods/comments.js";
 import { MAXIMUM_LIMIT } from "../src/team/methods/overlay.js";
@@ -2847,6 +2853,116 @@ describe("what is attached to a project without being in it", () => {
     const rest = listOverlay(team.database, { ...query, before: first.cursor as string });
     expect(rest.records).toHaveLength(1);
     expect(rest.cursor).toBeUndefined();
+  });
+});
+
+describe("how much of a project's overlay this server will hold", () => {
+  /**
+   * Fill a project to `count` records, writing them straight into the table.
+   *
+   * Around the store rather than through it, because putting twenty thousand
+   * records one at a time would count the table twenty thousand times to prove
+   * something about the twenty thousand and first.
+   */
+  function fill(team: Harness, project: string, author: string, count: number): void {
+    const insert = team.database.prepare(
+      `INSERT INTO overlay (id, project_id, revision, document, element, kind, body,
+         author_id, created_at, updated_at)
+       VALUES (?, ?, 'rev-1', 'story/act-one.json', ?, 'review', '{}', ?, ?, ?)`,
+    );
+    team.database.exec("BEGIN IMMEDIATE");
+    for (let index = 0; index < count; index += 1) {
+      const at = 1_700_000_000_000 + index;
+      insert.run(randomUUID(), project, `row-${index}`, author, at, at);
+    }
+    team.database.exec("COMMIT");
+  }
+
+  /** One record put over the session, with whatever is worth varying. */
+  function record(project: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      project,
+      anchor: { document: "story/act-one.json", element: "row-new", revision: "rev-1" },
+      kind: "review",
+      body: "{}",
+      ...extra,
+    };
+  }
+
+  it("refuses a record past the ceiling, and names the way back under it", async () => {
+    const { team, ada, project } = await withTwo();
+    fill(team, project, requireUser(team.database, "ada").id, PROJECT_OVERLAY_LIMIT);
+
+    const refusal = await ada.send("call", {
+      method: TEAM_METHODS.overlayPut,
+      params: record(project),
+    });
+
+    // Refused rather than bad params: nothing about the call is wrong, the
+    // project is full. Without this an authenticated account could put sixty-
+    // four kilobytes into this server's database as often as it liked.
+    expect(refusal.code).toBe("refused");
+    // The sentence names the way out, because there is one and it is the
+    // caller's to take - nothing here decides which of somebody's marks has
+    // stopped mattering.
+    expect(refusal.message).toContain("overlay.drop");
+    expect(countOverlay(team.database, project)).toBe(PROJECT_OVERLAY_LIMIT);
+  });
+
+  it("takes the record that reaches the ceiling, and refuses the one after it", async () => {
+    const { team, ada, project } = await withTwo();
+    fill(team, project, requireUser(team.database, "ada").id, PROJECT_OVERLAY_LIMIT - 1);
+
+    await ada.value(TEAM_METHODS.overlayPut, record(project));
+
+    expect(countOverlay(team.database, project)).toBe(PROJECT_OVERLAY_LIMIT);
+    expect((await ada.call(TEAM_METHODS.overlayPut, record(project))).code).toBe("refused");
+  });
+
+  it("goes on replacing a record that is already there", async () => {
+    const { team, ada, project } = await withTwo();
+    const written = await ada.value(TEAM_METHODS.overlayPut, record(project));
+    fill(team, project, requireUser(team.database, "ada").id, PROJECT_OVERLAY_LIMIT - 1);
+
+    const replaced = await ada.value(
+      TEAM_METHODS.overlayPut,
+      record(project, { id: (written["record"] as { id: string }).id, body: '{"state":"done"}' }),
+    );
+
+    // A replacement adds no row, so a full project is not a project whose marks
+    // can no longer be moved forward onto a new head - which is the one thing a
+    // client holding stale records most needs to be able to do.
+    expect((replaced["record"] as { body: string }).body).toBe('{"state":"done"}');
+    expect(countOverlay(team.database, project)).toBe(PROJECT_OVERLAY_LIMIT);
+  });
+
+  it("takes a new record again once one has been dropped", async () => {
+    const { team, ada, project } = await withTwo();
+    const written = await ada.value(TEAM_METHODS.overlayPut, record(project));
+    fill(team, project, requireUser(team.database, "ada").id, PROJECT_OVERLAY_LIMIT - 1);
+    expect((await ada.call(TEAM_METHODS.overlayPut, record(project))).code).toBe("refused");
+
+    await ada.value(TEAM_METHODS.overlayDrop, { id: (written["record"] as { id: string }).id });
+
+    // The way out the refusal names, and it works: this is a ceiling on what a
+    // project holds at once rather than on what it may ever have written.
+    await ada.value(TEAM_METHODS.overlayPut, record(project));
+    expect(countOverlay(team.database, project)).toBe(PROJECT_OVERLAY_LIMIT);
+  });
+
+  it("answers a repeat of a write that already landed rather than refusing it", async () => {
+    const { team, ada, project } = await withTwo();
+    const first = await ada.value(TEAM_METHODS.overlayPut, record(project, { clientId: "once" }));
+    fill(team, project, requireUser(team.database, "ada").id, PROJECT_OVERLAY_LIMIT - 1);
+
+    const second = await ada.value(TEAM_METHODS.overlayPut, record(project, { clientId: "once" }));
+
+    // The retry of a write whose answer was lost when a socket dropped. It is
+    // answered with its own row, not told the project is full - being refused
+    // because of the record it already wrote is the one way a client could be
+    // made to loop by the thing meant to stop looping.
+    expect((second["record"] as { id: string }).id).toBe((first["record"] as { id: string }).id);
+    expect(second["repeated"]).toBe(true);
   });
 });
 

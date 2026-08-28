@@ -39,6 +39,55 @@ import type { TeamAnchor } from "../team/protocol.js";
 const SELECT_RECORD = `SELECT id, project_id, revision, document, element, kind, body,
   author_id, instance, created_at, updated_at FROM overlay`;
 
+/**
+ * The most overlay records one project may hold.
+ *
+ * A bound on what one project can grow to, so that a client looping on
+ * `overlay.put` costs one project rather than this server — the same argument
+ * LIVE_SESSION_LIMIT makes about rooms, and it is stronger here because a room
+ * ends with the process that held it and a record is on the disk until somebody
+ * takes it off. Without this, an authenticated account may put sixty-four
+ * kilobytes into this server's database as often as it likes, for as long as it
+ * likes, and nothing anywhere says stop.
+ *
+ * **Twenty thousand, and the figure is reasoned from what an overlay is.** These
+ * are marks against anchors in a document — a review note on a story row, a
+ * translator's flag, something from a playtest — put while work is outstanding
+ * and taken off with `overlay.drop` when it is dealt with. It is a working set
+ * rather than a log that accumulates, so what has to fit under the ceiling is
+ * the most a project can have open at one time, not the most it will ever have
+ * written. Twenty thousand outstanding marks on one project is far past a team
+ * working: it is ten reads of `overlay.list` at its own ceiling of two
+ * thousand, so the whole of a project's overlay is still readable, and a
+ * project that reaches it is one where something is writing rather than
+ * somebody. **Biased generous deliberately**, because a team hitting this in
+ * ordinary work would be worse than the hole it closes.
+ *
+ * What it bounds is what one account can make this server store: twenty
+ * thousand records at OVERLAY_BODY_LIMIT each is a little over a gibibyte for
+ * one project, which is a figure an operator can plan a disk around, where the
+ * hole has no figure at all.
+ */
+export const PROJECT_OVERLAY_LIMIT = 20_000;
+
+/**
+ * Raised when a project has as many records as it may hold.
+ *
+ * The sentence names the way out, because there is one and it is the caller's
+ * to take: a record is dropped, not aged out, and nothing on this server
+ * decides which of somebody's marks has stopped mattering.
+ */
+export class TooManyOverlayRecordsError extends Error {
+  constructor() {
+    super(
+      "this project holds as many overlay records as it may. Take some off with " +
+        "overlay.drop — a record is kept until somebody drops it, so a project reaches " +
+        "this by keeping marks rather than by having too much to say.",
+    );
+    this.name = "TooManyOverlayRecordsError";
+  }
+}
+
 /** One row, before an author id is turned into a name. */
 export interface OverlayRecord {
   readonly id: string;
@@ -291,6 +340,15 @@ export function putOverlay(database: DatabaseSync, input: OverlayWrite): Overlay
     }
   }
 
+  // Counted after the repeat has been answered, so a retry of a write that
+  // already landed is never the call refused - a client whose socket dropped
+  // mid-answer must not be told the project is full because of its own row.
+  // The count is a walk of one project's rows in overlay_by_project, which is
+  // the same read `overlay.list` already makes to say how many there are.
+  if (countOverlay(database, input.projectId) >= PROJECT_OVERLAY_LIMIT) {
+    throw new TooManyOverlayRecordsError();
+  }
+
   const id = randomUUID();
   database
     .prepare(
@@ -349,7 +407,13 @@ export function dropOverlay(database: DatabaseSync, id: string): void {
   database.prepare("DELETE FROM overlay WHERE id = ?").run(id);
 }
 
-/** How many records one project holds, for a count beside a project. */
+/**
+ * How many records one project holds.
+ *
+ * Two callers: the count a list carries beside a narrowed read, and the ceiling
+ * a put is admitted under. One query for both, so the number an operator is
+ * shown and the number a refusal is decided by cannot come to differ.
+ */
 export function countOverlay(database: DatabaseSync, projectId: string): number {
   const row = database
     .prepare("SELECT COUNT(*) AS total FROM overlay WHERE project_id = ?")

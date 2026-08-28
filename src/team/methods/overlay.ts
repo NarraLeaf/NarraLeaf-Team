@@ -39,7 +39,9 @@ import {
   listOverlay,
   putOverlay,
   reviseOverlay,
+  TooManyOverlayRecordsError,
   type OverlayRecord,
+  type OverlayWritten,
 } from "../../overlay/store.js";
 import { findUserById } from "../../identity/users.js";
 import { findProjectById } from "../../projects/registry.js";
@@ -74,7 +76,9 @@ const DEFAULT_LIMIT = 500;
  * High, because the ordinary read is "everything attached to this project" and a
  * window that had to page would be a window that could not draw a count. A
  * project beyond this is one where somebody is using overlay as a database, and
- * the honest answer is the newest thousand.
+ * the honest answer is the newest two thousand — and what a project may hold in
+ * all is PROJECT_OVERLAY_LIMIT, ten pages of this, so paging still reaches the
+ * end of one.
  *
  * **It bounds how many, never how large.** A body may be OVERLAY_BODY_LIMIT, so
  * the two multiplied out is an answer of well over a hundred megabytes for this
@@ -163,21 +167,33 @@ export function overlayMethods(): TeamMethod[] {
         // without the other is a build this table has no opinion about.
         const instance = context.presence.instanceOn(context.connection.id, projectId)?.id;
         const clientId = optionalText(read, "clientId", ID_LIMIT);
-        const written = putOverlay(context.options.database, {
-          projectId,
-          revision,
-          anchor: {
-            ...(document === undefined ? {} : { document }),
-            ...(element === undefined ? {} : { element }),
+        let written: OverlayWritten;
+        try {
+          written = putOverlay(context.options.database, {
+            projectId,
             revision,
-          },
-          kind: requiredText(read, "kind", INSTANCE_FIELD_LIMIT),
-          body: text,
-          authorId: context.user.id,
-          ...(instance === undefined ? {} : { instance }),
-          ...(clientId === undefined ? {} : { clientId }),
-          now: Date.now(),
-        });
+            anchor: {
+              ...(document === undefined ? {} : { document }),
+              ...(element === undefined ? {} : { element }),
+              revision,
+            },
+            kind: requiredText(read, "kind", INSTANCE_FIELD_LIMIT),
+            body: text,
+            authorId: context.user.id,
+            ...(instance === undefined ? {} : { instance }),
+            ...(clientId === undefined ? {} : { clientId }),
+            now: Date.now(),
+          });
+        } catch (error) {
+          if (error instanceof TooManyOverlayRecordsError) {
+            // Refused rather than bad params: nothing about this call is wrong,
+            // the project is full. The store's sentence is carried through
+            // because it names the way out, and a second wording here would be
+            // a second rule to keep in step with the first.
+            throw new MethodError("refused", error.message);
+          }
+          throw error;
+        }
         const view = body(context, written.record);
         // A repeat announces nothing. The event went out when the write really
         // happened, and a second one would have every reader re-read for a

@@ -411,7 +411,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `live.close` | `live` | Close one outright, which only its opener may do. |
 | `live.say` | `live` | Say something to everybody in one. Kept by nobody. |
 | `overlay.list` | `overlay` | A page of what is attached to one project, newest change first, and what the server last read its head to be. `limit` defaults to 500 and is capped at 2 000, and a page also ends once the records on it total a mebibyte — whichever comes first, since a record's body may be 64 KiB and the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. `total` is how many the project holds in all, whatever this page or a narrowing left out. |
-| `overlay.put` | `overlay` | Attach something, or replace something one attached before. |
+| `overlay.put` | `overlay` | Attach something, or replace something one attached before. A project holds at most 20 000 records; past that a new one is `refused`, in a sentence naming `overlay.drop` as the way back under. Replacing a record already there is never refused, since it adds none. |
 | `overlay.drop` | `overlay` | Take one's own record off again. |
 | `admin.users.list` | `admin` | A page of this server's accounts, newest first. Each carries the groups it is in, whether those make it an operator, whether it is disabled, and when its tokens were last refused — which is more than `members.list` says, and deliberately so. `limit` defaults to 50 and is capped at 200. |
 | `admin.audit.list` | `admin` | A page of the decisions this server has been asked to make, newest first. `limit` defaults to 50 and is capped at 200. |
