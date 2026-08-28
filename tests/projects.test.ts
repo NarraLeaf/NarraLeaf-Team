@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { withTheWayOut } from "../src/project.js";
 import { identityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { KeyStore } from "../src/identity/keys.js";
@@ -209,6 +210,30 @@ describe("makeOrAdoptProject", () => {
 
     expect(outcome.kind).toBe("repository-refused");
     expect(listProjects(database)).toEqual([]);
+  });
+
+  it("tells whoever asked for a name that is taken what to do about it", () => {
+    // loreserver's own sentence, which names the repository it found. What is
+    // added is the one thing loreserver cannot know: that this server has an
+    // option for recording a repository it already holds.
+    const refusal =
+      "/lore.repository.v1.RepositoryService/RepositoryCreate answered ALREADY_EXISTS: " +
+      "Repository lantern-hill already exist with id 95e5796ffd594eb7a48c86ba189921f5 " +
+      "which does not match e9edcec2e3284b3f96bf8a0b5290db90";
+
+    const said = withTheWayOut(refusal);
+
+    expect(said).toContain(refusal);
+    expect(said).toContain("--repository");
+    // The id is read out of loreserver's words rather than rebuilt beside them,
+    // so there is only ever one of it to be wrong.
+    expect(said.match(/95e5796ffd594eb7a48c86ba189921f5/g)).toHaveLength(1);
+  });
+
+  it("adds nothing to a refusal that has no way out", () => {
+    const refusal = "loreserver could not be reached on port 41337";
+
+    expect(withTheWayOut(refusal)).toBe(refusal);
   });
 
   it("adopts a repository that already exists, and asks loreserver for nothing", async () => {

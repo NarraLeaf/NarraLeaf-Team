@@ -34,6 +34,32 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * loreserver's refusal, with a line about `--repository` where it earns one.
+ *
+ * A repository that is already in the store is the one refusal a create can get
+ * that somebody can do something about, and it is the ordinary shape of taking
+ * a project back: the row went, the repository stayed, and asking for a new one
+ * under the same name meets the one that is there. loreserver says so and names
+ * the id, in its own words, and has no reason to know that this server has an
+ * option for exactly this.
+ *
+ * The id is left in loreserver's sentence to be read rather than pulled out of
+ * it and rebuilt here. What is quoted is another program's message, and a
+ * reader of it that took it apart would go wrong the day it is reworded — into
+ * a sentence naming the wrong id, which is worse than one naming none.
+ */
+export function withTheWayOut(message: string): string {
+  if (!message.includes("ALREADY_EXISTS")) {
+    return message;
+  }
+  return (
+    `${message}\n` +
+    "That repository is in this server's store already. If it is one this server has " +
+    "forgotten, record it again with --repository and the id named above."
+  );
+}
+
 export interface ProjectCreateOptions {
   readonly root: string;
   readonly name: string;
@@ -255,8 +281,11 @@ export async function projectCreate(
       case "repository-refused":
         // loreserver's own sentence, and the row it was about is already gone.
         // It is the other server that said no, so it says so in its own words
-        // rather than being reported as a fault of this one.
-        throw new Error(outcome.message);
+        // rather than being reported as a fault of this one — with one sentence
+        // added where what it said is that the repository is already there.
+        // That is the one refusal here with a way out, and loreserver has no
+        // reason to know what this server's way out is called.
+        throw new Error(withTheWayOut(outcome.message));
       case "made":
       case "repeat":
         renderMadeProject(
@@ -337,7 +366,11 @@ export async function projectCreateOverProtocol(
     );
     return 0;
   } catch (error) {
-    stderr(`nlteam: ${describeError(error)}\n`);
+    // Through the same reader as the local path's refusals, because the sentence
+    // it adds is about this command rather than about which plane carried it:
+    // the server passes loreserver's words through unedited, so what arrives
+    // here is the string the other path had in its hand.
+    stderr(`nlteam: ${withTheWayOut(describeError(error))}\n`);
     return 1;
   }
 }
