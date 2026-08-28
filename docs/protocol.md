@@ -143,10 +143,17 @@ this protocol uses, and no more.
   and a reserved bit set on a frame is a protocol error.
 - A frame from a client must be masked, as the specification requires of a client.
 - A message may total at most **128 KiB**, fragments included. One larger is
-  refused with `1009` before it is assembled.
+  refused with `1009` on the header that announces it, before any of the body is
+  waited for — and what the fragments already held total counts towards it, so a
+  frame is judged as part of its message rather than on its own.
 - Ping, pong and close are control frames and carry at most 125 bytes. The server
   pings on the heartbeat interval it announced and closes a peer it has not heard
   from for twice that.
+- A peer that stops reading is closed with `1008` rather than queued for. Frames
+  written to a socket that is not draining stay in the server's memory, and the
+  ceiling on one message says nothing about how many of them; a subscriber that
+  cannot keep up is dropped, which delivery here is already weak enough to make
+  the right answer.
 
 ### The opening frame
 
@@ -279,6 +286,7 @@ something to fix rather than a goodbye that reads as clean:
 | A frame the protocol does not allow | `1002` |
 | A quota, an in-flight cap or a topic cap reached | `1008` |
 | A token refused or revoked, after `bye{unauthenticated}` | `1008` |
+| More queued for a peer than the server will hold, because it has stopped reading | `1008` |
 | A message over the ceiling | `1009` |
 
 ## Capabilities

@@ -13,7 +13,18 @@
  *   - text messages, fragmented or not;
  *   - ping, pong and close, as control frames;
  *   - a bound on how much one message may be, so that a peer cannot ask this
- *     process to hold an arbitrary amount of memory by never finishing a frame.
+ *     process to hold an arbitrary amount of memory by never finishing a frame;
+ *   - a bound on how much may be queued for a peer that has stopped reading,
+ *     because the bound on one message says nothing about how many of them.
+ *
+ * **Both directions are bounded, and neither bound is the other one.** What
+ * arrives is held only while it is on its way to being a frame: a frame that
+ * announces more than a message may be is refused when its header is read
+ * rather than when its last byte lands, and what reaches a connection that has
+ * already ended is dropped as it arrives rather than read into a buffer nothing
+ * will ever parse. What is sent is refused once more is queued for the peer than
+ * it is worth holding: delivery on this protocol is deliberately weak, so a
+ * subscriber too slow to keep up is dropped rather than grown for.
  *
  * What is deliberately not implemented: extensions of any kind, and therefore
  * `permessage-deflate`. The reserved bits are refused rather than ignored, which
@@ -74,6 +85,17 @@ const CONTROL_PAYLOAD_LIMIT = 125;
 export interface WebSocketOptions {
   /** The most one message may total, fragments included. */
   readonly maximumMessageBytes: number;
+  /**
+   * The most that may be waiting to go out to this peer before it is closed.
+   *
+   * A peer that asked for a busy topic and then stopped reading is the case
+   * this exists for: every frame handed to the socket that the socket cannot
+   * write stays in this process's memory, and nothing about a message's own
+   * ceiling limits how many of them pile up. Past this the connection is closed
+   * with `policy` rather than grown, which is the answer the protocol already
+   * gives for a subscriber that cannot keep up - it reconnects and re-reads.
+   */
+  readonly maximumBufferedBytes: number;
   /**
    * How long between pings, and therefore how long a silent peer has.
    *
@@ -174,11 +196,23 @@ export class WebSocketConnection {
 
   private ended = false;
 
+  /** True from the moment a close frame is being written, so writing one cannot close again. */
+  private closing = false;
+
   constructor(socket: Duplex, head: Buffer, options: WebSocketOptions) {
     this.socket = socket;
     this.options = options;
 
     socket.on("data", (chunk: Buffer) => {
+      // Nothing that arrives after this connection ended will ever be parsed,
+      // so nothing that arrives after it is kept. Ending the write side does
+      // not stop a peer sending, and a peer that goes on sending into a
+      // connection this server has already refused would otherwise grow this
+      // buffer for as long as it stayed connected - which is the one way the
+      // frame ceiling below does not bound what is held.
+      if (this.ended) {
+        return;
+      }
       this.lastHeard = Date.now();
       this.pending = Buffer.concat([this.pending, chunk]);
       this.drain();
@@ -213,6 +247,19 @@ export class WebSocketConnection {
     return this.ended;
   }
 
+  /**
+   * How much has arrived and is not yet a whole frame.
+   *
+   * Never more than one frame's worth for a connection that is open, because a
+   * frame announcing more than a message may be is refused on its header; and
+   * nought for one that has ended, because what arrives after that is dropped
+   * as it arrives. Both are properties this file is built to keep rather than
+   * things it happens to do, so both are readable rather than only argued for.
+   */
+  get bufferedInput(): number {
+    return this.pending.length;
+  }
+
   /** Send one text message. Silently does nothing once the connection has ended. */
   send(text: string): void {
     if (this.ended) {
@@ -232,6 +279,10 @@ export class WebSocketConnection {
     if (this.ended) {
       return;
     }
+    // Set before the close frame is written, because writing is what notices a
+    // backlog and closing is what it does about it: without this, closing a
+    // peer that is not reading would be the thing that tried to close it again.
+    this.closing = true;
     const words = Buffer.from(reason, "utf-8").subarray(0, CONTROL_PAYLOAD_LIMIT - 2);
     const payload = Buffer.alloc(2 + words.length);
     payload.writeUInt16BE(code, 0);
@@ -303,12 +354,18 @@ export class WebSocketConnection {
       offset += 8;
     }
 
+    // A data frame is judged on what its header says it carries, before any of
+    // the body is waited for, and the fragments already held count towards it
+    // because they are the same message. That is the whole reason nothing here
+    // ever holds more than one frame's worth: a peer that announced a large
+    // frame and then dribbled it would otherwise be keeping every byte of it
+    // until the last one arrived.
     if (opcode >= 0x8) {
       if (!final || length > CONTROL_PAYLOAD_LIMIT) {
         this.close(CLOSE.protocolError, "a control frame must be short and unfragmented");
         return undefined;
       }
-    } else if (length > this.options.maximumMessageBytes) {
+    } else if (this.fragmentBytes + length > this.options.maximumMessageBytes) {
       this.close(CLOSE.tooLarge, "that message is larger than this server accepts");
       return undefined;
     }
@@ -394,6 +451,17 @@ export class WebSocketConnection {
     if (this.socket.destroyed || this.socket.writableEnded) {
       return;
     }
+    // What the socket has taken and not yet got out. Checked before this frame
+    // is added to it rather than after, so that one large answer to a client on
+    // a slow link is written rather than being the thing that closes it: what
+    // is refused is piling a further frame on a backlog that is already past
+    // what this server will hold. The heartbeat is a write too, so a peer that
+    // has gone quiet under a backlog is closed within one of those rather than
+    // whenever it next asks for something.
+    if (!this.closing && this.socket.writableLength > this.options.maximumBufferedBytes) {
+      this.close(CLOSE.policy, "more is queued for this connection than it is reading");
+      return;
+    }
     let header: Buffer;
     if (payload.length < 126) {
       header = Buffer.from([0b1000_0000 | opcode, payload.length]);
@@ -417,10 +485,19 @@ export class WebSocketConnection {
       return;
     }
     this.ended = true;
+    this.closing = true;
     if (this.heartbeat !== undefined) {
       clearInterval(this.heartbeat);
       this.heartbeat = undefined;
     }
+    // Nothing more will be read out of these, so nothing more is kept in them.
+    // The socket is left reading rather than paused: what still arrives is
+    // dropped as it arrives, which costs nothing, where a paused socket would
+    // never see the peer's own end of the connection and would sit half open
+    // until something else closed it.
+    this.pending = Buffer.alloc(0);
+    this.fragments = [];
+    this.fragmentBytes = 0;
     this.options.onClose(reason);
   }
 }
