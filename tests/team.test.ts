@@ -572,6 +572,61 @@ describe("what a project row says about its repository", () => {
   });
 });
 
+describe("what the list of projects is bounded by", () => {
+  /** A project whose description is as long as the method will take one. */
+  async function fill(count: number, description: string): Promise<Harness> {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    for (let index = 0; index < count; index += 1) {
+      createProject(team.database, {
+        id: newProjectId(),
+        name: `project-${index}`,
+        description,
+        createdBy: ada,
+      });
+    }
+    return team;
+  }
+
+  it("answers with as many projects as the bytes allow, and says how many there are", async () => {
+    // Three hundred projects, each carrying a description of the size this
+    // method accepts one. The rows are small in the ordinary case, which is why
+    // nobody has minded, and "small in the ordinary case" is not a bound.
+    const team = await fill(300, "d".repeat(4 * 1024));
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.projectsList);
+    const projects = answer["projects"] as { name: string }[];
+
+    expect(projects.length).toBeLessThan(300);
+    expect(Buffer.byteLength(JSON.stringify(projects), "utf-8")).toBeLessThanOrEqual(
+      PAGE_BYTES_LIMIT + 4 * 1024,
+    );
+    // The honest field, which is what a client gets in place of a cursor: a list
+    // shorter than this was cut.
+    expect(answer["total"]).toBe(300);
+  });
+
+  it("puts one project on the answer even where that project is larger than the budget", async () => {
+    const team = await fill(1, "d".repeat(PAGE_BYTES_LIMIT * 2));
+    const ada = await account(team.database, "grace");
+    createProject(team.database, {
+      id: newProjectId(),
+      name: "zzz-small",
+      description: "",
+      createdBy: ada,
+    });
+    const client = await team.connect(team.tokenFor("ada"));
+
+    // An answer that came back empty because one row was larger than the whole
+    // budget would leave a reader with nothing and, with no cursor to move,
+    // nothing to do about it.
+    const answer = await client.value(TEAM_METHODS.projectsList);
+    expect(answer["projects"]).toHaveLength(1);
+    expect(answer["total"]).toBe(2);
+  });
+});
+
 describe("the people on this server", () => {
   it("is every account, with the address a revision is signed with", async () => {
     const team = await harness();
@@ -614,6 +669,32 @@ describe("the people on this server", () => {
     // fallen out of would leave those revisions signed by a stranger.
     expect(members.map((member) => member.username)).toEqual(["ada", "grace"]);
     expect(members[1]).toMatchObject({ username: "grace", disabled: true });
+  });
+
+  it("answers with as many accounts as the bytes allow, and says how many there are", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    // Sixty accounts whose display names are long enough that the answer is
+    // bounded by its bytes rather than by the row ceiling above them. A display
+    // name is whatever an operator typed, and nothing under this method's own
+    // parameters bounds what is already in the table.
+    const displayName = "n".repeat(20 * 1024);
+    for (let index = 0; index < 60; index += 1) {
+      await account(team.database, `member-${String(index).padStart(2, "0")}`, { displayName });
+    }
+    const client = await team.connect(team.tokenFor("ada"));
+
+    const answer = await client.value(TEAM_METHODS.membersList);
+    const members = answer["members"] as { username: string }[];
+
+    expect(members.length).toBeLessThan(61);
+    expect(Buffer.byteLength(JSON.stringify(members), "utf-8")).toBeLessThanOrEqual(
+      PAGE_BYTES_LIMIT + 20 * 1024,
+    );
+    // In name order, so what a bounded answer left out is the tail rather than
+    // an arbitrary handful.
+    expect(members[0]?.username).toBe("ada");
+    expect(answer["total"]).toBe(61);
   });
 
   it("keeps an operator's business out of it", async () => {

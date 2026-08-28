@@ -164,12 +164,23 @@ const SELECT_USER =
   "SELECT id, username, display_name, email, is_service_account, created_at, " +
   "disabled_at, token_epoch, tokens_invalidated_at FROM users";
 
+/**
+ * Every account, in name order, one row at a time.
+ *
+ * For the caller that stops before the end. An answer over the session is
+ * bounded by the bytes on it, and reading the table whole and then cutting it
+ * down would have held every row first - and every row costs a second query for
+ * the groups it is in. A caller that wants the lot has {@link listUsers}.
+ */
+export function* eachUser(database: DatabaseSync): Generator<UserRecord> {
+  for (const row of database.prepare(`${SELECT_USER} ORDER BY username`).iterate()) {
+    yield toUser(database, row as Row);
+  }
+}
+
 /** Every account, in name order. */
 export function listUsers(database: DatabaseSync): UserRecord[] {
-  return database
-    .prepare(`${SELECT_USER} ORDER BY username`)
-    .all()
-    .map((row) => toUser(database, row));
+  return [...eachUser(database)];
 }
 
 export interface UserQuery {

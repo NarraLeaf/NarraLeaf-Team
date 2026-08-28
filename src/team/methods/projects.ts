@@ -12,8 +12,13 @@
  * `projectBody` and `memberBody` are imported, because two functions building the
  * same JSON is how a field comes to exist on one path and not another.
  */
-import { findProject, forgetProject, listProjects } from "../../projects/registry.js";
-import { listUsers } from "../../identity/users.js";
+import {
+  countProjects,
+  eachProject,
+  findProject,
+  forgetProject,
+} from "../../projects/registry.js";
+import { countUsers, eachUser } from "../../identity/users.js";
 import { NOT_READ_YET } from "../../teamview.js";
 import { memberBody, projectBody } from "../../projects/answers.js";
 import { makeOrAdoptProject } from "../../projects/create.js";
@@ -27,6 +32,7 @@ import {
   type TeamMethod,
 } from "../methods.js";
 import {
+  PAGE_BYTES_LIMIT,
   projectTopic,
   TEAM_METHODS,
   TOPIC_PROJECTS,
@@ -58,6 +64,66 @@ const DEFAULT_HISTORY_LIMIT = 20;
 const MAXIMUM_HISTORY_LIMIT = 100;
 
 /**
+ * The most rows either of the two whole-answer lists here carries.
+ *
+ * `projects.list` and `members.list` answer with what is on this server rather
+ * than with a page of it, and both grow with a deployment rather than with a
+ * request. The rows are small, which is why nobody has minded, but "small rows"
+ * is not a bound: a project carries a description of up to four kilobytes and
+ * the last commit message this server read out of its repository, and neither
+ * this server nor the count of projects on it says how many.
+ *
+ * **They are bounded and not paged, and that is the decision worth stating.**
+ * Paging is the consistent answer and it is the wrong one here. A cursor is only
+ * a bound if every client honours it, and a client that reads these lists whole
+ * today — Studio does — would go on drawing the first page and quietly call it
+ * the whole server. A ceiling with a count beside it costs that client nothing
+ * and tells it the truth: `total` is what this server holds, and a list shorter
+ * than `total` was cut. Neither list has a "next page" gesture behind it either;
+ * one draws a picker and the other puts a name beside a piece of work, and both
+ * are read in one go.
+ *
+ * A thousand of either, because a deployment past that is far past what one
+ * Team server is for, and because it bounds the fields around the rows that
+ * PAGE_BYTES_LIMIT does not weigh. The byte ceiling is what actually binds for a
+ * list of long descriptions; this catches a deployment with a great many short
+ * ones.
+ */
+const MAXIMUM_ROWS = 1000;
+
+/**
+ * As much of a list as one answer holds, and how many there are in all.
+ *
+ * Composed a row at a time and stopped at the ceiling, rather than composed
+ * whole and cut down: the rows past the budget are never built, and for a
+ * project that means the reading behind it is never looked up and for an account
+ * it means the query for its groups is never made. Weighed on what was composed
+ * rather than on the database row, because part of a project's answer — the head
+ * revision and the message on it — comes out of a repository rather than out of
+ * the table.
+ */
+function within<Row, Body>(rows: Iterable<Row>, compose: (row: Row) => Body): Body[] {
+  const answer: Body[] = [];
+  let bytes = 0;
+  for (const row of rows) {
+    if (answer.length === MAXIMUM_ROWS) {
+      break;
+    }
+    const body = compose(row);
+    // The first row goes on whatever it weighs, for the reason every page on
+    // this server admits its first: an answer that could come back empty would
+    // leave a reader with nothing and no way past it.
+    const weight = Buffer.byteLength(JSON.stringify(body), "utf-8");
+    if (answer.length > 0 && bytes + weight > PAGE_BYTES_LIMIT) {
+      break;
+    }
+    bytes += weight;
+    answer.push(body);
+  }
+  return answer;
+}
+
+/**
  * Say a project appeared or went.
  *
  * The list moves for whoever holds the `projects` topic; a project going is said
@@ -84,9 +150,13 @@ export function projectMethods(): TeamMethod[] {
       // and nothing to say.
       capability: "session",
       handle: (_params: unknown, context: MethodContext) => ({
-        projects: listProjects(context.options.database).map((project) =>
+        projects: within(eachProject(context.options.database), (project) =>
           projectBody(context.options, project),
         ),
+        // What this server holds, whatever the ceiling above left out. A list
+        // shorter than this was cut, and saying so is the whole of what a client
+        // is owed in place of a cursor it would have had to learn.
+        total: countProjects(context.options.database),
       }),
     },
     {
@@ -252,7 +322,9 @@ export function projectMethods(): TeamMethod[] {
       handle: (_params: unknown, context: MethodContext) => ({
         // Disabled accounts included: somebody who wrote half a history and then
         // left is still the person that history names.
-        members: listUsers(context.options.database).map((user) => memberBody(user)),
+        members: within(eachUser(context.options.database), (user) => memberBody(user)),
+        /** Every account this server has, whatever the ceiling above left out. */
+        total: countUsers(context.options.database),
       }),
     },
   ];

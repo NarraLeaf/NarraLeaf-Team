@@ -219,12 +219,29 @@ export function createProject(database: DatabaseSync, input: NewProject): Projec
   return requireProject(database, input.id);
 }
 
+/**
+ * Every project, in name order, one row at a time.
+ *
+ * For the caller that stops before the end. An answer over the session is
+ * bounded by the bytes on it, and reading the table whole and then cutting it
+ * down would have held every row first - which is the thing being bounded. A
+ * caller that wants the lot has {@link listProjects}.
+ */
+export function* eachProject(database: DatabaseSync): Generator<ProjectRecord> {
+  for (const row of database.prepare(`${SELECT_PROJECT} ORDER BY name`).iterate()) {
+    yield toProject(row as Row);
+  }
+}
+
 /** Every project, in name order. */
 export function listProjects(database: DatabaseSync): ProjectRecord[] {
-  return database
-    .prepare(`${SELECT_PROJECT} ORDER BY name`)
-    .all()
-    .map((row) => toProject(row));
+  return [...eachProject(database)];
+}
+
+/** How many projects this server holds, for a count beside a bounded list. */
+export function countProjects(database: DatabaseSync): number {
+  const row = database.prepare("SELECT COUNT(*) AS total FROM projects").get();
+  return row === undefined ? 0 : integerColumn(row as Row, "total");
 }
 
 /**
