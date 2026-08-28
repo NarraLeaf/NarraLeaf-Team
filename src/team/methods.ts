@@ -240,6 +240,16 @@ export function optionalText(
   params: Record<string, unknown>,
   name: string,
   limit: number,
+  /**
+   * What to say instead of this reader's own sentence about the length.
+   *
+   * Most fields are bounded so that a frame stays a frame, and "longer than this
+   * server stores" is the whole of what there is to say about one. A few are
+   * bounded because of what they go on to do, and for those the same input
+   * reaching the same server by the other road prints a sentence a person can
+   * act on — so one rule refusing in two places must not be two sentences.
+   */
+  because?: string,
 ): string | undefined {
   const value = params[name];
   if (value === undefined || value === null) {
@@ -253,7 +263,7 @@ export function optionalText(
     return undefined;
   }
   if (Buffer.byteLength(trimmed, "utf-8") > limit) {
-    throw new MethodError("bad-params", `${name} is longer than this server stores`);
+    throw new MethodError("bad-params", because ?? `${name} is longer than this server stores`);
   }
   return trimmed;
 }

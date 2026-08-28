@@ -48,6 +48,9 @@ import {
   createUser,
   disableUser,
   DISPLAY_NAME_LIMIT,
+  DISPLAY_NAME_REFUSAL,
+  EMAIL_LIMIT,
+  EMAIL_REFUSAL,
   findUser,
   listUsers,
   requireUser,
@@ -286,7 +289,17 @@ class Client {
     });
   }
 
-  call(method: string, params?: unknown): Promise<{ value?: unknown; code?: string }> {
+  /**
+   * Ask, and hand back the answering frame.
+   *
+   * The message travels with the code, because a refusal's sentence is part of
+   * what a client is given: two roads to the same rule that word it differently
+   * are one server giving two answers.
+   */
+  call(
+    method: string,
+    params?: unknown,
+  ): Promise<{ value?: unknown; code?: string; message?: string }> {
     return this.send("call", { method, ...(params === undefined ? {} : { params }) });
   }
 
@@ -3811,6 +3824,25 @@ describe("making an account over the session", () => {
     // an authorization header will hold is an account that cannot open a
     // connection at all.
     expect(answer.code).toBe("bad-params");
+    expect(findUser(team.database, "cleo")).toBeUndefined();
+    // And the same sentence, not merely the same rule. The frame reader in
+    // front of this method would otherwise refuse first with a shorter one of
+    // its own, and somebody comparing the two roads would find one server
+    // giving two answers to one input.
+    expect(answer.message).toBe(DISPLAY_NAME_REFUSAL);
+  });
+
+  it("refuses an email address longer than a token can carry, in the same words", async () => {
+    const { ada, team } = await administered();
+
+    const answer = await ada.call(TEAM_METHODS.adminUsersCreate, {
+      username: "cleo",
+      password: "a password nobody guesses",
+      email: `${"a".repeat(EMAIL_LIMIT)}@example.com`,
+    });
+
+    expect(answer.code).toBe("bad-params");
+    expect(answer.message).toBe(EMAIL_REFUSAL);
     expect(findUser(team.database, "cleo")).toBeUndefined();
   });
 

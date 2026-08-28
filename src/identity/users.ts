@@ -93,12 +93,7 @@ export class WeakPasswordError extends Error {
  */
 export class InvalidDisplayNameError extends Error {
   constructor() {
-    super(
-      `a display name must be at most ${DISPLAY_NAME_LIMIT} bytes. It is carried by every ` +
-        "token this account is issued, tokens travel in an authorization header, and a " +
-        "header past what will be sent leaves the account unable to open a connection at " +
-        "all — so a name too long is an account locked out by its own name.",
-    );
+    super(DISPLAY_NAME_REFUSAL);
     this.name = "InvalidDisplayNameError";
   }
 }
@@ -112,12 +107,7 @@ export class InvalidDisplayNameError extends Error {
  */
 export class InvalidEmailError extends Error {
   constructor() {
-    super(
-      `an email address must be at most ${EMAIL_LIMIT} bytes. It is carried by every ` +
-        "token this account is issued, tokens travel in an authorization header, and a " +
-        "header past what will be sent leaves the account unable to open a connection at " +
-        "all — so an address too long is an account locked out by its own address.",
-    );
+    super(EMAIL_REFUSAL);
     this.name = "InvalidEmailError";
   }
 }
@@ -163,6 +153,26 @@ export const DISPLAY_NAME_LIMIT = 128;
  * let past.
  */
 export const EMAIL_LIMIT = 320;
+
+/**
+ * What somebody is told when one of the two is too long.
+ *
+ * Written once and read by two places: the error this store raises, and the
+ * frame reader in front of the protocol method, which would otherwise refuse
+ * the same input with a shorter sentence of its own. A ceiling explained on
+ * one road and merely stated on the other is one rule that reads as two.
+ */
+export const DISPLAY_NAME_REFUSAL =
+  `a display name must be at most ${DISPLAY_NAME_LIMIT} bytes. It is carried by every ` +
+  "token this account is issued, tokens travel in an authorization header, and a " +
+  "header past what will be sent leaves the account unable to open a connection at " +
+  "all — so a name too long is an account locked out by its own name.";
+
+export const EMAIL_REFUSAL =
+  `an email address must be at most ${EMAIL_LIMIT} bytes. It is carried by every ` +
+  "token this account is issued, tokens travel in an authorization header, and a " +
+  "header past what will be sent leaves the account unable to open a connection at " +
+  "all — so an address too long is an account locked out by its own address.";
 
 /** The group an account joins when no role is named. */
 export const DEFAULT_ROLE = "member";

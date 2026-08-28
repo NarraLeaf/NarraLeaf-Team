@@ -80,7 +80,9 @@ import {
   DEFAULT_ROLE,
   disableUser,
   DISPLAY_NAME_LIMIT,
+  DISPLAY_NAME_REFUSAL,
   EMAIL_LIMIT,
+  EMAIL_REFUSAL,
   enableUser,
   findUser,
   InvalidDisplayNameError,
@@ -473,8 +475,13 @@ export function adminMethods(): TeamMethod[] {
       // written twice. This reader refuses first and in the wording every
       // over-long field on this wire is refused with; the store is what holds
       // the two `--root` commands, which reach it with no reader in front.
-      const displayName = optionalText(read, "displayName", DISPLAY_NAME_LIMIT);
-      const email = optionalText(read, "email", EMAIL_LIMIT);
+      // Both read at the figure the store keeps and refused in the store's own
+      // words, because these two are bounded for a reason worth telling
+      // somebody: a claim too long for a header locks the account out of its own
+      // server. The same input over --root is refused by the store itself, and
+      // the two roads have to say one thing.
+      const displayName = optionalText(read, "displayName", DISPLAY_NAME_LIMIT, DISPLAY_NAME_REFUSAL);
+      const email = optionalText(read, "email", EMAIL_LIMIT, EMAIL_REFUSAL);
       // Which group it joins, as one flag rather than a list of names. Being in
       // the admin group is the whole of what a role decides on this server, and
       // a client naming groups freely would be inventing a vocabulary nothing
