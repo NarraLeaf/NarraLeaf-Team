@@ -387,7 +387,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Any account may, and forgetting a project that is already gone answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
 | `members.list` | `session` | Every account, as a name beside a piece of work. |
 | `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. |
-| `threads.get` | `comments` | One thread and every comment in it. |
+| `threads.get` | `comments` | One thread and a page of its comments, oldest first. `limit` defaults to 50 and is capped at 200; `after` carries the reader on from the cursor the last page ended with, and the cursor is absent when the conversation ends there. The thread's own `comments` count is how many there are in all, so a client knows what it holds a page of. |
 | `threads.create` | `comments` | Open a thread on an anchor, with its first comment. |
 | `threads.reply` | `comments` | Add a comment to a thread. |
 | `threads.resolve` | `comments` | Mark a thread resolved, or open it again. Idempotent: resolving a thread that is already in the asked-for state changes nothing and announces nothing. |

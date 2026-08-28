@@ -27,6 +27,8 @@ import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
 import { mintToken } from "../src/identity/tokens.js";
 import { recordDecision } from "../src/identity/audit.js";
+import { addComment } from "../src/comments/store.js";
+import { MAXIMUM_PAGE } from "../src/team/methods/comments.js";
 import {
   ADMIN_ROLE,
   createUser,
@@ -1268,6 +1270,67 @@ describe("conversations", () => {
 
     const whole = await ada.value(TEAM_METHODS.threadsGet, { thread });
     expect((whole["comments"] as unknown[]).length).toBe(2);
+    // Nothing beyond this page, so nothing to carry on with.
+    expect(whole["cursor"]).toBeUndefined();
+  });
+
+  it("hands back a page of a conversation, and a cursor for the rest of it", async () => {
+    const { project, ada } = await withProject();
+    const opened = await ada.value(TEAM_METHODS.threadsCreate, {
+      project,
+      anchor: { document: "story/act-one.json" },
+      body: "first",
+    });
+    const thread = (opened["thread"] as { id: string }).id;
+    for (const body of ["second", "third", "fourth"]) {
+      await ada.value(TEAM_METHODS.threadsReply, { thread, body });
+    }
+
+    const bodiesOf = (answer: Record<string, unknown>): string[] =>
+      (answer["comments"] as { body: string }[]).map((comment) => comment.body);
+
+    const first = await ada.value(TEAM_METHODS.threadsGet, { thread, limit: 2 });
+    expect(bodiesOf(first)).toEqual(["first", "second"]);
+    expect(typeof first["cursor"]).toBe("string");
+    // The count on the thread is the whole conversation, which is how a client
+    // knows what it has two of.
+    expect((first["thread"] as { comments: number }).comments).toBe(4);
+
+    const rest = await ada.value(TEAM_METHODS.threadsGet, {
+      thread,
+      limit: 2,
+      after: first["cursor"],
+    });
+    expect(bodiesOf(rest)).toEqual(["third", "fourth"]);
+    expect(rest["cursor"]).toBeUndefined();
+  });
+
+  it("answers a thread longer than a page with a page of it", async () => {
+    const { project, ada, team } = await withProject();
+    const opened = await ada.value(TEAM_METHODS.threadsCreate, {
+      project,
+      anchor: { document: "story/act-one.json" },
+      body: "opening",
+    });
+    const thread = (opened["thread"] as { id: string }).id;
+    // Written straight into the store rather than over the socket: what is
+    // being checked is the ceiling on the answer, and two hundred round trips
+    // would be a slow way to say so.
+    const author = requireUser(team.database, "ada").id;
+    for (let index = 0; index < MAXIMUM_PAGE; index += 1) {
+      addComment(team.database, {
+        threadId: thread,
+        authorId: author,
+        body: `reply ${index}`,
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    const answer = await ada.value(TEAM_METHODS.threadsGet, { thread, limit: MAXIMUM_PAGE + 50 });
+
+    expect((answer["comments"] as unknown[]).length).toBe(MAXIMUM_PAGE);
+    expect(typeof answer["cursor"]).toBe("string");
+    expect((answer["thread"] as { comments: number }).comments).toBe(MAXIMUM_PAGE + 1);
   });
 
   it("refuses to let one person edit another's words", async () => {
