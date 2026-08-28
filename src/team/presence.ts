@@ -156,6 +156,21 @@ export class TooManyInstancesError extends Error {
   }
 }
 
+/**
+ * Raised where the installation an announcement names is another account's.
+ *
+ * The message says what happened and names nothing else. Which account holds
+ * the id, and which ids are held at all, are not things a caller learns by
+ * asking for one - it already knows the id it sent, and that is the whole of
+ * what it is told about.
+ */
+export class InstanceTakenError extends Error {
+  constructor() {
+    super("that installation is announced by another account of this server");
+    this.name = "InstanceTakenError";
+  }
+}
+
 export class TeamPresence {
   /** Instance id to what it said and which connection carries it. */
   private readonly instances = new Map<string, InstanceEntry>();
@@ -184,9 +199,19 @@ export class TeamPresence {
    * when the person opens a different project, and that is the whole of how this
    * server knows what anybody has open.
    *
-   * **An id announced on a second connection moves to it.** The alternative is
-   * two entries for one installation, one of which is a socket that is about to
-   * be found dead. Whoever holds the id last holds it.
+   * **An id announced on a second connection moves to it, within one account.**
+   * The alternative is two entries for one installation, one of which is a
+   * socket that is about to be found dead. Whoever holds the id last holds it -
+   * and "whoever" is the account that held it before, never a second one.
+   *
+   * ⚠ **An id is one account's for as long as it holds it.** A live session's
+   * control is keyed on an instance id and not on an account - `openedByInstance`
+   * is what says who may change a room's join rule, answer somebody waiting to
+   * be let in, or close it - so an id that changed hands would hand the rooms it
+   * opened over with it. Refused rather than renamed or allowed alongside:
+   * whichever of the two announcements is the mistaken one, letting both stand
+   * would leave two installations answering to one name in the one place that
+   * cannot tell them apart.
    */
   announce(
     connection: string,
@@ -194,11 +219,15 @@ export class TeamPresence {
     said: InstanceAnnouncement,
   ): TeamClientInstance {
     const previous = this.instances.get(said.id);
+    if (previous !== undefined && previous.instance.account !== account) {
+      throw new InstanceTakenError();
+    }
     const before = previous?.instance.project;
 
     // An id announced on a second connection moves to it. The alternative is two
     // entries for one installation, one of which is a socket about to be found
-    // dead; whoever holds the id last holds it.
+    // dead; whoever holds the id last holds it. That is a Studio reconnecting,
+    // which is why it is the same account either side by the time this runs.
     if (previous !== undefined && previous.connection !== connection) {
       this.byConnection.get(previous.connection)?.delete(said.id);
     }

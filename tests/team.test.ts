@@ -1604,6 +1604,49 @@ describe("which installation is on the other end", () => {
     );
     expect(refusal.code).toBe("not-found");
   });
+
+  it("stays with the account that announced it, over a reconnect and against anybody else", async () => {
+    const { ada, bob, team, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+
+    // The case the rule exists for: one installation, a new socket, the same
+    // id. It moves to the new connection and it is still ada's.
+    const reconnected = await team.connect(team.tokenFor("ada"));
+    const moved = await reconnected.value(
+      TEAM_METHODS.clientsAnnounce,
+      announcement("nomen", project),
+    );
+    expect((moved["client"] as { account: string }).account).toBe("ada");
+
+    // And bob may not have it, whatever he knows about it.
+    const refusal = await bob.call(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    expect(refusal.code).toBe("conflict");
+    const here = (await ada.value(TEAM_METHODS.clientsList, { project }))["clients"] as {
+      id: string;
+      account: string;
+    }[];
+    expect(here).toEqual([expect.objectContaining({ id: "nomen", account: "ada" })]);
+  });
+
+  it("is what a room is controlled by, so taking one would be taking the rooms it opened", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, {
+      project,
+      revision: "rev-1",
+      story: "story-1",
+    });
+    const session = (opened["session"] as { id: string }).id;
+
+    // A room's opener is an instance id rather than an account, so an id that
+    // could change hands would be a room that could. Bob cannot announce ada's,
+    // and under his own he is a passer-by.
+    expect(
+      (await bob.call(TEAM_METHODS.clientsAnnounce, announcement("nomen", project))).code,
+    ).toBe("conflict");
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("imac", project));
+    expect((await bob.call(TEAM_METHODS.liveClose, { session })).code).toBe("refused");
+  });
 });
 
 describe("a live session", () => {
