@@ -56,6 +56,27 @@ export interface RevisionSource {
  */
 export const PROJECT_FILE_SCHEMA = 1;
 
+/**
+ * The largest project file Team will fetch, in bytes.
+ *
+ * A ceiling on the read rather than on the decode, and checked against the size
+ * the tree reports before anything is asked for: the pass in ./refresh.ts reads
+ * every project on the server once a minute, so a file committed at the path
+ * Team looks at is a file this server allocates once a minute, for as long as
+ * it runs, whatever somebody made it. A limit that only stopped the decoder
+ * would already have the bytes in memory by the time it fired.
+ *
+ * Four mebibytes, and the number comes from what a project file is rather than
+ * from what a host can spare. It holds a project's settings — a name, an
+ * identifier, a stage size, icon specifications, the locales the game is
+ * written in — and none of those grow with the project's content: the scenes,
+ * the assets and the stories are all elsewhere in the repository. A real one
+ * Studio writes is well under a kilobyte, and a wildly elaborate one is still
+ * kilobytes. This is thousands of times either, so no honest file meets it,
+ * which is what makes refusing anything past it safe to do without asking.
+ */
+export const MAX_PROJECT_FILE_BYTES = 4 * 1024 * 1024;
+
 /** The newer spelling of a project file, whose name is the project's own. */
 const PROJECT_FILE_EXTENSION = ".nlproj";
 
@@ -72,11 +93,17 @@ const ASSET_REGISTER = /^assets\/assets\.metadata\.([A-Za-z0-9_-]+)\.json$/;
 const STORY_INDEX = "editor/story/index.json";
 
 /**
- * How many bytes of story documents one read will fetch.
+ * How many bytes of the story index and its documents one read will fetch.
  *
  * A scene count is worth having and not worth any price. Past this the count
  * is absent — which draws as unknown — rather than being a partial count that
  * looks exactly like a real one.
+ *
+ * The index is spent from the same budget as the documents it names, because
+ * it is the same kind of thing: a file at a known path in somebody else's
+ * repository, fetched by the pass in ./refresh.ts once a minute for as long as
+ * this server runs. Nothing on that path may read a file without first knowing
+ * how big it is.
  */
 const STORY_READ_BUDGET = 16 * 1024 * 1024;
 
@@ -102,6 +129,20 @@ export async function readProjectFile(source: RevisionSource): Promise<ProjectFi
       readable: false,
       reason:
         "this revision has no project file at its root, so it was not made by Studio or was made by a newer one that keeps it elsewhere",
+    };
+  }
+
+  if (configFile.size > MAX_PROJECT_FILE_BYTES) {
+    // Refused from the tree, without the bytes ever being asked for. It goes
+    // down the same road as a file Team could not make sense of, because to
+    // whoever is looking it is the same thing: this project cannot be read,
+    // and here is the sentence saying why.
+    return {
+      readable: false,
+      reason:
+        `${configFile.path} is ${configFile.size.toLocaleString("en-US")} bytes, and Team reads a project file ` +
+        `up to ${MAX_PROJECT_FILE_BYTES.toLocaleString("en-US")}. A project file holds a project's settings rather ` +
+        "than its content, so something this large is not one.",
     };
   }
 
@@ -299,14 +340,21 @@ function contentPathOf(id: string): string {
  * project and an understanding of one.
  *
  * Undefined where it could not be counted — no index, an index that is not
- * what it claims, a document too big to be worth fetching. A partial count is
- * never returned, because it is indistinguishable on screen from a real one.
+ * what it claims, an index or a document too big to be worth fetching. A
+ * partial count is never returned, because it is indistinguishable on screen
+ * from a real one.
  */
 async function countScenes(source: RevisionSource): Promise<number | undefined> {
   const indexFile = source.files.find((file) => file.path === STORY_INDEX);
   if (indexFile === undefined) {
     return undefined;
   }
+
+  let budget = STORY_READ_BUDGET;
+  if (indexFile.size > budget) {
+    return undefined;
+  }
+  budget -= indexFile.size;
 
   let index: unknown;
   try {
@@ -320,7 +368,6 @@ async function countScenes(source: RevisionSource): Promise<number | undefined> 
   }
 
   const byPath = new Map(source.files.map((file) => [file.path, file]));
-  let budget = STORY_READ_BUDGET;
   let scenes = 0;
 
   for (const story of stories) {

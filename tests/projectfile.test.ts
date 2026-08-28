@@ -12,26 +12,47 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_PROJECT_FILE_BYTES,
   PROJECT_FILE_SCHEMA,
   readProjectFile,
   revisionSizes,
   type RevisionFile,
   type RevisionSource,
 } from "../src/projects/content.js";
-import { encodeMsgpack } from "./msgpack-fixture.js";
+import { encodeMsgpack, realProjectFile } from "./msgpack-fixture.js";
 
-/** A revision made of named files, each with the bytes it should answer with. */
-function revision(entries: Record<string, Buffer | string>): RevisionSource {
-  const bytes = new Map<string, Buffer>(
-    Object.entries(entries).map(([path, value]) => [
-      path,
-      typeof value === "string" ? Buffer.from(value, "utf-8") : value,
-    ]),
-  );
-  const files: RevisionFile[] = [...bytes].map(([path, value]) => ({ path, size: value.length }));
+/** A revision, and the paths that have been fetched from it. */
+type TestRevision = RevisionSource & { readonly fetched: readonly string[] };
+
+/**
+ * A revision made of named files, each with the bytes it should answer with.
+ *
+ * A number in place of bytes is a size the tree reports for a file nothing
+ * will hand over, and `fetched` says which paths were asked for. Both are here
+ * for the limits that are checked against the tree rather than against a
+ * buffer: the only way to say a file was refused before it was read is to
+ * watch whether it was read.
+ */
+function revision(entries: Record<string, Buffer | string | number>): TestRevision {
+  const bytes = new Map<string, Buffer>();
+  const files: RevisionFile[] = [];
+  const fetched: string[] = [];
+
+  for (const [path, value] of Object.entries(entries)) {
+    if (typeof value === "number") {
+      files.push({ path, size: value });
+      continue;
+    }
+    const held = typeof value === "string" ? Buffer.from(value, "utf-8") : value;
+    bytes.set(path, held);
+    files.push({ path, size: held.length });
+  }
+
   return {
     files,
+    fetched,
     async read(file) {
+      fetched.push(file.path);
       const found = bytes.get(file.path);
       if (found === undefined) {
         throw new Error(`${file.path} is not in this revision`);
@@ -232,6 +253,48 @@ describe("a project file Team cannot read", () => {
     expect(file.assets).toBe(1);
     expect(file.assetBytes).toBe(512);
     expect(file.assetsByKind).toBeUndefined();
+  });
+
+  it("refuses a project file too large to be one, without fetching it", async () => {
+    // What makes this worth a limit is not a corrupt file. It is a file
+    // somebody committed at the path Team looks at, in a repository their
+    // collaborators share, which the pass in src/projects/refresh.ts fetches
+    // for every project on the server once a minute for as long as it runs.
+    const source = revision({ "Harbour.nlproj": MAX_PROJECT_FILE_BYTES + 1 });
+
+    const reason = await refusalFor(source);
+
+    expect(reason).toContain("Harbour.nlproj");
+    expect(reason).toContain(MAX_PROJECT_FILE_BYTES.toLocaleString("en-US"));
+    // The assertion the whole fix is about: the bytes were never asked for. A
+    // limit that fired after the read would have allocated the file first,
+    // which is the cost it exists to refuse.
+    expect(source.fetched).toEqual([]);
+  });
+
+  it("leaves room for a project file thousands of times the size of a real one", () => {
+    // The reasoning behind the ceiling, put somewhere it can fail. This is a
+    // project file a real Studio wrote, byte for byte, and the limit is three
+    // orders of magnitude above it — so a file that meets the limit is not a
+    // project file that grew, it is something else wearing the name.
+    expect(realProjectFile().length * 1000).toBeLessThan(MAX_PROJECT_FILE_BYTES);
+  });
+
+  it("does not fetch a story index too large to be one", async () => {
+    // The index is at a fixed path, so it is reachable by exactly the same
+    // route as the project file. The degradation rule decides what happens
+    // next: the count is absent, and everything else about the project is not.
+    const source = revision({
+      "Harbour.nlproj": projectFile(),
+      "editor/story/index.json": 64 * 1024 * 1024,
+    });
+
+    const file = await readProjectFile(source);
+
+    expect(file.readable).toBe(true);
+    expect(file.title).toBe("A Harbour Tale");
+    expect(file.scenes).toBeUndefined();
+    expect(source.fetched).toEqual(["Harbour.nlproj"]);
   });
 
   it("does not count the scenes it could only count some of", async () => {
