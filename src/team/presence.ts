@@ -224,16 +224,23 @@ export class TeamPresence {
     }
     const before = previous?.instance.project;
 
+    // Both refusals are settled before anything is moved. The limit is about
+    // the connection announcing and not about the one that held the id, so it
+    // can be answered here — and it has to be, because a refusal after the line
+    // below would leave the id gone from the old connection's set while its
+    // entry still named that connection, and nothing would ever sweep it: the
+    // socket it was on closes and finds no id to drop.
+    const held = this.byConnection.get(connection) ?? new Set<string>();
+    if (!held.has(said.id) && held.size >= INSTANCES_PER_CONNECTION) {
+      throw new TooManyInstancesError();
+    }
+
     // An id announced on a second connection moves to it. The alternative is two
     // entries for one installation, one of which is a socket about to be found
     // dead; whoever holds the id last holds it. That is a Studio reconnecting,
     // which is why it is the same account either side by the time this runs.
     if (previous !== undefined && previous.connection !== connection) {
       this.byConnection.get(previous.connection)?.delete(said.id);
-    }
-    const held = this.byConnection.get(connection) ?? new Set<string>();
-    if (!held.has(said.id) && held.size >= INSTANCES_PER_CONNECTION) {
-      throw new TooManyInstancesError();
     }
 
     const instance: TeamClientInstance = {
