@@ -3184,6 +3184,7 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminTokensMint,
   TEAM_METHODS.adminSettingsSet,
   TEAM_METHODS.adminKeysRotate,
+  TEAM_METHODS.adminKeysRetire,
 ];
 
 /** Both halves, which is what the gate has to cover. */
@@ -4489,6 +4490,127 @@ describe("rotating the signing keys over the session", () => {
       keys: answer["keys"],
       total: answer["total"],
     });
+  });
+});
+
+describe("retiring a signing key over the session", () => {
+  /**
+   * An operator holding a token the key that stays signed, and the `kid` of one
+   * to retire.
+   *
+   * Every test below rotates before it connects, and that is not scenery.
+   * Retiring a key refuses every token it signed, so an operator who signed in
+   * before the rotation would be retiring their own session out from under the
+   * call — which is exactly what retiring is for, and not what any of these are
+   * about.
+   */
+  async function pastARotation(): Promise<{ team: Harness; ada: Client; retiring: string }> {
+    const team = await harness();
+    await account(team.database, "ada", { groups: [ADMIN_ROLE] });
+    const retiring = team.keys.signingKey.kid;
+    await team.keys.rotate();
+    return { team, ada: await team.connect(team.tokenFor("ada")), retiring };
+  }
+
+  it("stops publishing the key, and answers with the list a rotation answers with", async () => {
+    const { team, ada, retiring } = await pastARotation();
+    const watcher = await team.connect(team.tokenFor("ada"));
+    await watcher.send("subscribe", { topic: TOPIC_ADMIN_KEYS });
+
+    const answer = await ada.value(TEAM_METHODS.adminKeysRetire, { kid: retiring });
+
+    const keys = answer["keys"] as { kid: string; retired: boolean; signing: boolean }[];
+    expect(keys.find((key) => key.kid === retiring)?.retired).toBe(true);
+    // The file is kept rather than deleted, so a retirement moves no count: the
+    // row stays on the list as retired instead of a key disappearing.
+    expect(answer["total"]).toBe(2);
+    expect(await ada.value(TEAM_METHODS.adminKeysList)).toEqual(answer);
+    // The same topic and the same payload a rotation announces, so a client
+    // watching the keys replaces what it holds without having to work out which
+    // of the two it was told about.
+    await watcher.until(() => watcher.events.length > 0);
+    expect(watcher.events[0]?.payload).toEqual({
+      kind: "key-retired",
+      keys: answer["keys"],
+      total: answer["total"],
+    });
+  });
+
+  it("refuses a token the retired key signed, and takes the key out of the JWKS", async () => {
+    const team = await harness();
+    await account(team.database, "ada", { groups: [ADMIN_ROLE] });
+    // Signed before the rotation, so it is one of the tokens this retirement is
+    // meant to end.
+    const ended = team.tokenFor("ada");
+    const retiring = team.keys.signingKey.kid;
+    await team.keys.rotate();
+    const ada = await team.connect(team.tokenFor("ada"));
+
+    await ada.value(TEAM_METHODS.adminKeysRetire, { kid: retiring });
+
+    expect(await upgradeStatus(team.origin, TEAM_SOCKET_PATH, ended)).toBe(401);
+    // And gone from the document loreserver verifies against, which is what
+    // carries the refusal to the calls Team is never asked about.
+    expect(team.keys.jwks().keys.map((key) => key.kid)).not.toContain(retiring);
+  });
+
+  it("refuses the key it signs with, and says to rotate first", async () => {
+    const { team, ada } = await administered();
+
+    const refusal = await ada.call(TEAM_METHODS.adminKeysRetire, {
+      kid: team.keys.signingKey.kid,
+    });
+
+    // It would refuse the token this very call arrived on and leave nothing
+    // able to sign a replacement, so the refusal names the command that makes
+    // one rather than only saying no.
+    expect(refusal.code).toBe("refused");
+    expect(refusal.message).toContain("Rotate first");
+    expect(team.keys.published).toHaveLength(1);
+  });
+
+  it("lets the last key that was only verifying go, which is what the verb is for", async () => {
+    const { team, ada, retiring } = await pastARotation();
+
+    const answer = await ada.value(TEAM_METHODS.adminKeysRetire, { kid: retiring });
+
+    // Nothing but the key that signs is published now, so every token this
+    // server issued before the rotation is refused and those people sign in
+    // again. That is the act somebody performs about a key they believe has got
+    // out, so there is no guard in front of it — the cost is said instead.
+    expect((answer["keys"] as { retired: boolean }[]).filter((key) => !key.retired)).toHaveLength(
+      1,
+    );
+    expect(team.keys.published.map((key) => key.kid)).toEqual([team.keys.signingKey.kid]);
+  });
+
+  it("says it has no such key rather than refusing one it has never held", async () => {
+    const { ada } = await administered();
+
+    const refusal = await ada.call(TEAM_METHODS.adminKeysRetire, { kid: "not-a-thumbprint" });
+
+    expect(refusal.code).toBe("not-found");
+  });
+
+  it("retires once for one client id, whichever key the second call names", async () => {
+    const team = await harness();
+    await account(team.database, "ada", { groups: [ADMIN_ROLE] });
+    const first = team.keys.signingKey.kid;
+    await team.keys.rotate();
+    const second = team.keys.signingKey.kid;
+    await team.keys.rotate();
+    const ada = await team.connect(team.tokenFor("ada"));
+
+    await ada.value(TEAM_METHODS.adminKeysRetire, { kid: first, clientId: "once" });
+    const again = await ada.value(TEAM_METHODS.adminKeysRetire, { kid: second, clientId: "once" });
+
+    // A retry after a dropped socket is the same call arriving twice, and the
+    // note is keyed by the client id rather than by the key named. So a repeat
+    // ends nothing — where retiring `second` would have refused every token
+    // this server issued between the two rotations, which nobody asked for.
+    const keys = again["keys"] as { kid: string; retired: boolean }[];
+    expect(keys.find((key) => key.kid === first)?.retired).toBe(true);
+    expect(keys.find((key) => key.kid === second)?.retired).toBe(false);
   });
 });
 

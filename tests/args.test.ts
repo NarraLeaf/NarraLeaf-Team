@@ -440,10 +440,34 @@ describe("parseArgs, the identity commands", () => {
     });
   });
 
+  it("retires the key named by its kid, and only ever one of them", () => {
+    expect(parseArgs(["key", "retire", "nEQBz", "--root", "/srv/team"])).toEqual({
+      kind: "key-retire",
+      target: { kind: "root", root: "/srv/team" },
+      kid: "nEQBz",
+    });
+    expect(parseArgs(["key", "retire", "nEQBz", "--server", "team.example.lan:41402"])).toEqual({
+      kind: "key-retire",
+      target: { kind: "server", server: "team.example.lan:41402" },
+      kid: "nEQBz",
+    });
+    // Retiring is what ends a key's life, so a command line naming two keys is
+    // refused rather than acted on for the first of them.
+    expect(messageFor(["key", "retire", "nEQBz", "Ss9lM", "--root", "/srv/team"])).toBe(
+      "unexpected argument: Ss9lM",
+    );
+    expect(messageFor(["key", "retire", "--root", "/srv/team"])).toContain("kid");
+    // The verbs that take no subject go on taking none.
+    expect(messageFor(["key", "rotate", "nEQBz", "--root", "/srv/team"])).toBe(
+      "unexpected argument: nEQBz",
+    );
+  });
+
   it("names the verb it did not recognise, and the ones it has", () => {
     expect(messageFor(["user", "invent", "--root", "/srv/team"])).toBe("unknown user command: invent");
     expect(messageFor(["user"])).toContain("grant-admin");
     expect(messageFor(["key", "melt", "--root", "/srv/team"])).toBe("unknown key command: melt");
+    expect(messageFor(["key"])).toContain("retire");
   });
 
   it("wants a root for every command that keeps state", () => {

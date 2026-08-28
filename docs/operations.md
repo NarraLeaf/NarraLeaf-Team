@@ -790,8 +790,9 @@ Team has issued to that account is refused from that moment wherever Team is the
 one asked — signing in, exchanging, and the permission question behind every
 repository access. A data connection already open is checked by `loreserver`'s
 data plane rather than by Team, and may last until the repository token it was
-opened with expires. Nothing short of retiring the signing key, which invalidates
-everybody's tokens at once, shortens that.
+opened with expires. Nothing short of retiring the key that signed it shortens
+that, and retiring one refuses everybody's tokens rather than that person's —
+see [Signing keys](#signing-keys).
 
 `disable` over the protocol will not take the last operator's account away, and
 says so with the command that will; `disable --root` will, because the machine
@@ -869,6 +870,53 @@ Taking a key out of the JWKS is deliberately not part of rotating: tokens it
 signed are valid until they expire, so it has to keep verifying for at least one
 sign-in token lifetime after it stops signing — thirty days, unless this Team server has
 been set to something else.
+
+### Retiring a key
+
+Retiring is the other verb, and it is the one that ends a key's life:
+
+```sh
+nlteam key retire nEQBz…  --root /srv/team
+nlteam key retire nEQBz…  --server team.example.lan:41402
+```
+
+The key stops being published, so **every token it signed is refused from that
+moment** — by this server on every call, on every subscription and on every
+repository access it is asked about, and by `loreserver` too, which verifies
+against the same JWKS. Whoever held one signs in again. The command says so when
+it runs rather than asking whether it was meant: a `kid` has to be copied off
+`key list` to get here, and what the person who typed it needs told is what has
+just happened to everybody else.
+
+That is why it is not part of rotating and not a stronger version of it. A
+rotation is invisible to everybody holding a token; a retirement is visible to
+all of them at once. **Retiring is what to reach for when a private key is
+believed to have got out**, and shortening
+`token.sign_in_lifetime_seconds` is not: the setting bounds tokens minted after
+it changes, while the ones already issued are exactly the problem.
+
+Two things about which key:
+
+- **The key that is signing is refused.** Retiring it would refuse the tokens
+  this server has just issued — including the one the command is using, over
+  `--server` — and leave nothing able to sign the replacements. The command
+  says to rotate first, which makes a key to sign with and turns the old one
+  into an ordinary key to retire. This is refused on both paths, `--root`
+  included: it is not a rule about who may ask but about the state a keys
+  directory can be left in, and the way past it on the disk is the rotation
+  rather than a flag.
+- **Retiring the last key that was only verifying is not refused.** Rotate, then
+  retire everything else, and nothing but the new key is published: every token
+  this server issued before that rotation stops working, and everybody signs in.
+  That is not a mistake to be guarded against, it is the reason the command
+  exists, so what it does is say the cost rather than ask for the intention a
+  second time.
+
+The file is kept either way. `<serial>.pem` becomes `<serial>.retired.pem`, so
+the key stays on `key list` as `retired` rather than vanishing, and an operator
+can see that it happened. Putting one back is a rename on the disk and is
+nothing this command does — a key restored to the JWKS goes back to verifying
+the very tokens it was retired to refuse.
 
 ## Projects
 

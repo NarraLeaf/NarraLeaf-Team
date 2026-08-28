@@ -3,7 +3,13 @@ import { readdir, stat } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 
 import { identityLayout } from "../src/identity/layout.js";
-import { jwkThumbprint, KeyStore, MODULUS_LENGTH } from "../src/identity/keys.js";
+import {
+  jwkThumbprint,
+  KeyStore,
+  MODULUS_LENGTH,
+  SigningKeyRetirementError,
+  UnknownKeyError,
+} from "../src/identity/keys.js";
 import { useTemporaryRoots } from "./temporary.js";
 
 const temporaryRoot = useTemporaryRoots("nlteam-keys-");
@@ -66,6 +72,47 @@ describe("KeyStore", () => {
     expect(keys.jwks().keys.map((key) => key.kid)).toEqual([second.kid]);
     expect(keys.all.map((key) => key.kid)).toEqual([second.kid, first.kid]);
     expect(keys.signingKey.kid).toBe(second.kid);
+  });
+
+  it("refuses to retire the key it signs with, and says what has to happen first", async () => {
+    const keys = await store();
+    const signing = keys.signingKey;
+
+    await expect(keys.retire(signing.kid)).rejects.toThrow(SigningKeyRetirementError);
+
+    // Nothing moved. Retiring it would have refused every token this store has
+    // signed and left the next one asked for with nothing to sign it, which is
+    // why the refusal is here rather than in the two surfaces that call this.
+    expect(keys.jwks().keys.map((key) => key.kid)).toEqual([signing.kid]);
+    await expect(keys.retire(signing.kid)).rejects.toThrow(/Rotate first/);
+  });
+
+  it("retires the key that used to sign, once something else is signing", async () => {
+    const keys = await store();
+    const first = keys.signingKey;
+    await keys.rotate();
+
+    await expect(keys.retire(first.kid)).resolves.toMatchObject({ retired: true });
+
+    expect(keys.jwks().keys.map((key) => key.kid)).toEqual([keys.signingKey.kid]);
+  });
+
+  it("answers a key that is already retired rather than moving its file twice", async () => {
+    const keys = await store();
+    const first = keys.signingKey;
+    await keys.rotate();
+    await keys.retire(first.kid);
+
+    // The rename has happened, and doing it again would be a rename of a name
+    // that is no longer there.
+    await expect(keys.retire(first.kid)).resolves.toMatchObject({ retired: true });
+    expect(keys.all.map((key) => key.kid)).toEqual([keys.signingKey.kid, first.kid]);
+  });
+
+  it("says it has no such key when the kid names one it has never held", async () => {
+    const keys = await store();
+
+    await expect(keys.retire("not-a-thumbprint")).rejects.toThrow(UnknownKeyError);
   });
 
   it("finds the same keys again when it is reopened", async () => {

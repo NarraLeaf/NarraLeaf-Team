@@ -56,7 +56,7 @@
  */
 import { pageDecisions } from "../../identity/audit.js";
 import { adminUserBody } from "../../identity/answers.js";
-import type { KeyStore } from "../../identity/keys.js";
+import { SigningKeyRetirementError, type KeyStore } from "../../identity/keys.js";
 import { defaultPasswordHasher } from "../../identity/passwords.js";
 import {
   COLLABORATION_KEY,
@@ -170,6 +170,16 @@ const CLIENT_ID_LIMIT = 128;
 
 /** The most a username may be. The name pattern caps it tighter; this is the gross bound. */
 const USERNAME_LIMIT = 64;
+
+/**
+ * The most a `kid` may be.
+ *
+ * Every one this server writes is a base64url SHA-256 thumbprint, which is
+ * forty-three characters. The bound is here so that the field cannot become
+ * somewhere to put a payload, not because a longer one would be wrong: a `kid`
+ * naming no key this server holds is answered as `not-found` whatever its shape.
+ */
+const KID_LIMIT = 128;
 
 /**
  * The most a password may be.
@@ -791,6 +801,58 @@ export function adminMethods(): TeamMethod[] {
       };
       context.publish(TOPIC_ADMIN_KEYS, event);
       return rotated;
+    }),
+    administeredWrite(TEAM_METHODS.adminKeysRetire, async (read, context, repeat) => {
+      const kid = requiredText(read, "kid", KID_LIMIT);
+      const keys = context.options.keys;
+      // Re-read for the reason a rotation does and for a sharper one: what this
+      // answers with is a statement about which keys are published, and a file
+      // renamed under `<root>/keys/` while this server was running is a key it
+      // would otherwise both publish and report as published.
+      await keys.reload();
+      const key = keys.find(kid);
+      if (key === undefined) {
+        // Retired keys are found too — a `kid` this server has never held is
+        // the only thing this refuses, and it is not the caller's fault that a
+        // panel may be holding a list from before a directory was tidied.
+        throw new MethodError("not-found", `no key with kid ${kid} is on this server`);
+      }
+      if (repeat.already !== undefined || key.retired) {
+        // The note is keyed by the client id and not by the key named, which is
+        // the point of it here: a call retried after a dropped socket retires
+        // the key the first of the two named, and a client that reused one id
+        // for a second key retires nothing rather than a key nobody asked twice
+        // about. A key already retired is the state that was asked for, so it
+        // is answered and not announced a second time.
+        return keyRows(keys);
+      }
+      try {
+        // Ends the key's life: it stops being published, so every token it
+        // signed is refused from this moment by this server and by anything
+        // else holding the JWKS. That is the point of the verb, and it is why
+        // nothing here asks whether the operator meant it — a key believed to
+        // be compromised is retired at the cost of everybody signing in again,
+        // and that cost is what was being bought.
+        await keys.retire(kid);
+      } catch (error) {
+        if (error instanceof SigningKeyRetirementError) {
+          // The one retirement this server will not make, and it is refused for
+          // the caller's sake rather than the server's: it would refuse the very
+          // token the call arrived on and leave nothing able to sign another.
+          throw new MethodError("refused", error.message);
+        }
+        throw error;
+      }
+      const after = keyRows(keys);
+      // The same list, on the same topic and with the same `total`, as a
+      // rotation announces. A panel replaces what it holds either way.
+      const event: TeamAdminKeysEvent = {
+        kind: "key-retired",
+        keys: after.keys,
+        total: after.total,
+      };
+      context.publish(TOPIC_ADMIN_KEYS, event);
+      return after;
     }),
     administered(TEAM_METHODS.adminAuditList, (params: unknown, context: MethodContext) => {
       const read = paramsObject(params);

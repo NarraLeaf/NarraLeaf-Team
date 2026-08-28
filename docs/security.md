@@ -380,13 +380,30 @@ what makes a rotation invisible to anybody holding a token. What ends a key's
 life is *retiring* it, which stops it being published and refuses every token it
 signed, everywhere Team is the one checking — and, since `loreserver` verifies
 against the same JWKS, on these two calls as well. Everybody signs in again.
-There is deliberately no `key retire` command and no `admin.keys.retire` method:
-`KeyStore.retire` in `src/identity/keys.ts` renames `<serial>.pem` to
-`<serial>.retired.pem` under `<root>/keys/`, and nothing in either surface calls
-it. Retiring is a rescue-plane act, done on the disk, and
-[operations.md](operations.md#signing-keys) says why it is kept out of rotating:
-a key has to go on verifying for at least one sign-in token lifetime after it
-stops signing, or a rotation would invalidate everybody's tokens by accident.
+
+That is `nlteam key retire <kid>`, and `admin.keys.retire` on the session, which
+`KeyStore.retire` in `src/identity/keys.ts` has behind both: `<serial>.pem`
+becomes `<serial>.retired.pem` under `<root>/keys/`. It used to be that rename
+and nothing else — an act on the rescue plane, done on the disk by whoever
+held the storage root, with no command, no record of having happened and no way
+to see what it had done. It is now the lever it always was, reachable the way
+every other management verb here is: on the machine with `--root`, and from
+anywhere with `--server` by an operator. The rename is still what it comes down
+to, and whoever holds the storage root can still do it by hand — the rescue
+plane is under all of this rather than replaced by it.
+
+Two things about the verb are worth knowing before it is reached for. The key
+that is *signing* is refused, on both paths, because retiring it would refuse
+the tokens this server has just issued and leave nothing able to sign their
+replacements; the way through is to rotate first and then retire the key that
+used to sign. And retiring the last key that was only verifying is **not**
+refused, because that is precisely the act somebody performs about a key they
+believe has got out — the cost is stated rather than guarded against.
+[operations.md](operations.md#retiring-a-key) has both, and
+[operations.md](operations.md#signing-keys) says why retiring is kept out of
+rotating: a key has to go on verifying for at least one sign-in token lifetime
+after it stops signing, or a rotation would invalidate everybody's tokens by
+accident.
 
 ## Reporting a problem
 

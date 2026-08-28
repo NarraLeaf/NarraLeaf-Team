@@ -427,6 +427,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `admin.tokens.mint` | `admin` | Mint a sign-in token for an account without knowing its password, to be handed to the person. Answers with the account, when it expires, and the token — **shown once and kept nowhere**. A repeat under the same `clientId` mints nothing and answers without a token. Refused for a disabled account. Announces nothing on any topic. |
 | `admin.settings.set` | `admin` | Change one setting, named by the `label` the settings list gives it, to `value`. A lifetime takes the words the row shows, `7d`, or a bare number of seconds. Answers with the row as the list carries it. A row that is not editable is `refused`; a label this server has not got is `not-found`. Announces `setting-changed`, and nothing when the value was already that. |
 | `admin.keys.rotate` | `admin` | Generate a signing key and sign with it from now on. Every key that is not retired goes on being published, so a token signed a second ago still verifies. Answers with the key list as `admin.keys.list` carries it — the same ceiling and the same `total` — and announces `keys-rotated` carrying that. |
+| `admin.keys.retire` | `admin` | Stop publishing the key named by `kid`, which **refuses every token that key signed**, here and anywhere else verifying against this server's JWKS. The opposite of rotating and not a stronger version of it: whoever held one of those tokens signs in again. The key's file is kept, so `total` does not move and the row stays on the list as `retired`. **The key that signs is refused**, in a sentence saying to rotate first — retiring it would refuse the token the call arrived on and leave nothing able to sign a replacement. Retiring the last key that was only verifying is not refused: it is what somebody does about a key they believe has got out, and the cost is the point. A `kid` this server has never held is `not-found`; one already retired is answered and nothing is announced, as with every idempotent write here. Answers with the key list exactly as `admin.keys.rotate` does and announces `key-retired` carrying it. |
 
 ### Administering a server
 
@@ -488,7 +489,7 @@ server never publishes on is refused rather than left waiting.
 | `live:{session}` | Something was said inside one live session. Kept by nobody. |
 | `admin/users` | An account was made, disabled, enabled, given or denied administration, or had its tokens refused. Operators only. |
 | `admin/settings` | A setting of this server changed. Operators only. |
-| `admin/keys` | This server rotated its signing keys; the event carries the whole list. Operators only. |
+| `admin/keys` | This server rotated its signing keys or retired one; the event carries the whole list either way, so a client that replaces what it holds does not have to tell the two apart. Operators only. |
 | `admin/refusals` | A decision this server was asked to make was **refused**. Operators only. |
 
 The people on a server are read on demand, through `members.list`, rather than

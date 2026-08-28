@@ -99,6 +99,33 @@ export class NoSigningKeyError extends Error {
   }
 }
 
+/** Raised when a `kid` names no key this store holds, retired ones included. */
+export class UnknownKeyError extends Error {
+  constructor(kid: string, keysDir: string) {
+    super(`no key with kid ${kid} is in ${keysDir}`);
+    this.name = "UnknownKeyError";
+  }
+}
+
+/**
+ * Raised when the key asked to be retired is the one signing tokens.
+ *
+ * Retiring is what ends a key's life, so retiring the signing key would refuse
+ * every token this server has just issued — the asker's own among them — and
+ * leave nothing behind to sign the replacements with. Rotating first makes a
+ * key to sign with, and the key that used to sign is then an ordinary one to
+ * retire, which is why the sentence names the two commands in that order.
+ */
+export class SigningKeyRetirementError extends Error {
+  constructor(readonly kid: string) {
+    super(
+      `${kid} is the key this server signs tokens with, and retiring it would leave nothing ` +
+        "able to sign one. Rotate first, then retire this key.",
+    );
+    this.name = "SigningKeyRetirementError";
+  }
+}
+
 /** `<serial>.pem` is in use; `<serial>.retired.pem` is kept but not published. */
 const ACTIVE_NAME = /^(\d{4})\.pem$/;
 const RETIRED_NAME = /^(\d{4})\.retired\.pem$/;
@@ -320,14 +347,29 @@ export class KeyStore {
    * Retiring is what ends a key's life, and it is separate from rotating on
    * purpose: tokens signed by it are still valid until they expire, so it has
    * to keep verifying for at least one token lifetime after it stops signing.
+   *
+   * The key that is currently signing is refused, and that refusal is here
+   * rather than in either of the two surfaces that call this, because it is a
+   * fact about what a store can be left in rather than a rule about who may ask.
+   * A store whose newest key is retired has nothing to sign with, so the very
+   * next token it was asked for would be a {@link NoSigningKeyError} — and the
+   * asker would have refused their own token on the way to finding that out.
+   * Rotating first is the whole of the way round it.
+   *
+   * Retiring a key that is already retired is the state the caller asked for,
+   * and it is answered rather than done again: the file has moved once and
+   * moving it a second time is a rename of a name that is no longer there.
    */
   async retire(kid: string): Promise<TeamKey> {
     const key = this.find(kid);
     if (key === undefined) {
-      throw new Error(`no key with kid ${kid} is in ${this.#keysDir}`);
+      throw new UnknownKeyError(kid, this.#keysDir);
     }
     if (key.retired) {
       return key;
+    }
+    if (key.kid === this.published[0]?.kid) {
+      throw new SigningKeyRetirementError(kid);
     }
     const path = join(this.#keysDir, retiredFileName(key.serial));
     await rename(key.path, path);

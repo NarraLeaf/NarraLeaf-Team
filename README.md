@@ -134,6 +134,7 @@ between programs on the server machine and are bound to the loopback.
 | `nlteam project list` | List the projects |
 | `nlteam settings list\|set <key> <value>` | Show or change the token lifetimes and this server's name |
 | `nlteam key list\|rotate` | Show the signing keys, or sign with a new one |
+| `nlteam key retire <kid>` | Stop publishing one, refusing every token it signed |
 
 Most of them take `--root <path>`, the directory this server keeps its files in,
 which means being logged into the machine it runs on. `login` is how that stops

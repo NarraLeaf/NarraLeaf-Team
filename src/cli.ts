@@ -12,7 +12,14 @@ import {
 } from "./identity/settings.js";
 import { ADMIN_ROLE, DEFAULT_ROLE } from "./identity/users.js";
 import { init } from "./init.js";
-import { keyList, keyListOverProtocol, keyRotate, keyRotateOverProtocol } from "./key.js";
+import {
+  keyList,
+  keyListOverProtocol,
+  keyRetire,
+  keyRetireOverProtocol,
+  keyRotate,
+  keyRotateOverProtocol,
+} from "./key.js";
 import { login, logout } from "./login.js";
 import { DEFAULT_PORTS } from "./loreserver/layout.js";
 import {
@@ -111,6 +118,9 @@ Commands:
                             Change one of them
   key list                  Show the signing keys
   key rotate                Generate a key and sign with it from now on
+  key retire <kid>          Stop publishing one key, which refuses every token
+                            it signed and sends those people back to sign in.
+                            Not the key that signs: rotate first
   status                    Say what this server is: its versions, whether
                             loreserver is answering, what it holds, where it is
                             reached and its fingerprint. The answer says when it
@@ -500,6 +510,14 @@ export async function run(
       return invocation.target.kind === "server"
         ? await keyRotateOverProtocol({ server: invocation.target.server }, stdout, stderr)
         : await keyRotate({ root: invocation.target.root }, stdout, stderr);
+    case "key-retire":
+      return invocation.target.kind === "server"
+        ? await keyRetireOverProtocol(
+            { server: invocation.target.server, kid: invocation.kid },
+            stdout,
+            stderr,
+          )
+        : await keyRetire({ root: invocation.target.root, kid: invocation.kid }, stdout, stderr);
     case "status":
       return invocation.target.kind === "server"
         ? await statusOverProtocol({ server: invocation.target.server }, stdout, stderr)

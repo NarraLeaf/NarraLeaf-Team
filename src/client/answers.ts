@@ -257,7 +257,7 @@ export interface ListedKey {
   readonly signing: boolean;
 }
 
-/** The keys `admin.keys.list` and `admin.keys.rotate` both answer with. */
+/** The keys `admin.keys.list`, `admin.keys.rotate` and `admin.keys.retire` all answer with. */
 export function readKeys(method: string, answer: unknown): readonly ListedKey[] {
   const listed = objectOf(answer)["keys"];
   if (!Array.isArray(listed)) {

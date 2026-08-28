@@ -1165,7 +1165,7 @@ export type TeamAdminSettingsEvent =
 /**
  * What happened on the `admin/keys` topic.
  *
- * The list rather than the key that was made: a rotation changes which key
+ * The list rather than the key that changed: a rotation changes which key
  * signs, so the row for the key before it changes too, and sending one row
  * would leave a panel holding a list with two keys claiming to sign.
  *
@@ -1173,6 +1173,12 @@ export type TeamAdminSettingsEvent =
  * the same `total` beside it — a topic is not somewhere a cursor can go, so an
  * event that carried more than the answer does would be the bound going out by
  * the front door and back in through the window.
+ *
+ * A rotation and a retirement carry exactly the same payload, and that is what
+ * makes them safe to handle as one thing: a client that replaces the list it
+ * holds with `keys` is correct afterwards without having had to work out which
+ * of the two it was told about. The kinds differ only so that a panel wanting
+ * to say what happened has something to say it from.
  */
 export type TeamAdminKeysEvent =
   | TeamSubscriptionWithdrawn
@@ -1180,6 +1186,12 @@ export type TeamAdminKeysEvent =
       readonly kind: "keys-rotated";
       readonly keys: readonly TeamAdminKey[];
       /** Every key this server holds, whatever the ceiling on the list left out. */
+      readonly total: number;
+    }
+  | {
+      readonly kind: "key-retired";
+      readonly keys: readonly TeamAdminKey[];
+      /** Unmoved by a retirement, which keeps the key's file rather than deleting it. */
       readonly total: number;
     };
 
@@ -1309,6 +1321,8 @@ export const TEAM_METHODS = {
   adminKeysList: "admin.keys.list",
   /** Generate a signing key and sign with it from now on. */
   adminKeysRotate: "admin.keys.rotate",
+  /** Stop publishing one key, refusing every token it signed. Never the one that signs. */
+  adminKeysRetire: "admin.keys.retire",
   /** A page of the decisions this server has been asked to make, newest first. */
   adminAuditList: "admin.audit.list",
   /** What this server is and what it can reach, as of the moment it was gathered. */

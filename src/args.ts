@@ -242,6 +242,14 @@ export type Invocation =
   /** Generate a key and sign with it from now on. */
   | { readonly kind: "key-rotate"; readonly target: CommandTarget }
   /**
+   * Take one key out of the JWKS, refusing every token it signed.
+   *
+   * Named by its `kid`, which is what `key list` prints and the only name a key
+   * has: the file it lives in is numbered by the order it was made in rather
+   * than by anything a person would recognise.
+   */
+  | { readonly kind: "key-retire"; readonly target: CommandTarget; readonly kid: string }
+  /**
    * Show this Team server's certificate authority, and optionally trust it here.
    *
    * With neither flag, nothing is changed: printing the fingerprint is the
@@ -1335,12 +1343,12 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
 function parseKey(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const [verb, ...rest] = argv;
   if (verb === undefined) {
-    return error("key needs a verb: list or rotate");
+    return error("key needs a verb: list, rotate or retire");
   }
   if (verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
-  if (verb !== "list" && verb !== "rotate") {
+  if (verb !== "list" && verb !== "rotate" && verb !== "retire") {
     return error(`unknown key command: ${verb}`);
   }
 
@@ -1348,9 +1356,24 @@ function parseKey(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   if (result.kind !== "tokens") {
     return result.kind === "help" ? { kind: "help" } : error(result.message);
   }
-  const extra = result.tokens.positionals[0];
-  if (extra !== undefined) {
-    return error(`unexpected argument: ${extra}`);
+  // Only retiring takes a subject, and it takes exactly one: a key is named by
+  // its `kid`, and a command that quietly retired the first of two named would
+  // be ending the life of a key nobody looked at.
+  const [subject, extra] = result.tokens.positionals;
+  if (verb === "retire") {
+    if (subject === undefined) {
+      return error("key retire needs the kid of the key to retire, as `key list` prints it");
+    }
+    if (extra !== undefined) {
+      return error(`unexpected argument: ${extra}`);
+    }
+    const where = targetOf(result.tokens, env, "key retire");
+    return typeof where === "string"
+      ? error(where)
+      : { kind: "key-retire", target: where, kid: subject };
+  }
+  if (subject !== undefined) {
+    return error(`unexpected argument: ${subject}`);
   }
   const target = targetOf(result.tokens, env, `key ${verb}`);
   if (typeof target === "string") {
