@@ -289,20 +289,67 @@ function settingOf(options: TeamService, label: string): TeamAdminSetting | unde
 }
 
 /**
+ * The most keys one answer carries.
+ *
+ * This list was settled as a whole answer along with the settings, on the
+ * reasoning that its length is not a question anybody asks. That reasoning
+ * holds for the settings, whose rows are a literal in this server — there is
+ * nothing for a cursor to be a cursor over, and the list is the same length on
+ * every deployment there will ever be. **It does not hold here.** A key is a
+ * file, a rotation writes one, a retired key is kept rather than deleted, and
+ * nothing takes one away. So this list is however many times an operator has
+ * rotated over the life of a deployment, and the file names cap the serial at
+ * four digits — which is a fact about a naming convention, not a bound anybody
+ * chose.
+ *
+ * **Bounded and not paged, for the reason the project list is.** A cursor is
+ * only a bound if every client honours it, and both surfaces that read this one
+ * — the panel and `nlteam key list` — read it whole today. A rotation answers
+ * with this same list and announces it on a topic, and neither of those is a
+ * place a cursor can go at all, so paging would leave the same unbounded answer
+ * arriving by two other routes. A ceiling with `total` beside it holds all
+ * three.
+ *
+ * A thousand, the figure the project and member lists use, and it is generous
+ * against every cadence worth naming: a server that rotates weekly reaches it
+ * after nineteen years, and one that rotates daily after nearly three. What is
+ * kept is the newest thousand — the list is newest serial first — so the key
+ * that signs and every key still verifying a token are on it whatever was cut.
+ */
+const MAXIMUM_KEYS = 1000;
+
+/**
  * The keys this server holds, as both the list and a rotation answer with them.
  *
  * One builder, for the reason there is one builder for an account: the rows a
  * change hands back and the rows a list carries must not come to differ by a
  * field.
+ *
+ * Takes what it reads rather than the store it reads from, so that where this
+ * list stops can be checked without a thousand key pairs having to be generated
+ * to check it.
  */
-function keyRows(keys: KeyStore): TeamAdminKey[] {
-  const signing = keys.published[0];
-  return keys.all.map((key) => ({
-    kid: key.kid,
-    serial: key.serial,
-    retired: key.retired,
-    signing: key.kid === signing?.kid,
-  }));
+export function keyAnswer(
+  all: readonly { readonly kid: string; readonly serial: number; readonly retired: boolean }[],
+  signingKid: string | undefined,
+): { keys: TeamAdminKey[]; total: number } {
+  return {
+    keys: all.slice(0, MAXIMUM_KEYS).map((key) => ({
+      kid: key.kid,
+      serial: key.serial,
+      retired: key.retired,
+      signing: key.kid === signingKid,
+    })),
+    // What this server holds, whatever the ceiling above left out. A list
+    // shorter than this was cut, and saying so is the whole of what a client is
+    // owed in place of a cursor it would have had to learn.
+    total: all.length,
+  };
+}
+
+/** The same answer, read off the store this server signs with. */
+function keyRows(keys: KeyStore): { keys: TeamAdminKey[]; total: number } {
+  return keyAnswer(keys.all, keys.published[0]?.kid);
 }
 
 /** The account a call names, or a refusal saying this server has no such name. */
@@ -703,12 +750,9 @@ export function adminMethods(): TeamMethod[] {
       // its own re-reads, so asking on every call is a scan every few seconds
       // at worst.
       await context.options.keys.reload();
-      return {
-        // Whole rather than paged, for the reason the settings are: this is
-        // however many times a server has rotated its keys, which is a number
-        // that goes up when an operator decides it should.
-        keys: keyRows(context.options.keys),
-      };
+      // Bounded rather than paged, and `total` is how many this server holds:
+      // see MAXIMUM_KEYS for why this list stopped being answered whole.
+      return keyRows(context.options.keys);
     }),
     administeredWrite(TEAM_METHODS.adminKeysRotate, async (_read, context, repeat) => {
       const keys = context.options.keys;
@@ -718,16 +762,23 @@ export function adminMethods(): TeamMethod[] {
       // then fail on a file that exists rather than on anything an operator did.
       await keys.reload();
       if (repeat.already !== undefined) {
-        return { keys: keyRows(keys) };
+        return keyRows(keys);
       }
       // Safe at any moment, which is why nothing here asks for confirmation:
       // the new key signs from now on, every key that is not retired goes on
       // being published, and a token signed a second ago still verifies.
       await keys.rotate();
       const rotated = keyRows(keys);
-      const event: TeamAdminKeysEvent = { kind: "keys-rotated", keys: rotated };
+      // The event carries the ceiling and the count the answer does. A topic is
+      // not somewhere a cursor can go, so an announcement that carried the
+      // whole list would be the unbounded answer arriving by another route.
+      const event: TeamAdminKeysEvent = {
+        kind: "keys-rotated",
+        keys: rotated.keys,
+        total: rotated.total,
+      };
       context.publish(TOPIC_ADMIN_KEYS, event);
-      return { keys: rotated };
+      return rotated;
     }),
     administered(TEAM_METHODS.adminAuditList, (params: unknown, context: MethodContext) => {
       const read = paramsObject(params);

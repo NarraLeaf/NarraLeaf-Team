@@ -515,16 +515,15 @@ export const PAGE_BYTES_LIMIT = 1024 * 1024;
  * That is a little over one and a half mebibytes; the rest is the room a JSON
  * escape takes in text that needs one, and the frame the answer travels in.
  *
- * **Two answers stand outside that working-out and are named here rather than
- * left to be discovered.** A server's key list grows with however many times it
- * has rotated, and nothing weighs it at all. And a page of a project's history
- * is weighed like every other page, but the one row a page admits beyond its
- * budget is a commit message, which comes out of a repository rather than out
- * of a field this protocol bounds — so one revision pushed with a message
- * larger than this figure is one answer larger than this figure. Weighing the
- * page is what makes that a single row rather than a hundred of them; the
- * remedy for the row itself would be to report less of a message than the
- * repository holds, which is not something this server does anywhere.
+ * **One answer stands outside that working-out and is named here rather than
+ * left to be discovered.** A page of a project's history is weighed like every
+ * other page, but the one row a page admits beyond its budget is a commit
+ * message, which comes out of a repository rather than out of a field this
+ * protocol bounds — so one revision pushed with a message larger than this
+ * figure is one answer larger than this figure. Weighing the page is what makes
+ * that a single row rather than a hundred of them; the remedy for the row
+ * itself would be to report less of a message than the repository holds, which
+ * is not something this server does anywhere.
  */
 export const ANSWER_BYTES_LIMIT = 2 * 1024 * 1024;
 
@@ -1166,13 +1165,23 @@ export type TeamAdminSettingsEvent =
 /**
  * What happened on the `admin/keys` topic.
  *
- * The whole list rather than the key that was made: a rotation changes which
- * key signs, so the row for the key before it changes too, and sending one row
+ * The list rather than the key that was made: a rotation changes which key
+ * signs, so the row for the key before it changes too, and sending one row
  * would leave a panel holding a list with two keys claiming to sign.
+ *
+ * The same list `admin.keys.list` answers with, bounded the same way and with
+ * the same `total` beside it — a topic is not somewhere a cursor can go, so an
+ * event that carried more than the answer does would be the bound going out by
+ * the front door and back in through the window.
  */
 export type TeamAdminKeysEvent =
   | TeamSubscriptionWithdrawn
-  | { readonly kind: "keys-rotated"; readonly keys: readonly TeamAdminKey[] };
+  | {
+      readonly kind: "keys-rotated";
+      readonly keys: readonly TeamAdminKey[];
+      /** Every key this server holds, whatever the ceiling on the list left out. */
+      readonly total: number;
+    };
 
 /** What happened on the `admin/refusals` topic. Read what that topic is named for. */
 export type TeamAdminRefusalsEvent =

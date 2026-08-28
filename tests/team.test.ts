@@ -34,6 +34,7 @@ import {
   threadComments,
 } from "../src/comments/store.js";
 import { listOverlay, putOverlay } from "../src/overlay/store.js";
+import { keyAnswer } from "../src/team/methods/admin.js";
 import { MAXIMUM_PAGE } from "../src/team/methods/comments.js";
 import { MAXIMUM_LIMIT } from "../src/team/methods/overlay.js";
 import {
@@ -3404,6 +3405,43 @@ describe("the signing keys, as an operator reads them", () => {
       expect(Object.keys(key).sort()).toEqual(["kid", "retired", "serial", "signing"]);
     }
   });
+
+  it("says how many keys this server holds beside the ones it listed", async () => {
+    const { team, ada } = await administered();
+    await team.keys.rotate();
+
+    const answer = await ada.value(TEAM_METHODS.adminKeysList);
+
+    // The honest field a bounded answer carries in place of a cursor: a list
+    // shorter than this was cut. It is here on every answer rather than only on
+    // a cut one, so a client reads it the same way whatever it is holding.
+    expect(answer["total"]).toBe(2);
+    expect((answer["keys"] as unknown[]).length).toBe(2);
+  });
+
+  it("stops at a ceiling, keeping the newest and the one that signs", () => {
+    // Driven through the answer builder rather than through a server, because
+    // the ceiling is a thousand and generating a thousand key pairs to reach it
+    // would be minutes of RSA for one assertion. The store hands its keys over
+    // newest serial first, which is the order this stands in for.
+    const held = Array.from({ length: 1500 }, (_, index) => ({
+      kid: `kid-${String(1500 - index).padStart(4, "0")}`,
+      serial: 1500 - index,
+      retired: false,
+    }));
+
+    const answer = keyAnswer(held, "kid-1500");
+
+    expect(answer.keys).toHaveLength(1000);
+    // The newest end is what is kept, so the key that signs and every key still
+    // verifying a token somebody holds is on the list whatever was cut. Losing
+    // the signing key off the end would be worse than the unbounded answer.
+    expect(answer.keys[0]?.kid).toBe("kid-1500");
+    expect(answer.keys[0]?.signing).toBe(true);
+    expect(answer.keys.at(-1)?.serial).toBe(501);
+    expect(answer.total).toBe(1500);
+  });
+
 });
 
 describe("what this server is", () => {
@@ -4251,6 +4289,27 @@ describe("rotating the signing keys over the session", () => {
     // A key file is written per rotation and never removed, so a repeat that
     // acted would leave this server holding one more key than anybody asked for.
     expect(second).toHaveLength(first.length);
+  });
+
+  it("answers and announces with the same count the list carries", async () => {
+    const { team, ada } = await administered();
+    const watcher = await team.connect(team.tokenFor("ada"));
+    await watcher.send("subscribe", { topic: TOPIC_ADMIN_KEYS });
+
+    const answer = await ada.value(TEAM_METHODS.adminKeysRotate);
+
+    // A rotation hands back the list `admin.keys.list` would, bounded the same
+    // way and with the same `total` beside it. A topic is not somewhere a cursor
+    // can go either, so an announcement carrying more than the answer does would
+    // be the bound going out by the front door and back in through the window.
+    expect(answer["total"]).toBe(2);
+    expect(await ada.value(TEAM_METHODS.adminKeysList)).toEqual(answer);
+    await watcher.until(() => watcher.events.length > 0);
+    expect(watcher.events[0]?.payload).toEqual({
+      kind: "keys-rotated",
+      keys: answer["keys"],
+      total: answer["total"],
+    });
   });
 });
 
