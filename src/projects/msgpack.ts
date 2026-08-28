@@ -189,7 +189,19 @@ function readArray(reader: Reader, length: number, depth: number): unknown[] {
 }
 
 function readMap(reader: Reader, length: number, depth: number): Record<string, unknown> {
-  const value: Record<string, unknown> = {};
+  // No prototype, so that a key is only ever a key.
+  //
+  // These bytes are a file a collaborator committed to a repository, and the
+  // map's keys are whatever that file says they are. Written into an ordinary
+  // object, a key of `__proto__` does not become a property of that object at
+  // all — it replaces the object's prototype, so the file decides what the
+  // value this server then walks answers for every name it was never asked
+  // about. `constructor` and `toString` are the same confusion from the other
+  // side: an ordinary object answers for those whether or not any file
+  // mentioned them. An object with no prototype has neither problem. A name is
+  // there only if the file held it, and answers only with what the file put
+  // under it.
+  const value = Object.create(null) as Record<string, unknown>;
   for (let index = 0; index < length; index += 1) {
     const key = readValue(reader, depth + 1);
     const read = readValue(reader, depth + 1);

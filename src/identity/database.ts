@@ -11,7 +11,7 @@
  * user accounts, and rewriting history here means two installations disagreeing
  * about what version 1 means.
  */
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 // Type-only, and therefore erased: the module itself is loaded on demand, for
 // the reason set out above `loadSqlite`.
@@ -550,20 +550,75 @@ function loadSqlite(): Promise<typeof import("node:sqlite")> {
 }
 
 /**
+ * The mode `team.db` and the two files WAL mode keeps beside it are held at.
+ *
+ * 0600, which is what the signing keys next door are written at: this file
+ * holds the users table, and that table holds a password hash per account. An
+ * account on the same machine that can read it can take every hash away and
+ * attack them at leisure, with nothing on this server ever hearing about it.
+ */
+const OWNER_ONLY = 0o600;
+
+/**
+ * Restrict `path` and the two files WAL mode writes beside it to their owner.
+ *
+ * A chmod after the fact rather than a mode passed at creation, because the
+ * file is created by the SQLite binding rather than by this code and there is
+ * nowhere to pass one. Doing it on every open is also what tightens a file an
+ * older Team left behind: a server that has been running since before this
+ * existed is fixed by being restarted rather than by anybody noticing.
+ *
+ * The `-wal` and `-shm` files are named here because a locked-down database
+ * beside a world-readable write-ahead log protects nothing — the log holds the
+ * rows that have not been checkpointed yet, which is exactly what was written
+ * most recently. SQLite gives a pair it creates the mode of the main database
+ * file, so tightening that one keeps every later pair restricted; these two are
+ * chmod'd as well because the pair that switching to WAL has just made was
+ * created before this ran.
+ *
+ * **What this is and is not.** It is a POSIX protection: it keeps other
+ * accounts on the same host out of the file. Windows has no such mode bits and
+ * a chmod there is close to a no-op — what guards the file on that platform is
+ * the ACL of the directory somebody chose as the storage root, which is not
+ * Team's to set. Nothing here protects the file from whoever holds the root
+ * directory, and nothing is meant to: that is the rescue plane, and it is
+ * guarded by access to the disk on purpose.
+ */
+function restrictToOwner(path: string): void {
+  for (const file of [path, `${path}-wal`, `${path}-shm`]) {
+    try {
+      chmodSync(file, OWNER_ONLY);
+    } catch {
+      // Not there, which is the ordinary case rather than a failure: WAL mode
+      // writes its pair on demand and removes them again on a clean close. A
+      // chmod that cannot be done at all is not a reason to refuse to open the
+      // database — the server would then not start on a platform that has no
+      // such thing as a mode.
+    }
+  }
+}
+
+/**
  * Open `path`, creating it and its directory if they are not there.
  *
  * Foreign keys are switched on per connection — SQLite's default is off, and a
  * `REFERENCES` clause that nothing enforces is a comment. The write-ahead log
  * is what lets a reader run while the Team server process writes.
+ *
+ * The directory is made 0700 for the same reason the file is made 0600: it is
+ * the storage root, and it holds the signing keys as well as the accounts. A
+ * root that already exists keeps whatever mode it was made with, which is the
+ * operator's choice about a directory they named.
  */
 export async function openDatabase(path: string): Promise<DatabaseSync> {
   const { DatabaseSync } = await loadSqlite();
-  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 
   const database = new DatabaseSync(path);
   database.exec("PRAGMA journal_mode = WAL");
   database.exec("PRAGMA foreign_keys = ON");
   database.exec("PRAGMA busy_timeout = 5000");
+  restrictToOwner(path);
   return database;
 }
 
