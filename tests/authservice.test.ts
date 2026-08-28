@@ -74,6 +74,17 @@ interface Harness {
    * alone. A test that watched only the log could not tell the difference.
    */
   readonly refusals: RecordedDecision[];
+  /**
+   * Every project the service said had gone, in order.
+   *
+   * What a running server does with one of these is publish `project-forgotten`
+   * on the list's topic and on the project's own, and drop the reading it held
+   * of the repository - the two things `projects.forget` does on the other path.
+   * Split across two suites for the reason a refusal is: this file has the half
+   * that decides what is said, and tests/team.test.ts has the half that carries
+   * it to a session.
+   */
+  readonly forgotten: string[];
   user(username: string): Promise<UserRecord>;
   /** A token for `user`, as an `authorization` header value. */
   bearer(user: UserRecord, options?: { readonly now?: Date }): string;
@@ -100,6 +111,7 @@ async function harness(): Promise<Harness> {
   const keys = await KeyStore.open(layout.keysDir);
   const log: string[] = [];
   const refusals: RecordedDecision[] = [];
+  const forgotten: string[] = [];
   // Port 0: the operating system picks one that is free, so a test run cannot
   // collide with a Team server the machine is already running.
   const server = await startAuthorizationService({
@@ -109,6 +121,7 @@ async function harness(): Promise<Harness> {
     config,
     log: (line) => log.push(line),
     refused: (decision) => refusals.push(decision),
+    forgotten: (projectId) => forgotten.push(projectId),
   });
 
   const call = async (
@@ -130,6 +143,7 @@ async function harness(): Promise<Harness> {
     keys,
     log,
     refusals,
+    forgotten,
     async user(username: string): Promise<UserRecord> {
       await createUser(database, hasher, { username, password: "a password nobody guesses" });
       return requireUser(database, username);
@@ -591,6 +605,42 @@ describe("the resource lifecycle calls", () => {
     // And bob did not make it, which is no longer a reason to keep it.
     await remove(team.bearer(bob));
     expect(findProject(team.database, project.id)).toBeUndefined();
+  });
+
+  it("says a project has gone once it has, and says nothing about one it kept", async () => {
+    // The row going and the saying so are one act. A client holding a list
+    // cannot see which path a project went by, so a project deleted through
+    // loreserver has to leave this server in the state one forgotten over the
+    // protocol does - which means this, and the reading going with it.
+    const team = await harness();
+    const ada = await team.user("ada");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "harbour",
+      createdBy: ada.id,
+    });
+    const remove = async (authorization: string | undefined): Promise<void> => {
+      await unaryCall({
+        url: team.server.url,
+        path: METHOD_DELETE_RESOURCE,
+        message: encodeDeleteResourceRequest({ resourceId: resourceIdOf(project.id) }),
+        ...(authorization === undefined ? {} : { authorization }),
+        timeoutMs: 5000,
+      });
+    };
+
+    // The row was kept, so there is nothing to say: an announcement here would
+    // have every open Studio drop a project that is still on this server.
+    await remove(undefined);
+    expect(team.forgotten).toEqual([]);
+
+    await remove(team.bearer(ada));
+    expect(team.forgotten).toEqual([project.id]);
+
+    // And a second delete of a project that has already gone says it again to
+    // nobody, because there is no longer a row to forget.
+    await remove(team.bearer(ada));
+    expect(team.forgotten).toEqual([project.id]);
   });
 });
 

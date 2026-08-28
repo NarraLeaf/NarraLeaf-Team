@@ -116,6 +116,23 @@ export interface AuthorizationContext {
    * the one somebody wants put in front of them.
    */
   readonly refused?: (decision: RecordedDecision) => void;
+  /**
+   * Somewhere to say that a project is **no longer on this server**.
+   *
+   * Shaped like {@link refused} and for the same reason: forgetting a project
+   * has consequences outside this file — the sessions holding a list that now
+   * names something which is not there, and the reading this server kept of the
+   * repository — and neither of those is a thing src/projects/ knows about. So
+   * what happens here is the row going, and what happens to the rest of the
+   * server is whatever this was wired to. Absent in a build with nothing to
+   * tell, exactly as `refused` is, and then the row simply goes.
+   *
+   * The same disappearance travels the other way when a client asks for it, and
+   * `projects.forget` in src/team/methods/projects.ts does it there. The two
+   * paths have to leave this server in one state, because which of them a
+   * project went by is not something anybody holding a list can see.
+   */
+  readonly forgotten?: (projectId: string) => void;
 }
 
 /**
@@ -662,11 +679,26 @@ function availableProjectName(
 /**
  * `RebacApi/DeleteResource`: loreserver saying a repository is gone.
  *
- * The project is forgotten when the caller owns it, which is the only case in
- * which somebody with the authority to delete it has been shown to be behind
- * the call. Otherwise the row stays and the log says so: a stale row denies
- * nobody anything, and a row deleted on an unauthenticated call would take
- * everyone's access with it.
+ * One thing decides it: whether there is an account behind the call. An
+ * identified caller forgets the project, and an unidentified one does not.
+ * There is no narrower question to ask, because every account of this server
+ * reaches every project on it — `projects.forget` says the same in as many
+ * words and has no role check either — so asking who made the project, or
+ * whether they still have it, would be inventing an authority this server does
+ * not have anywhere else.
+ *
+ * What identification buys is that the row only ever goes on somebody's behalf.
+ * Of the two ways to be wrong, the stale row is the safer: a project this
+ * server holds a row for and loreserver has no repository for denies nobody
+ * anything and is one command to take off, while a row dropped on a call from
+ * nobody at all would take away everybody's access to a repository that may
+ * still be there.
+ *
+ * A project that goes this way is as gone as one somebody forgot over the
+ * protocol, so the same two things follow it: the disappearance is said out
+ * loud through {@link AuthorizationContext.forgotten}, and the reading this
+ * server held of the repository goes with it. Neither is reached for from
+ * here — see that callback for why.
  *
  * Either way the call is answered with OK. The repository is already gone by
  * the time this arrives, and failing the call would only make loreserver report
@@ -708,6 +740,8 @@ async function deleteResource(context: AuthorizationContext, call: GrpcCall): Pr
       detail: "forgot the project",
     },
   );
+  // Last, so that nothing hears about a project going before it has gone.
+  context.forgotten?.(project.id);
   return EMPTY_MESSAGE;
 }
 
