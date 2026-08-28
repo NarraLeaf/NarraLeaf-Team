@@ -68,6 +68,52 @@ describe("values", () => {
   }
 });
 
+describe("a file that names a key JavaScript treats as special", () => {
+  it("makes __proto__ a key of the map rather than the map's prototype", () => {
+    // Written with a computed name on purpose: `__proto__: value` in an object
+    // literal sets the prototype instead of making a property, which is the
+    // very confusion this is about. A file arriving from a repository can hold
+    // the name either way, so the reader has to be the thing that decides.
+    const bytes = encodeMsgpack({
+      ["__proto__"]: { polluted: "a collaborator wrote this" },
+      name: "A Harbour Tale",
+    });
+    const decoded = decodeMsgpack(bytes) as Record<string, unknown>;
+
+    expect(Object.getPrototypeOf(decoded)).toBeNull();
+    expect(Object.keys(decoded)).toEqual(["__proto__", "name"]);
+    expect(decoded["name"]).toBe("A Harbour Tale");
+    // The whole of the defect in one line: a field the file put nowhere near
+    // the top level, answered for at the top level.
+    expect(decoded["polluted"]).toBeUndefined();
+  });
+
+  it("answers for a name the file does not hold with nothing at all", () => {
+    // An ordinary object answers `constructor`, `toString` and `valueOf` out
+    // of its prototype, so a reader asking a project file what it says about a
+    // field gets an answer for names no file ever wrote.
+    const decoded = decodeMsgpack(encodeMsgpack({ name: "A Harbour Tale" })) as Record<
+      string,
+      unknown
+    >;
+
+    expect(decoded["constructor"]).toBeUndefined();
+    expect(decoded["toString"]).toBeUndefined();
+    expect(decoded["hasOwnProperty"]).toBeUndefined();
+  });
+
+  it("gives a map inside a map the same treatment", () => {
+    // Every map, not the outermost one: the fields Team reads a project file
+    // for are two levels down, under `metadata`.
+    const decoded = decodeMsgpack(
+      encodeMsgpack({ metadata: { resolution: { width: 1920, height: 1080 } } }),
+    ) as Record<string, Record<string, unknown>>;
+
+    expect(Object.getPrototypeOf(decoded["metadata"])).toBeNull();
+    expect(Object.getPrototypeOf(decoded["metadata"]?.["resolution"])).toBeNull();
+  });
+});
+
 describe("a file that is not what it claims", () => {
   it("refuses an empty file", () => {
     expect(() => decodeMsgpack(Buffer.alloc(0))).toThrow(MsgpackError);
