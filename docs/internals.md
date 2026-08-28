@@ -267,25 +267,31 @@ many are allowed to run at the same time.
 They run on libuv's threadpool, which is four threads unless a deployment says
 otherwise, and it is the same four threads every file this server reads and
 every call it makes into lorelib is waiting for. So the cost of a derivation is
-not only its own latency; past a point it is everybody else's. Measured here
-with eight file reads kept in flight throughout:
+not only its own latency; past a point it is everybody else's. Measured by
+`scripts/bench.ts` with eight file reads kept in flight throughout — the worst
+one of those reads, because how many get stuck behind a derivation is bounded
+while how many sail past grows with the stall, so every percentile flatters a
+longer one:
 
 ```
-derivations at once   p99 of a file read beside them   peak RSS
-         1                       0.57 ms                198 MiB
-         2                       0.46 ms                327 MiB
-         4                     215.10 ms                583 MiB
-         8                     407.91 ms                583 MiB
+derivations at once   worst file read beside them   peak RSS
+         1                      0.9 ms               223 MiB
+         2                      1.2 ms               352 MiB
+         4                    238   ms               606 MiB
+         8                    496   ms               608 MiB
 ```
 
 The cliff is at four because four is the pool. Below it a derivation is simply
 one thread's work and nothing else notices; at it, a file read no longer waits a
-fraction of a millisecond, it waits for a whole derivation to finish.
+fraction of a millisecond, it waits for a whole derivation to finish — and at
+eight it waits for two, which is the same fact said twice. The memory column
+says it from the other side: it stops climbing at four, because a pool of four
+is what stops a fifth derivation starting.
 
 The obvious lever is the wrong one. Raising `UV_THREADPOOL_SIZE` to sixteen does
-flatten the cliff — eight at once then keep a read at 1.46 ms — but it takes the
-process to 1.1 GiB resident to do it, because the small pool had been quietly
-serving as a memory limit as well as a thread limit. Sizing a threadpool is a
+flatten the cliff — eight at once then leave the worst read at 3.9 ms — but it
+takes the process to 1.1 GiB resident to do it, because the small pool had been
+quietly serving as a memory limit as well as a thread limit. Sizing a threadpool is a
 question about a deployment's I/O; how much memory a flood of sign-ins may reach
 is a question about this server. Answering the second by changing the first ties
 them together for whoever comes next.
@@ -307,6 +313,32 @@ anyway. And the derivation limit is not a rate limit: a caller who is the only
 one asking never waits on it. What imposes a wait on a caller for how they have
 behaved is `SignInLimiter`, in `src/identity/signin.ts`, and it guards the one
 door that takes a password from anybody.
+
+## What a call costs before it is a call
+
+Every call on a session is identified afresh: the token is verified, the account
+is read, and its `token_epoch` is compared, before the method named runs. That
+is what makes revoking somebody's access take effect on their next call rather
+than on their next connection, and it is the one decision in this protocol that
+is paid for on every single message. So it is worth knowing what it costs. From
+`scripts/bench.ts`, against a database of forty accounts:
+
+```
+findUserById, one row and its groups        25 us
+identifyToken, what every call does         55 us
+mintToken, signing one                     215 us
+```
+
+Fifty-five microseconds, of which about half is the signature and half is the
+row. Eighteen thousand a second on one core, against a protocol whose busiest
+real client is a person typing. Identifying per call is not a cost this server
+is carrying for correctness — it is free, and anything cached in front of it
+would be a staleness bug bought with nothing.
+
+Minting is four times dearer than verifying, which is Ed25519 rather than
+anything here, and it is not on this path: a token is signed when somebody signs
+in, and once per project on each pass of the repository reader. Neither is a
+place where four times not-very-much matters.
 
 ## The Team protocol is a session, not a request
 
@@ -610,6 +642,19 @@ told rather than asking.
 npx esbuild scripts/socket-endpoint.ts --bundle --platform=node --format=cjs \
   --external:koffi --define:__NLTEAM_VERSION__=\"0.0.0-drive\" --outfile=endpoint.cjs
 node endpoint.cjs cert.pem key.pem
+```
+
+`scripts/bench.ts` is where every performance figure in this file came from.
+A number written down once is a number nobody can check on their own disk, or
+after the change that invalidated it, and all three of this server's costs are
+the kind that move — a disk, a threadpool and a signature. It writes to a
+temporary directory and takes about half a minute; nothing it does touches a
+storage root, so it is safe to run beside a live server, though the figures will
+be that server's as much as this one's if you do.
+
+```sh
+npx esbuild scripts/bench.ts --bundle --platform=node --format=cjs   --external:koffi --define:__NLTEAM_VERSION__=\"0.0.0-bench\" --outfile=bench.cjs
+node bench.cjs
 ```
 
 The certificate tests are worth knowing about before changing anything under

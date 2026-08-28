@@ -44,24 +44,24 @@ function deriveKey(
  * Two, and the number is libuv's rather than a guess. scrypt runs on the
  * threadpool, which is four threads unless a deployment says otherwise, and
  * every file this server reads and every call it makes into lorelib wants the
- * same four. Measured on a default node with eight file reads in flight
- * throughout, at the parameters below:
+ * same four. Measured by scripts/bench.ts, at the parameters below, with eight
+ * file reads in flight throughout — the worst one of them:
  *
- *     derivations at once   p99 of a file read beside them
- *              1                       0.57 ms
- *              2                       0.46 ms
- *              4                     215.10 ms
- *              8                     407.91 ms
+ *     derivations at once   worst file read beside them
+ *              1                        0.9 ms
+ *              2                        1.2 ms
+ *              4                      238   ms
+ *              8                      496   ms
  *
  * The cliff is at four because four is the pool. A derivation holding the last
  * thread does not make a file read slower; it makes it wait for a whole
  * derivation to finish, and a fifth of a second is a long time to answer
- * nothing in.
+ * nothing in. Eight is two of those waits, for the same reason.
  *
  * Raising `UV_THREADPOOL_SIZE` moves the cliff rather than removing the cost.
- * At sixteen threads eight derivations at once keep a read at 1.46 ms — and
- * take the process to 1.1 GiB resident, against 583 MiB when a pool of four
- * held four of them back. The pool was doing two jobs, badly. This takes over
+ * At sixteen threads there is no cliff — eight at once leave the worst read at
+ * 3.9 ms — but the process reaches 1.1 GiB resident to do it, against 608 MiB
+ * when a pool of four held four of them back. The pool was doing two jobs, badly. This takes over
  * the one that is properly a policy, so a deployment may size its pool for its
  * own I/O without deciding how much memory a flood of sign-ins may reach.
  *
