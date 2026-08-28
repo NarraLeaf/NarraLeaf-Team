@@ -67,11 +67,17 @@ const ID_LIMIT = 128;
 /** The most a client id may be. Long enough for a UUID and a word, short of a payload. */
 const CLIENT_ID_LIMIT = 128;
 
-/** How many threads one page holds when nobody said. */
-const DEFAULT_PAGE = 50;
+/** How many rows one page holds when nobody said. */
+export const DEFAULT_PAGE = 50;
 
-/** The most one page may hold, so that a page is a bounded amount of work. */
-const MAXIMUM_PAGE = 200;
+/**
+ * The most one page may hold, so that a page is a bounded amount of work.
+ *
+ * One figure for both lists here. A page of threads and a page of one thread's
+ * comments are read by the same panel and cost the same order of work to build,
+ * and a second number would only be a second thing for a client to learn.
+ */
+export const MAXIMUM_PAGE = 200;
 
 const THREAD_KINDS: readonly TeamThreadKind[] = ["comment", "suggestion"];
 const THREAD_STATUSES: readonly TeamThreadStatus[] = ["open", "resolved"];
@@ -188,20 +194,34 @@ export function commentMethods(): TeamMethod[] {
       name: TEAM_METHODS.threadsGet,
       capability: "comments",
       handle: (params: unknown, context: MethodContext) => {
-        const threadId = requiredText(paramsObject(params), "thread", ID_LIMIT);
+        const read = paramsObject(params);
+        const threadId = requiredText(read, "thread", ID_LIMIT);
         const thread = findThread(context.options.database, threadId);
         if (thread === undefined) {
           throw new MethodError("not-found", "there is no thread of that id on this server");
         }
+        const after = optionalText(read, "after", ID_LIMIT);
+        // Paged, the way the threads above are paged and with the same numbers.
+        //
+        // A thread is a conversation somebody is reading rather than a log, and
+        // for a thread people wrote that argues for answering it whole. It is
+        // not a bound, though: nothing stops an account writing a hundred
+        // thousand comments on one thread and then asking for it, and every
+        // body may be COMMENT_BODY_LIMIT. Of the two ways to bound it, a
+        // ceiling with a field saying the answer was cut leaves the far end of
+        // the conversation unreachable - and read oldest first, the far end is
+        // the newest replies, which is the part somebody came for. So a page
+        // and a cursor. `thread.comments` still says how many there are in all,
+        // so a reader knows what it is a page of.
+        const page = threadComments(context.options.database, threadId, {
+          limit: boundedCount(read, "limit", DEFAULT_PAGE, MAXIMUM_PAGE),
+          ...(after === undefined ? {} : { after }),
+        });
         const nameOf = nameResolver(context.options.database);
         return {
           thread: threadView(context.options.database, thread, nameOf),
-          // Whole rather than paged. A thread is a conversation somebody is
-          // reading, not a log: one that needed paging would be one nobody
-          // could follow anyway.
-          comments: threadComments(context.options.database, threadId).map((comment) =>
-            commentView(comment, nameOf),
-          ),
+          comments: page.comments.map((comment) => commentView(comment, nameOf)),
+          ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
         };
       },
     },

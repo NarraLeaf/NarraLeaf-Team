@@ -143,10 +143,17 @@ this protocol uses, and no more.
   and a reserved bit set on a frame is a protocol error.
 - A frame from a client must be masked, as the specification requires of a client.
 - A message may total at most **128 KiB**, fragments included. One larger is
-  refused with `1009` before it is assembled.
+  refused with `1009` on the header that announces it, before any of the body is
+  waited for — and what the fragments already held total counts towards it, so a
+  frame is judged as part of its message rather than on its own.
 - Ping, pong and close are control frames and carry at most 125 bytes. The server
   pings on the heartbeat interval it announced and closes a peer it has not heard
   from for twice that.
+- A peer that stops reading is closed with `1008` rather than queued for. Frames
+  written to a socket that is not draining stay in the server's memory, and the
+  ceiling on one message says nothing about how many of them; a subscriber that
+  cannot keep up is dropped, which delivery here is already weak enough to make
+  the right answer.
 
 ### The opening frame
 
@@ -279,6 +286,7 @@ something to fix rather than a goodbye that reads as clean:
 | A frame the protocol does not allow | `1002` |
 | A quota, an in-flight cap or a topic cap reached | `1008` |
 | A token refused or revoked, after `bye{unauthenticated}` | `1008` |
+| More queued for a peer than the server will hold, because it has stopped reading | `1008` |
 | A message over the ceiling | `1009` |
 
 ## Capabilities
@@ -387,7 +395,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Any account may, and forgetting a project that is already gone answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
 | `members.list` | `session` | Every account, as a name beside a piece of work. |
 | `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. |
-| `threads.get` | `comments` | One thread and every comment in it. |
+| `threads.get` | `comments` | One thread and a page of its comments, oldest first. `limit` defaults to 50 and is capped at 200; `after` carries the reader on from the cursor the last page ended with, and the cursor is absent when the conversation ends there. The thread's own `comments` count is how many there are in all, so a client knows what it holds a page of. |
 | `threads.create` | `comments` | Open a thread on an anchor, with its first comment. |
 | `threads.reply` | `comments` | Add a comment to a thread. |
 | `threads.resolve` | `comments` | Mark a thread resolved, or open it again. Idempotent: resolving a thread that is already in the asked-for state changes nothing and announces nothing. |
@@ -402,7 +410,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `live.leave` | `live` | Leave one. The last one out closes it. |
 | `live.close` | `live` | Close one outright, which only its opener may do. |
 | `live.say` | `live` | Say something to everybody in one. Kept by nobody. |
-| `overlay.list` | `overlay` | What is attached to one project, and what the server last read its head to be. |
+| `overlay.list` | `overlay` | A page of what is attached to one project, newest change first, and what the server last read its head to be. `limit` defaults to 500 and is capped at 2 000, and a page also ends once the bodies on it total a mebibyte — whichever comes first, since a record's body may be 64 KiB and the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. `total` is how many the project holds in all, whatever this page or a narrowing left out. |
 | `overlay.put` | `overlay` | Attach something, or replace something one attached before. |
 | `overlay.drop` | `overlay` | Take one's own record off again. |
 | `admin.users.list` | `admin` | A page of this server's accounts, newest first. Each carries the groups it is in, whether those make it an operator, whether it is disabled, and when its tokens were last refused — which is more than `members.list` says, and deliberately so. `limit` defaults to 50 and is capped at 200. |

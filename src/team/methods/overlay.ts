@@ -14,8 +14,9 @@
  * property to check first if any of this ever grows a second implementation.
  *
  * **A record names the revision it was written against, and the head is a
- * separate answer.** `overlay.list` hands back both: every record with the
- * revision it describes, and what this server last read the project's tip to be.
+ * separate answer.** `overlay.list` hands back both: a page of records, each
+ * with the revision it describes, and what this server last read the project's
+ * tip to be.
  * It does not mark anything stale, because it cannot: whether the story row a
  * note is about survived the next revision is a question about a document, and
  * this server has not got one. The client compares, and the client decides. What
@@ -74,7 +75,25 @@ const DEFAULT_LIMIT = 500;
  * project beyond this is one where somebody is using overlay as a database, and
  * the honest answer is the newest thousand.
  */
-const MAXIMUM_LIMIT = 2000;
+export const MAXIMUM_LIMIT = 2000;
+
+/**
+ * The most the bodies on one page may total.
+ *
+ * The count above bounds how many records a page holds and says nothing about
+ * how large they are: a body may be OVERLAY_BODY_LIMIT, so the two multiplied
+ * out is an answer of well over a hundred megabytes for this server to build,
+ * serialise and then hold while a slow socket drains it. So a page is filled
+ * until either ceiling is reached, and the cursor carries the reader on.
+ *
+ * A mebibyte, because a record is a review mark or a flag rather than a
+ * document: that holds the whole of an ordinary project's overlay in one page,
+ * and it is sixteen of the largest record this server will store, so a reader
+ * whose records really are that large goes on making progress rather than being
+ * cut off. The count stays beside it - it is the cheaper check, and it is the
+ * one that catches a project with a hundred thousand tiny records.
+ */
+export const MAXIMUM_PAGE_BYTES = 1024 * 1024;
 
 export function overlayMethods(): TeamMethod[] {
   return [
@@ -88,20 +107,24 @@ export function overlayMethods(): TeamMethod[] {
         const element = optionalText(read, "element", ANCHOR_FIELD_LIMIT);
         const kind = optionalText(read, "kind", INSTANCE_FIELD_LIMIT);
         const revision = optionalText(read, "revision", ANCHOR_FIELD_LIMIT);
-        const records = listOverlay(context.options.database, {
+        const before = optionalText(read, "before", ID_LIMIT);
+        const page = listOverlay(context.options.database, {
           projectId,
           ...(document === undefined ? {} : { document }),
           ...(element === undefined ? {} : { element }),
           ...(kind === undefined ? {} : { kind }),
           ...(revision === undefined ? {} : { revision }),
           limit: boundedCount(read, "limit", DEFAULT_LIMIT, MAXIMUM_LIMIT),
+          limitBytes: MAXIMUM_PAGE_BYTES,
+          ...(before === undefined ? {} : { before }),
         });
         const head = context.options.readings?.get(projectId)?.history.head;
         return {
           ...(head === undefined ? {} : { head }),
           /** Everything this project holds, so a count can be drawn beside a narrowed read. */
           total: countOverlay(context.options.database, projectId),
-          records: records.map((record) => body(context, record)),
+          records: page.records.map((record) => body(context, record)),
+          ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
         };
       },
     },

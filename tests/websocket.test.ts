@@ -20,6 +20,10 @@ import { acceptKey, CLOSE, WebSocketConnection } from "../src/team/websocket.js"
 class FakeSocket extends Duplex {
   readonly written: Buffer[] = [];
 
+  /** Writes that have been handed over and not completed, as a stalled peer leaves them. */
+  private readonly held: (() => void)[] = [];
+  private holding = false;
+
   override _read(): void {
     // Nothing is ever read out of this: the connection listens for `data`,
     // which the test emits.
@@ -27,7 +31,32 @@ class FakeSocket extends Duplex {
 
   override _write(chunk: Buffer, _encoding: string, done: () => void): void {
     this.written.push(Buffer.from(chunk));
+    if (this.holding) {
+      // Left uncompleted, which is what a peer that has stopped reading does to
+      // a real socket: the bytes stay counted against `writableLength`.
+      this.held.push(done);
+      return;
+    }
     done();
+  }
+
+  /** Stop completing writes, so that whatever is written to this piles up. */
+  hold(): void {
+    this.holding = true;
+  }
+
+  /**
+   * Start reading again, and let everything that piled up through.
+   *
+   * A stalled peer holds the frames written to it in the stream's own queue,
+   * where `written` never sees them. This is how a test that stalled one reads
+   * what it was sent - the close frame included.
+   */
+  release(): void {
+    this.holding = false;
+    while (this.held.length > 0) {
+      this.held.shift()?.();
+    }
   }
 
   /** Pretend these bytes arrived from the peer. */
@@ -73,12 +102,13 @@ interface Driven {
   readonly connection: WebSocketConnection;
 }
 
-function drive(maximumMessageBytes = 1024): Driven {
+function drive(maximumMessageBytes = 1024, maximumBufferedBytes = 64 * 1024): Driven {
   const socket = new FakeSocket();
   const messages: string[] = [];
   const closes: string[] = [];
   const connection = new WebSocketConnection(socket, Buffer.alloc(0), {
     maximumMessageBytes,
+    maximumBufferedBytes,
     // Long enough that no test in here ever reaches it.
     heartbeatMs: 60_000,
     onMessage: (value) => messages.push(value),
@@ -151,6 +181,47 @@ describe("reading frames", () => {
     expect(closeCode(driven.socket.output)).toBe(CLOSE.tooLarge);
   });
 
+  it("refuses a frame by what it says it carries, before any of it arrives", () => {
+    const driven = drive(16);
+    // A header announcing sixty-four bytes, and not one of them sent. Waiting
+    // for them is exactly what a peer that dribbles a large frame is asking
+    // this server to do with its memory.
+    driven.socket.feed(Buffer.from([0x81, 0x80 | 64, 0x0a, 0x1b, 0x2c, 0x3d]));
+    expect(driven.messages).toEqual([]);
+    expect(closeCode(driven.socket.output)).toBe(CLOSE.tooLarge);
+  });
+
+  it("counts the fragments it already holds against what the next header announces", () => {
+    const driven = drive(120);
+    driven.socket.feed(text("a".repeat(100), false));
+    // Fifty more would be a hundred and fifty, so the frame is refused on its
+    // header and the fifty never have to arrive. A frame judged on its own
+    // would have been let through and the message caught only once it was
+    // whole, which is a hundred and fifty bytes held to learn nothing new.
+    driven.socket.feed(Buffer.from([0x80, 0x80 | 50, 0x0a, 0x1b, 0x2c, 0x3d]));
+    expect(driven.messages).toEqual([]);
+    expect(closeCode(driven.socket.output)).toBe(CLOSE.tooLarge);
+  });
+
+  it("keeps nothing a peer sends after it has been closed", () => {
+    const driven = drive();
+    driven.socket.feed(clientFrame(0x2, Buffer.from([1, 2, 3])));
+    expect(closeCode(driven.socket.output)).toBe(CLOSE.unsupportedData);
+    const afterClose = driven.socket.written.length;
+
+    // Ending this server's half leaves the peer's open, and a peer that has
+    // been refused is exactly the one that may go on talking.
+    driven.socket.feed(text("still here"), text("and here"));
+
+    expect(driven.messages).toEqual([]);
+    expect(driven.socket.written.length).toBe(afterClose);
+    // Dropped as they arrive rather than read into a buffer nothing is going to
+    // parse. A connection that kept them would grow for as long as the peer
+    // stayed connected, which is the one thing the ceiling on a frame does not
+    // bound.
+    expect(driven.connection.bufferedInput).toBe(0);
+  });
+
   it("refuses fragments that add up to more than it will hold", () => {
     // The point of counting fragments rather than frames: eight frames of
     // fifty bytes are not eight small messages.
@@ -209,6 +280,39 @@ describe("writing frames", () => {
     const afterClose = driven.socket.written.length;
     driven.connection.send("anything");
     expect(driven.socket.written.length).toBe(afterClose);
+  });
+
+  it("closes a peer that has stopped reading rather than queueing more for it", () => {
+    const driven = drive(1024, 256);
+    // From here nothing the connection writes leaves this socket, which is what
+    // a client that subscribed to a busy topic and stopped reading looks like.
+    driven.socket.hold();
+
+    // No one of these is anywhere near the ceiling. What passes it is the pile.
+    driven.connection.send("x".repeat(200));
+    driven.connection.send("x".repeat(200));
+    driven.connection.send("x".repeat(200));
+
+    expect(driven.closes).toEqual(["more is queued for this connection than it is reading"]);
+    // The peer is told why in a close frame rather than by the socket simply
+    // going away, so it reads the same thing as a client that broke any other
+    // rule. It is behind everything that piled up, which is where a close
+    // frame belongs.
+    driven.socket.release();
+    expect(closeCode(driven.socket.output)).toBe(CLOSE.policy);
+  });
+
+  it("writes a large answer rather than closing over it", () => {
+    const driven = drive(1024, 256);
+    driven.socket.hold();
+
+    // One frame bigger than the whole ceiling, written to a socket holding
+    // nothing. A client on a slow link asking for a big page is not a client
+    // that has stopped reading, and the two must not have the same answer.
+    driven.connection.send("x".repeat(1000));
+
+    expect(closeCode(driven.socket.output)).toBeUndefined();
+    expect(driven.closes).toEqual([]);
   });
 
   it("cuts a close reason down rather than writing an illegal control frame", () => {

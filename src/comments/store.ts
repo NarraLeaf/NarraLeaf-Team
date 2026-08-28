@@ -385,12 +385,56 @@ function requireComment(database: DatabaseSync, id: string): CommentRecord {
   return comment;
 }
 
-/** Every comment in a thread, oldest first, withdrawn ones in their place. */
-export function threadComments(database: DatabaseSync, threadId: string): CommentRecord[] {
-  return database
-    .prepare(`${SELECT_COMMENT} WHERE thread_id = ? ORDER BY created_at, id`)
-    .all(threadId)
-    .map((row) => toComment(row));
+export interface CommentQuery {
+  readonly limit: number;
+  /**
+   * Where the previous page ended, as `<createdAt>:<id>`.
+   *
+   * Forwards, where a thread cursor goes back, because a conversation is read
+   * in the order it was said. Two parts for the reason a thread cursor has two:
+   * a reply can be written in the same millisecond as the one before it, and a
+   * cursor that was only a time would either repeat one or skip one.
+   */
+  readonly after?: string;
+}
+
+export interface CommentPage {
+  readonly comments: CommentRecord[];
+  /** Where to carry on from, absent when the conversation ends here. */
+  readonly cursor?: string;
+}
+
+/**
+ * A page of one thread's comments, oldest first, withdrawn ones in their place.
+ *
+ * One more row than asked for is read, which is how "is there more" is answered
+ * without counting the table.
+ */
+export function threadComments(
+  database: DatabaseSync,
+  threadId: string,
+  query: CommentQuery,
+): CommentPage {
+  const conditions: string[] = ["thread_id = ?"];
+  const values: (string | number)[] = [threadId];
+  const cursor = parseCursor(query.after);
+  if (cursor !== undefined) {
+    conditions.push("(created_at > ? OR (created_at = ? AND id > ?))");
+    values.push(cursor.at, cursor.at, cursor.id);
+  }
+
+  const rows = database
+    .prepare(`${SELECT_COMMENT} WHERE ${conditions.join(" AND ")} ORDER BY created_at, id LIMIT ?`)
+    .all(...values, query.limit + 1);
+
+  const comments = rows.slice(0, query.limit).map((row) => toComment(row));
+  const last = comments.at(-1);
+  return {
+    comments,
+    ...(rows.length > query.limit && last !== undefined
+      ? { cursor: `${last.createdAt}:${last.id}` }
+      : {}),
+  };
 }
 
 function openingComment(database: DatabaseSync, threadId: string): CommentRecord | undefined {
@@ -449,7 +493,7 @@ export function listThreads(database: DatabaseSync, query: ThreadQuery): ThreadP
   const cursor = parseCursor(query.before);
   if (cursor !== undefined) {
     conditions.push("(updated_at < ? OR (updated_at = ? AND id < ?))");
-    values.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
+    values.push(cursor.at, cursor.at, cursor.id);
   }
 
   const rows = database
@@ -469,9 +513,16 @@ export function listThreads(database: DatabaseSync, query: ThreadQuery): ThreadP
   };
 }
 
+/**
+ * A cursor as both lists here write one: a moment, a colon, and a row's id.
+ *
+ * One reader for both, because a client is handed cursors from two methods of
+ * the same family and passes back whatever it was given; two spellings would be
+ * two chances for one of them to stop round-tripping.
+ */
 function parseCursor(
   value: string | undefined,
-): { readonly updatedAt: number; readonly id: string } | undefined {
+): { readonly at: number; readonly id: string } | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -479,12 +530,12 @@ function parseCursor(
   if (separator === -1) {
     return undefined;
   }
-  const updatedAt = Number(value.slice(0, separator));
+  const at = Number(value.slice(0, separator));
   const id = value.slice(separator + 1);
   // A cursor nobody can read is treated as no cursor rather than as a refusal:
   // it came from this server, so one that does not parse is a client that lost
   // its place, and the first page is where somebody who lost their place is.
-  return Number.isInteger(updatedAt) && id !== "" ? { updatedAt, id } : undefined;
+  return Number.isInteger(at) && id !== "" ? { at, id } : undefined;
 }
 
 /** How many comments a thread holds, withdrawn ones included. */

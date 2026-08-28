@@ -56,6 +56,26 @@ import { completeUpgrade, isWebSocketUpgrade, refuseUpgrade } from "./websocket.
  */
 const MAXIMUM_MESSAGE_BYTES = 128 * 1024;
 
+/**
+ * The most one session may have waiting to go out to it.
+ *
+ * The ceiling above is about one message; this is about however many of them a
+ * peer has stopped reading. A client that subscribes to a busy topic and then
+ * does not drain its socket would otherwise have this server hold frames for it
+ * for as long as the connection stayed open. Delivery here is weak on purpose,
+ * so the answer is the one the protocol already gives for a subscriber that
+ * cannot keep up: it is dropped, and it reconnects and reads the collection
+ * again.
+ *
+ * Sixteen mebibytes, which is comfortably above the largest single answer a
+ * method here composes - a page of threads, each of which may carry a
+ * suggestion - so that one large answer to somebody on a slow link is never the
+ * reason their session ends. What it bounds is frames piling up behind a peer
+ * that is not reading them, at a figure a deployment can afford once per
+ * session rather than at whatever a socket left open reaches.
+ */
+export const MAXIMUM_BUFFERED_BYTES = 16 * 1024 * 1024;
+
 export interface TeamSocketOptions {
   /** The same service the REST API answers from: one database, one reader, one log. */
   readonly service: TeamService;
@@ -175,6 +195,7 @@ export function createTeamSocket(options: TeamSocketOptions): TeamSocket {
     let session: TeamSession | undefined;
     const connection = completeUpgrade(request, socket, head, {
       maximumMessageBytes: MAXIMUM_MESSAGE_BYTES,
+      maximumBufferedBytes: MAXIMUM_BUFFERED_BYTES,
       heartbeatMs: TEAM_HEARTBEAT_MS,
       onMessage: (text) => {
         session?.receive(text);

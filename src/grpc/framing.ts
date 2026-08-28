@@ -12,10 +12,30 @@
  * never negotiated, and answering with the compressed bytes read as a message
  * is worse than saying so.
  */
-import { GRPC_RESOURCE_EXHAUSTED, GRPC_UNIMPLEMENTED, GrpcStatusError } from "./status.js";
+import {
+  GRPC_INVALID_ARGUMENT,
+  GRPC_RESOURCE_EXHAUSTED,
+  GRPC_UNIMPLEMENTED,
+  GrpcStatusError,
+} from "./status.js";
 
 /** The five bytes in front of every message. */
 const PREFIX_BYTES = 5;
+
+/**
+ * How many messages one call carries.
+ *
+ * Both services Team serves are unary — one message in each direction, which is
+ * the whole of what src/grpc/server.ts implements — and the calls this side
+ * makes read one reply and no more. A second message on such a call is a caller
+ * doing something this protocol does not describe.
+ *
+ * Handed to an assembler rather than assumed by it: the framing is the framing
+ * whatever a service does with it, and a service that streamed would say so
+ * here rather than have this file decide quietly for it. Every caller in this
+ * repository hands it this one.
+ */
+export const UNARY_CALL_MESSAGES = 1;
 
 /**
  * The largest message either side will read.
@@ -39,10 +59,20 @@ export function encodeFrame(message: Uint8Array): Buffer {
  * Chunks of a stream as they arrive, turned back into whole messages.
  *
  * A caller pushes whatever the socket produced and is handed the messages that
- * are now complete, which may be none.
+ * are now complete, which may be none. Two things are bounded here rather than
+ * by whoever reads them: how large one message may be, and how many of them one
+ * call may carry. Both have to be, because this is where a message stops being
+ * a length somebody promised and starts being memory this process holds.
  */
 export class FrameAssembler {
   #buffered: Buffer = Buffer.alloc(0);
+  #decoded = 0;
+  readonly #maximumMessages: number;
+
+  /** Read a call that carries at most this many messages. */
+  constructor(maximumMessages: number) {
+    this.#maximumMessages = maximumMessages;
+  }
 
   /** Take one chunk and return every message it completed. */
   push(chunk: Uint8Array): Buffer[] {
@@ -70,8 +100,29 @@ export class FrameAssembler {
       if (this.#buffered.length < PREFIX_BYTES + length) {
         break;
       }
+      // Refused where the message would have been decoded, rather than by
+      // whoever is reading them. A caller that turned the second one away would
+      // already have been handed however many arrived in the same chunk, which
+      // is exactly how a bounded per-message limit becomes an unbounded
+      // per-call one: a four-mebibyte body of five-byte empty frames is the
+      // best part of a million buffers, for a call whose answer was settled by
+      // its first message.
+      //
+      // INVALID_ARGUMENT, where an oversized message is RESOURCE_EXHAUSTED, and
+      // the distinction is the one src/grpc/messages.ts draws: that request is
+      // well formed and asks for more than this service will spend, where this
+      // one is not the shape the method takes at all.
+      if (this.#decoded >= this.#maximumMessages) {
+        const allowed =
+          this.#maximumMessages === 1 ? "one message" : `${this.#maximumMessages} messages`;
+        throw new GrpcStatusError(
+          GRPC_INVALID_ARGUMENT,
+          `this method takes ${allowed}, and this call carried more`,
+        );
+      }
       messages.push(this.#buffered.subarray(PREFIX_BYTES, PREFIX_BYTES + length));
       this.#buffered = this.#buffered.subarray(PREFIX_BYTES + length);
+      this.#decoded += 1;
     }
     return messages;
   }
