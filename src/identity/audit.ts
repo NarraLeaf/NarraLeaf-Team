@@ -51,6 +51,40 @@ export interface NewDecision {
 export const UNIDENTIFIED_ACCOUNT = "unknown";
 
 /**
+ * Text somebody else chose, rendered so that it can be written down.
+ *
+ * A resource id, a repository name or a filter arrives off the wire and ends up
+ * in the two places this file is about: the line the service writes to the
+ * operator's log, and the `resource` or `detail` of the row beside it. Neither
+ * is a place for whatever bytes a caller felt like sending. A newline writes
+ * what looks like a second line of this server's own log; an escape sequence
+ * moves the cursor of the terminal an operator is watching, and the same bytes
+ * go into the log file and out of it again every time somebody reads the
+ * decision back — from `nlteam audit`, from the panel, from anywhere.
+ *
+ * They are escaped rather than dropped. What arrived is the whole of what a log
+ * is for, and text with the awkward bytes quietly removed is a record of
+ * something that did not happen. `\p{Cc}` is the C0 range, DEL and the C1
+ * range, which is every character that is an instruction rather than a letter;
+ * each becomes `\u00xx`, four digits because none of them is above U+009F.
+ *
+ * A backslash already in the text is left alone. Escaping that too would make
+ * the rendering unambiguous, at the price of every Windows-shaped name and path
+ * arriving doubled — and what the ambiguity is between is an escape and
+ * somebody having typed the letters of one, neither of which moves a cursor.
+ *
+ * Called where the text arrives rather than on the finished line: most of a
+ * line is the server's own words, and running this over the whole of one would
+ * escape those as well.
+ */
+export function forLog(text: string): string {
+  return text.replace(
+    /\p{Cc}/gu,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
  * How many decisions are kept.
  *
  * A busy Team answers a permission question on every repository access, so this

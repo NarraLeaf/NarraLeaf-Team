@@ -25,6 +25,11 @@
  * outcome, and kept in the database by src/identity/audit.ts. Nothing else in
  * the system records who reached what: loreserver logs that it asked, not what
  * it was told, and a refusal reaches the person as "not found".
+ *
+ * The resource in those lines is a string somebody else chose, and so is the
+ * name a repository is reported under. Each goes through `forLog` as it comes
+ * in, so that nothing a caller sends can write a line of this server's log or
+ * move the cursor of the terminal it is being read in.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -59,6 +64,7 @@ import {
   GrpcStatusError,
 } from "../grpc/status.js";
 import {
+  forLog,
   recordDecision,
   UNIDENTIFIED_ACCOUNT,
   type NewDecision,
@@ -116,6 +122,23 @@ export interface AuthorizationContext {
    * the one somebody wants put in front of them.
    */
   readonly refused?: (decision: RecordedDecision) => void;
+  /**
+   * Somewhere to say that a project is **no longer on this server**.
+   *
+   * Shaped like {@link refused} and for the same reason: forgetting a project
+   * has consequences outside this file — the sessions holding a list that now
+   * names something which is not there, and the reading this server kept of the
+   * repository — and neither of those is a thing src/projects/ knows about. So
+   * what happens here is the row going, and what happens to the rest of the
+   * server is whatever this was wired to. Absent in a build with nothing to
+   * tell, exactly as `refused` is, and then the row simply goes.
+   *
+   * The same disappearance travels the other way when a client asks for it, and
+   * `projects.forget` in src/team/methods/projects.ts does it there. The two
+   * paths have to leave this server in one state, because which of them a
+   * project went by is not something anybody holding a list can see.
+   */
+  readonly forgotten?: (projectId: string) => void;
 }
 
 /**
@@ -181,11 +204,16 @@ function decided(context: AuthorizationContext, line: string, decision: NewDecis
  *
  * It costs one lookup by primary key in a local SQLite file, on a call that has
  * already verified an RSA signature.
+ *
+ * Whatever comes back is safe to write down. A project's name was checked
+ * against the pattern in ./registry.ts before it could be stored, so escaping
+ * it changes nothing; a resource id was checked against nothing at all, and it
+ * is what this answers with whenever there is no project to name.
  */
 function resourceName(context: AuthorizationContext, resourceId: string): string {
   const projectId = projectIdFromResourceId(resourceId);
   const project = projectId === undefined ? undefined : findProject(context.database, projectId);
-  return project?.name ?? resourceId;
+  return forLog(project?.name ?? resourceId);
 }
 
 /**
@@ -260,7 +288,7 @@ async function checkUserPermission(
         asked === undefined
           ? "for nothing"
           : request.resourceIds.length === 1
-            ? asked
+            ? forLog(asked)
             : `for ${request.resourceIds.length} resources`
       }: refused, ${because}`,
       {
@@ -288,7 +316,7 @@ async function checkUserPermission(
     if (project === undefined) {
       denied.push({ resourceId, permission: [] });
       const why = "not a project on this server";
-      decided(context, `auth: check ${caller.user.username} ${resourceId}: denied, ${why}`, {
+      decided(context, `auth: check ${caller.user.username} ${forLog(resourceId)}: denied, ${why}`, {
         username: caller.user.username,
         resource: resourceName(context, resourceId),
         allowed: false,
@@ -300,7 +328,7 @@ async function checkUserPermission(
     // project: loreserver compares the two strings, and a rebuilt one that
     // differed in any character would read as an answer about something else.
     allowed.push({ resourceId, permission: [...PROJECT_PERMISSIONS] });
-    decided(context, `auth: check ${caller.user.username} ${resourceId}: allowed`, {
+    decided(context, `auth: check ${caller.user.username} ${forLog(resourceId)}: allowed`, {
       username: caller.user.username,
       resource: resourceName(context, resourceId),
       allowed: true,
@@ -342,7 +370,7 @@ async function lookupUserPermissions(
   decided(
     context,
     `auth: lookup ${caller.user.username}: ${reachable.length} project(s)${
-      only === undefined ? "" : ` matching ${request.resourceFilter}`
+      only === undefined ? "" : ` matching ${forLog(request.resourceFilter)}`
     }`,
     {
       username: caller.user.username,
@@ -514,7 +542,7 @@ function exchangeMultiresourceToken(context: AuthorizationContext, call: GrpcCal
       const why = "not a project on this server";
       decided(
         context,
-        `auth: multiresource ${caller.user.username} ${resourceId}: denied, ${why}`,
+        `auth: multiresource ${caller.user.username} ${forLog(resourceId)}: denied, ${why}`,
         {
           username: caller.user.username,
           resource: resourceName(context, resourceId),
@@ -536,7 +564,7 @@ function exchangeMultiresourceToken(context: AuthorizationContext, call: GrpcCal
     granted.push({ resource_id: resourceId, permission: [...PROJECT_PERMISSIONS] });
     decided(
       context,
-      `auth: multiresource ${caller.user.username} ${resourceId}: allowed`,
+      `auth: multiresource ${caller.user.username} ${forLog(resourceId)}: allowed`,
       {
         username: caller.user.username,
         resource: resourceName(context, resourceId),
@@ -592,28 +620,23 @@ async function createResource(
   const request = decodeCreateResourceRequest(call.message);
   const projectId = projectIdFromResourceId(request.resourceId);
   const project = projectId === undefined ? undefined : findProject(context.database, projectId);
+  // Both of these are whatever loreserver was told by whoever asked it for the
+  // repository, so both are rendered once here and used from there.
+  const about = `auth: create resource ${forLog(request.resourceId)} ` +
+    `"${forLog(request.resourceName)}"`;
 
   if (project !== undefined) {
-    context.log(
-      `auth: create resource ${request.resourceId} "${request.resourceName}": ` +
-        `the project ${project.name}`,
-    );
+    context.log(`${about}: the project ${project.name}`);
     return EMPTY_MESSAGE;
   }
   if (projectId === undefined) {
-    context.log(
-      `auth: create resource ${request.resourceId} "${request.resourceName}": ` +
-        "not a resource id this server can read",
-    );
+    context.log(`${about}: not a resource id this server can read`);
     return EMPTY_MESSAGE;
   }
 
   const caller = await identify(context, call, undefined);
   if (caller.kind !== "identified") {
-    context.log(
-      `auth: create resource ${request.resourceId} "${request.resourceName}": ` +
-        `not recorded, ${describeRefusal(caller.reason)}`,
-    );
+    context.log(`${about}: not recorded, ${describeRefusal(caller.reason)}`);
     return EMPTY_MESSAGE;
   }
 
@@ -623,16 +646,17 @@ async function createResource(
       name: availableProjectName(context, request.resourceName, projectId),
       createdBy: caller.user.id,
     });
-    context.log(
-      `auth: create resource ${request.resourceId} "${request.resourceName}": ` +
-        `recorded as ${recorded.name}, made by ${caller.user.username}`,
-    );
+    context.log(`${about}: recorded as ${recorded.name}, made by ${caller.user.username}`);
   } catch (error) {
     // Said rather than thrown. A repository that exists and has no row is worth
     // a person looking at, and the line is the only place they would see it.
+    //
+    // The sentence is escaped as the name is: a name this server would not
+    // accept is refused by quoting it, so what comes back here carries the text
+    // that arrived.
     context.log(
-      `auth: create resource ${request.resourceId} "${request.resourceName}": ` +
-        `not recorded, ${error instanceof Error ? error.message : String(error)}`,
+      `${about}: not recorded, ` +
+        `${forLog(error instanceof Error ? error.message : String(error))}`,
     );
   }
   return EMPTY_MESSAGE;
@@ -662,11 +686,26 @@ function availableProjectName(
 /**
  * `RebacApi/DeleteResource`: loreserver saying a repository is gone.
  *
- * The project is forgotten when the caller owns it, which is the only case in
- * which somebody with the authority to delete it has been shown to be behind
- * the call. Otherwise the row stays and the log says so: a stale row denies
- * nobody anything, and a row deleted on an unauthenticated call would take
- * everyone's access with it.
+ * One thing decides it: whether there is an account behind the call. An
+ * identified caller forgets the project, and an unidentified one does not.
+ * There is no narrower question to ask, because every account of this server
+ * reaches every project on it — `projects.forget` says the same in as many
+ * words and has no role check either — so asking who made the project, or
+ * whether they still have it, would be inventing an authority this server does
+ * not have anywhere else.
+ *
+ * What identification buys is that the row only ever goes on somebody's behalf.
+ * Of the two ways to be wrong, the stale row is the safer: a project this
+ * server holds a row for and loreserver has no repository for denies nobody
+ * anything and is one command to take off, while a row dropped on a call from
+ * nobody at all would take away everybody's access to a repository that may
+ * still be there.
+ *
+ * A project that goes this way is as gone as one somebody forgot over the
+ * protocol, so the same two things follow it: the disappearance is said out
+ * loud through {@link AuthorizationContext.forgotten}, and the reading this
+ * server held of the repository goes with it. Neither is reached for from
+ * here — see that callback for why.
  *
  * Either way the call is answered with OK. The repository is already gone by
  * the time this arrives, and failing the call would only make loreserver report
@@ -678,14 +717,16 @@ async function deleteResource(context: AuthorizationContext, call: GrpcCall): Pr
   const project = projectId === undefined ? undefined : findProject(context.database, projectId);
   const caller = await identify(context, call, undefined);
   const who = caller.kind === "identified" ? caller.user.username : UNIDENTIFIED;
+  // The id as it arrived, and the only part of this line that did.
+  const asked = forLog(request.resourceId);
 
   if (project === undefined) {
-    context.log(`auth: delete resource ${who} ${request.resourceId}: no project of this Team server`);
+    context.log(`auth: delete resource ${who} ${asked}: no project of this Team server`);
     return EMPTY_MESSAGE;
   }
   if (caller.kind !== "identified") {
     const why = describeRefusal(caller.reason);
-    decided(context, `auth: delete resource ${who} ${request.resourceId}: kept, ${why}`, {
+    decided(context, `auth: delete resource ${who} ${asked}: kept, ${why}`, {
       username: UNIDENTIFIED_ACCOUNT,
       resource: project.name,
       allowed: false,
@@ -700,7 +741,7 @@ async function deleteResource(context: AuthorizationContext, call: GrpcCall): Pr
   // the time anybody reads about it.
   decided(
     context,
-    `auth: delete resource ${who} ${request.resourceId}: forgot the project ${project.name}`,
+    `auth: delete resource ${who} ${asked}: forgot the project ${project.name}`,
     {
       username: who,
       resource: project.name,
@@ -708,6 +749,8 @@ async function deleteResource(context: AuthorizationContext, call: GrpcCall): Pr
       detail: "forgot the project",
     },
   );
+  // Last, so that nothing hears about a project going before it has gone.
+  context.forgotten?.(project.id);
   return EMPTY_MESSAGE;
 }
 

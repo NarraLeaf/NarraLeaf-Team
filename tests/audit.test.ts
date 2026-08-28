@@ -9,6 +9,7 @@ import {
   countDecisions,
   DECISION_LIMIT,
   DECISION_TRIM_SLACK,
+  forLog,
   listDecisions,
   pageDecisions,
   recordDecision,
@@ -306,5 +307,36 @@ describe("pageDecisions", () => {
     expect(pageDecisions(connection, { limit: 3, before: "not a cursor" }).decisions).toHaveLength(
       3,
     );
+  });
+});
+
+describe("text somebody else chose, on its way into a line", () => {
+  it("leaves what a person would write exactly as it was", () => {
+    // Every language, every punctuation mark, every backslash: the one class
+    // this touches is the one that is an instruction rather than a character.
+    for (const text of ["harbour", "urc-0123456789abcdef", "灯台 / phare — 3", "a\\path\\here"]) {
+      expect(forLog(text)).toBe(text);
+    }
+  });
+
+  it("escapes what would otherwise write a line of the log itself", () => {
+    // A newline is a second line of this server's own log, and an escape moves
+    // the cursor of the terminal somebody is reading it in. DEL and the C1
+    // range go with them, because a terminal acts on those too.
+    expect(forLog("harbour\nauth: check ada urc-aa: allowed")).toBe(
+      "harbour\\u000aauth: check ada urc-aa: allowed",
+    );
+    expect(forLog("\u001b[2J\u001b[H")).toBe("\\u001b[2J\\u001b[H");
+    expect(forLog("a\u0000b\u007fc\u009bd")).toBe("a\\u0000b\\u007fc\\u009bd");
+  });
+
+  it("keeps what arrived rather than dropping it", () => {
+    // What came in is the whole of what a log is for. Text with the awkward
+    // bytes quietly removed is a record of something that did not arrive, and
+    // it would read as one id where two were sent.
+    const rendered = forLog("urc-aa\rurc-bb");
+    expect(rendered).toContain("urc-aa");
+    expect(rendered).toContain("urc-bb");
+    expect(rendered).not.toBe(forLog("urc-aaurc-bb"));
   });
 });

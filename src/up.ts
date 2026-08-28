@@ -46,7 +46,7 @@ import { ProjectReadings } from "./projects/refresh.js";
 import { startAuthorizationService } from "./projects/service.js";
 import { TeamBlobStore } from "./team/blobs.js";
 import { createTeamSocket, type TeamSocket } from "./team/endpoint.js";
-import { projectTopic, TOPIC_ADMIN_REFUSALS } from "./team/protocol.js";
+import { projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
 import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
 import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
@@ -242,6 +242,20 @@ export async function up(
       // told to nobody, which is what happened to every one of them until now.
       refused: (decision: RecordedDecision) => {
         team?.hub.publish(TOPIC_ADMIN_REFUSALS, { kind: "decision-refused", decision });
+      },
+      // The other half of a project going, for the path a person did not take:
+      // loreserver saying a repository is gone leaves every open Studio holding
+      // a list that names it and this server holding what it read of the
+      // repository. Both are dealt with here rather than inside the service,
+      // which knows about neither, and both through the optional call for the
+      // reason `refused` above is - the socket and the reader are made further
+      // down. It is what `projects.forget` does on the other path, in the same
+      // order, so that a project going one way is a project going the other.
+      forgotten: (projectId: string) => {
+        readings?.forget(projectId);
+        const gone = { kind: "project-forgotten", project: projectId } as const;
+        team?.hub.publish(TOPIC_PROJECTS, gone);
+        team?.hub.publish(projectTopic(projectId), gone);
       },
       onError: (error: Error) => stderr(`nlteam: authorization service: ${error.message}\n`),
     };

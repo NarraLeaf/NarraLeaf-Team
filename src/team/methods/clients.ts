@@ -18,7 +18,7 @@
  * **Nothing announced here is stored.** See src/team/presence.ts for why.
  */
 import { findProjectById } from "../../projects/registry.js";
-import { TooManyInstancesError } from "../presence.js";
+import { InstanceTakenError, TooManyInstancesError } from "../presence.js";
 import {
   MethodError,
   optionalText,
@@ -68,6 +68,14 @@ export function clientMethods(): TeamMethod[] {
         } catch (error) {
           if (error instanceof TooManyInstancesError) {
             throw new MethodError("refused", error.message);
+          }
+          if (error instanceof InstanceTakenError) {
+            // A collision rather than a want of authority, which is what the
+            // client can act on: an installation that has ended up sharing an
+            // id - two copies of one Studio directory, most likely - announces
+            // a fresh one and carries on, where a refusal would read as this
+            // account not being allowed to say what machine it is on.
+            throw new MethodError("conflict", error.message);
           }
           throw error;
         }
