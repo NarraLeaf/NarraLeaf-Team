@@ -123,13 +123,138 @@ visits by an age bound, while a busy one would keep hundreds of thousands of
 rows inside any window worth calling recent. When the bound has to choose, it
 drops the oldest allowances first and refusals last — an allowance is what every
 working access produces, and a refusal is the row somebody comes looking for.
-The trim runs once in every few hundred decisions rather than on each one, and a
-decision is written without waiting for the disk, so answering a permission
-question is not a Team server waiting on a platter.
+The trim runs once in every few hundred decisions rather than on each one, and
+no commit here waits on a platter, so answering a permission question is not a
+Team server waiting for a disk — see [What a write costs](#what-a-write-costs).
 
 This is also what makes revocation immediate, and it is the part `loreserver`
 alone cannot do: it checks a token's signature and its expiry, and asks nothing
 else, but every repository access goes on to ask Team.
+
+## What a write costs
+
+`team.db` is node's own SQLite, in write-ahead-log mode, with exactly one
+process writing to it. Everything below follows from that and from one setting
+beside it, and both are in `src/identity/database.ts`, where they are set.
+
+Outside a transaction SQLite commits every statement on its own. At SQLite's
+default of `synchronous = FULL` every one of those commits is an fsync, and an
+fsync is what writing a row actually costs — the row itself is nothing. Measured
+here on a Windows workstation with an NVMe disk, two thousand single-row inserts
+into a database opened the way a Team server opens its own:
+
+```
+synchronous = FULL     3999 ms   (2.000 ms a row)
+synchronous = NORMAL     38 ms   (0.019 ms a row)
+synchronous = OFF        20 ms   (0.010 ms a row)
+```
+
+Nearly all of the difference between the first two is the fsync, and it is the
+same difference on every write this server really makes — each of these through
+the function that is actually called, at `FULL` and then at `NORMAL`:
+
+```
+recordDecision   1.750 ms   0.020 ms
+putOverlay       1.766 ms   0.079 ms
+addComment       1.824 ms   0.068 ms
+createProject    1.785 ms   0.065 ms
+```
+
+The disk, in other words, is nearly the whole of what writing anything costs.
+The path it would be paid on most often is the one nobody asked for: a decision
+is written on every repository access, so at `FULL` a Studio installation
+opening a project would wait on a platter for a line of a log.
+
+So this server sets `synchronous = NORMAL`.
+
+**That cannot corrupt the file.** It is worth saying first because it is the
+thing the setting is assumed to risk, and in WAL mode it is a guarantee rather
+than a hope: a commit appends frames to the log, the log is replayed only as far
+as its last complete and checksummed frame, and `NORMAL` still syncs the log
+before a checkpoint copies any of it into the database file. Nor can a Team
+server process losing its footing lose a write — a crash, a kill, a fatal
+exception — because the pages are already with the operating system by the time
+the commit returned. What is given up is the most recent commits, and only to an
+operating-system crash or a power cut.
+
+What that is worth is a question about the tables rather than about databases in
+general. Decisions are the largest table and the cheapest to lose: a row records
+an access that already happened and was already allowed, the log line beside it
+went out at the time, and the bound throws the oldest of them away as a matter
+of course. Threads, comments and overlay records are lost to the one person able
+to write them again, who still has them on screen. Presence and rooms are not in
+the file at all — they are memory, and are meant to go on a restart. Accounts,
+settings and token revocations are the ones worth thinking hardest about, and
+each of them fails **loudly**: an account that was created and lost cannot sign
+in, and whoever holds the password says so; a setting that was lost reads back
+as what it was, on the screen it was set from; a revocation that was lost leaves
+the account working, which is the operator's own next observation. The failure
+people fear here is the quiet one — a change that appears to have landed and has
+not — and none of these is that.
+
+`synchronous = OFF` is not on the table, and the reason is worth stating rather
+than leaving somebody to wonder: it stops syncing the log before a checkpoint,
+so a power cut part-way through one can leave the database file holding pages
+the log never durably recorded. That ordering is the whole of what stands
+between the file and corruption, and it is exactly what `NORMAL` keeps.
+
+One consequence of those numbers is worth knowing, because it caught this
+server out. At two milliseconds a write, consecutive rows reliably land in
+different milliseconds; at a twentieth of one they reliably do not. A
+conversation's comments were ordered by when they were written and tie-broken on
+the comment's id — which is random — so the moment replies started sharing a
+millisecond they came back shuffled, a reply above the remark it answered. They
+are ordered by the moment and then by SQLite's own row key now, which is the
+order they were written in. Anything else here that sorts on a moment and
+tie-breaks on something arbitrary has the same latent fault, and it is a fault
+that only shows once the writes are quick.
+
+### Writes that belong together
+
+The other half of what a write costs is how many of them one call makes. A
+method that writes three rows outside a transaction pays three commits. Storing
+the deployment identity, which `up` does on every start, is nine rows: 18.1 ms
+as nine commits at `FULL` against 1.8 ms as one. The cost is the smaller half of
+the problem, though — a call that wrote eight of its nine rows before the process
+stopped leaves a state no reader here has an opinion about, and in that
+particular case a new issuer beside an old audience is a server that refuses the
+tokens it has just issued.
+
+So writes that answer one call are made in one, through `inTransaction`. It is
+deliberately narrow. The work it runs is **synchronous**, because one connection
+serves this whole process and a transaction held open across an `await` is one
+that unrelated writes fall inside — committed by this call's commit, or thrown
+away by its rollback. It **refuses to nest**, because `node:sqlite` has no
+nested transactions and the error a second `BEGIN` raises would roll the outer
+one back; a store function meant to be part of a larger write does not open one
+at all, which is the arrangement `insertUser` and `createUser` already had. And
+it rolls back on a throw, because a transaction left open by one is a connection
+holding the write lock for the life of the process — a Team server that has
+stopped answering.
+
+Two places write more than once on purpose and are worth knowing about, because
+both look at first like something that was missed.
+
+Making a project writes the row, asks `loreserver` for the repository, and
+removes the row again if it refuses. Those cannot be one transaction: a request
+to another server sits between them, so the transaction would be held across an
+`await` — and the row is written early **precisely so that another caller can
+see it**, since `loreserver` announces the new repository back over the gRPC
+service while the create call is still open. A row inside an uncommitted
+transaction is a row that announcement would not find. What is left is a
+compensating write with a bounded cost: a row that outlives a process which died
+in the middle is a project on the list with no repository, which denies nobody
+anything and which `nlteam project forget` takes off.
+
+An operator's write takes a note of itself afterwards, so that the same call
+arriving twice over a dropped socket is not done twice. The note is a second
+commit for three reasons at once — the handler may await, it may already have
+opened a transaction of its own, and it announces what it did, which has to
+happen after the effect is committed rather than while it is still provisional.
+The window that leaves is the one the note was always written to live with, and
+every method there survives it: a repeat re-reads the record rather than
+replaying a stored answer, and the two whose effect is not a database row at all
+are exactly the two no transaction could have covered.
 
 ## The Team protocol is a session, not a request
 
