@@ -518,10 +518,14 @@ it by being refused.
 | `livePayload` | 16 384 | One thing said in a live session. |
 | `instanceField` | 256 | Each field describing a client installation. |
 | `pageBytes` | 1 048 576 | The rows on one page of any list this server answers with, weighed as the whole of what a client wrote into each — a comment's body and the suggestion beside it, an overlay record's body and its anchor. A page ends at this or at its count, whichever comes first, and its first row goes on it whatever it weighs. |
+| `answerBytes` | 2 097 152 | The largest answer a server composes, derived from the limits above: a page of rows, the one row a page admits beyond its budget, and the fields around them that are not weighed. It is what a client sizes its reader from — a reader smaller than this refuses an answer the server it is talking to built. Two answers on this server are outside it and need bounds of their own: a page of a project's history carries commit messages read out of a repository, and a key list grows with however many times a server has rotated. |
 
-Two transport ceilings sit above the per-field limits: a WebSocket message may
-total **128 KiB**, and an HTTP request body — the sign-in route's — at most
-**4 KiB**. Both are refused before they are read in full.
+Two transport ceilings sit above the per-field limits: a WebSocket message a
+client sends may total **128 KiB**, and an HTTP request body — the sign-in
+route's — at most **4 KiB**. Both are refused before they are read in full. What
+a server sends back is bounded by `answerBytes` instead, which is the larger of
+the two directions: a call is one client's sentence, an answer is a page of
+rows.
 
 ## Versioning
 

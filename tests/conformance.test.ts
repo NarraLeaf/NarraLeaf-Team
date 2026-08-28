@@ -21,6 +21,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ANCHOR_FIELD_LIMIT,
+  ANSWER_BYTES_LIMIT,
   COMMENT_BODY_LIMIT,
   CONTRACT,
   INSTANCE_FIELD_LIMIT,
@@ -145,6 +146,7 @@ describe("the protocol contract", () => {
     expect(LIVE_PAYLOAD_LIMIT).toBe(contract.limits["livePayload"]);
     expect(INSTANCE_FIELD_LIMIT).toBe(contract.limits["instanceField"]);
     expect(PAGE_BYTES_LIMIT).toBe(contract.limits["pageBytes"]);
+    expect(ANSWER_BYTES_LIMIT).toBe(contract.limits["answerBytes"]);
   });
 });
 

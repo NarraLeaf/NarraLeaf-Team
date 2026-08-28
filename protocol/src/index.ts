@@ -491,6 +491,39 @@ export const INSTANCE_FIELD_LIMIT = 256;
  */
 export const PAGE_BYTES_LIMIT = 1024 * 1024;
 
+/**
+ * The largest answer a server composes, and the smallest reader a client may have.
+ *
+ * This is the figure every transport ceiling on either side of the wire is
+ * derived from, and it is here rather than in one of them because both sides
+ * need the same number: a client whose reader is smaller than this refuses an
+ * answer its own server built, and a server that will not hold this much for one
+ * session drops a peer for being sent one.
+ *
+ * Two mebibytes, worked out from the limits above rather than chosen:
+ *
+ *  - the rows on a page weigh at most PAGE_BYTES_LIMIT, which is one mebibyte;
+ *  - one row goes on beyond that, because the first row of a page is admitted
+ *    whatever it weighs, and the heaviest is a thread carrying an opening
+ *    comment — COMMENT_BODY_LIMIT, SUGGESTION_LIMIT and an anchor, some
+ *    seventy-four kilobytes;
+ *  - and the fields around the rows are not weighed at all — ids, timestamps,
+ *    usernames, field names, the punctuation between them — which is a few
+ *    hundred bytes on a row and at most two thousand rows to a page, so under
+ *    six hundred kilobytes.
+ *
+ * That is a little over one and a half mebibytes; the rest is the room a JSON
+ * escape takes in text that needs one, and the frame the answer travels in.
+ *
+ * **Two answers are not bounded by it and are named here rather than left to be
+ * discovered.** A page of a project's history carries commit messages, which
+ * come out of a repository rather than out of a bounded column; and a server's
+ * key list grows with however many times it has rotated. Both are far inside
+ * this figure on any real deployment, and neither would be made safe by moving
+ * it — they need bounds of their own.
+ */
+export const ANSWER_BYTES_LIMIT = 2 * 1024 * 1024;
+
 /* --------------------------------------------------------- client instances */
 
 /**
@@ -1313,5 +1346,6 @@ export const CONTRACT = {
     livePayload: LIVE_PAYLOAD_LIMIT,
     instanceField: INSTANCE_FIELD_LIMIT,
     pageBytes: PAGE_BYTES_LIMIT,
+    answerBytes: ANSWER_BYTES_LIMIT,
   },
 } as const;

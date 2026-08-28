@@ -40,6 +40,7 @@ import { overlayMethods } from "./methods/overlay.js";
 import { projectMethods } from "./methods/projects.js";
 import { TeamPresence } from "./presence.js";
 import {
+  ANSWER_BYTES_LIMIT,
   TEAM_HEARTBEAT_MS,
   TEAM_SOCKET_PATH,
   type TeamCapability,
@@ -67,14 +68,18 @@ const MAXIMUM_MESSAGE_BYTES = 128 * 1024;
  * cannot keep up: it is dropped, and it reconnects and reads the collection
  * again.
  *
- * Sixteen mebibytes, which is comfortably above the largest single answer a
- * method here composes - a page of threads, each of which may carry a
- * suggestion - so that one large answer to somebody on a slow link is never the
- * reason their session ends. What it bounds is frames piling up behind a peer
- * that is not reading them, at a figure a deployment can afford once per
- * session rather than at whatever a socket left open reaches.
+ * Four times ANSWER_BYTES_LIMIT, which is the largest answer a method here
+ * composes. It has to be at least one whole answer, or a session would be ended
+ * for being sent one; the three above that are the frames that queue behind a
+ * large answer while somebody on a slow link drains it. Derived rather than
+ * chosen, so that raising what a page may weigh raises this with it instead of
+ * quietly eating into the margin.
+ *
+ * What it bounds is frames piling up behind a peer that is not reading them, at
+ * a figure a deployment can afford once per session rather than at whatever a
+ * socket left open reaches.
  */
-export const MAXIMUM_BUFFERED_BYTES = 16 * 1024 * 1024;
+export const MAXIMUM_BUFFERED_BYTES = 4 * ANSWER_BYTES_LIMIT;
 
 export interface TeamSocketOptions {
   /** The same service the REST API answers from: one database, one reader, one log. */

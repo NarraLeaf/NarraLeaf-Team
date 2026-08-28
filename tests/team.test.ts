@@ -57,7 +57,10 @@ import { discoveryDocument, type DiscoveryDocument } from "../src/identity/disco
 import { COORDINATION_CAPABILITIES } from "../src/team/collaboration.js";
 import { createTeamSocket, teamMethods, type TeamSocket } from "../src/team/endpoint.js";
 import {
+  ANCHOR_FIELD_LIMIT,
+  ANSWER_BYTES_LIMIT,
   COMMENT_BODY_LIMIT,
+  INSTANCE_FIELD_LIMIT,
   PAGE_BYTES_LIMIT,
   SUGGESTION_LIMIT,
   TEAM_METHODS,
@@ -2772,6 +2775,124 @@ describe("what is attached to a project without being in it", () => {
     const rest = listOverlay(team.database, { ...query, before: first.cursor as string });
     expect(rest.records).toHaveLength(1);
     expect(rest.cursor).toBeUndefined();
+  });
+});
+
+/**
+ * What the figure every client is sized from is measured against.
+ *
+ * ANSWER_BYTES_LIMIT is derived from the page limits rather than measured, and a
+ * derivation nobody checks is a number. These compose the largest answer each
+ * list can be made to produce - once with rows as heavy as this server stores
+ * one, once with as many rows as it will put on a page - and weigh what actually
+ * went on the wire. They are what fails if a field limit or a page limit is
+ * raised without moving the figure the transport ceilings are taken off.
+ */
+describe("the largest answer this server composes", () => {
+  async function withProject(): Promise<{ team: Harness; ada: Client; project: string }> {
+    const team = await harness();
+    const adaId = await account(team.database, "ada");
+    const made = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: adaId,
+    });
+    return { team, ada: await team.connect(team.tokenFor("ada")), project: made.id };
+  }
+
+  /** How large the answer was, as the socket carried it. */
+  function sent(answer: Record<string, unknown>): number {
+    return Buffer.byteLength(JSON.stringify(answer), "utf-8");
+  }
+
+  it("fits a page of the heaviest threads it stores", async () => {
+    const { team, ada, project } = await withProject();
+    const author = requireUser(team.database, "ada").id;
+    const field = "a".repeat(ANCHOR_FIELD_LIMIT);
+    for (let index = 0; index < 15; index += 1) {
+      createThread(team.database, {
+        projectId: project,
+        anchor: { document: field, element: field, revision: field },
+        kind: "suggestion",
+        createdBy: author,
+        body: "b".repeat(COMMENT_BODY_LIMIT),
+        suggestion: "s".repeat(SUGGESTION_LIMIT),
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    const answer = await ada.value(TEAM_METHODS.threadsList, { project, limit: MAXIMUM_PAGE });
+    expect((answer["threads"] as unknown[]).length).toBeGreaterThan(0);
+    expect(sent(answer)).toBeLessThanOrEqual(ANSWER_BYTES_LIMIT);
+  });
+
+  it("fits a page of the heaviest overlay records it stores", async () => {
+    const { team, ada, project } = await withProject();
+    const author = requireUser(team.database, "ada").id;
+    const field = "a".repeat(ANCHOR_FIELD_LIMIT);
+    // Enough to fill a page by weight. An anchor of three full fields is most of
+    // what one of these records weighs, which is why the anchor is weighed.
+    for (let index = 0; index < 700; index += 1) {
+      putOverlay(team.database, {
+        projectId: project,
+        revision: field,
+        anchor: { document: field, element: field, revision: field },
+        kind: "k".repeat(INSTANCE_FIELD_LIMIT),
+        body: "b".repeat(64),
+        authorId: author,
+        instance: "i".repeat(INSTANCE_FIELD_LIMIT),
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    const answer = await ada.value(TEAM_METHODS.overlayList, { project, limit: MAXIMUM_LIMIT });
+    expect((answer["records"] as unknown[]).length).toBeGreaterThan(0);
+    expect(sent(answer)).toBeLessThanOrEqual(ANSWER_BYTES_LIMIT);
+  });
+
+  it("fits a page of as many overlay records as it will carry", async () => {
+    const { team, ada, project } = await withProject();
+    const author = requireUser(team.database, "ada").id;
+    // The other extreme, and the one the byte ceiling never reaches: rows small
+    // enough that the count is what ends the page, so what is weighed here is
+    // the fields around two thousand rows rather than what is in them.
+    for (let index = 0; index < MAXIMUM_LIMIT + 10; index += 1) {
+      putOverlay(team.database, {
+        projectId: project,
+        revision: "r",
+        anchor: { document: "d", element: "e", revision: "r" },
+        kind: "k",
+        body: "b",
+        authorId: author,
+        now: 1_700_000_000_000 + index,
+      });
+    }
+
+    const answer = await ada.value(TEAM_METHODS.overlayList, { project, limit: MAXIMUM_LIMIT });
+    expect((answer["records"] as unknown[]).length).toBe(MAXIMUM_LIMIT);
+    expect(sent(answer)).toBeLessThanOrEqual(ANSWER_BYTES_LIMIT);
+  });
+
+  it("fits the project list and the member list it answers with", async () => {
+    const team = await harness();
+    const author = await account(team.database, "ada");
+    for (let index = 0; index < 400; index += 1) {
+      createProject(team.database, {
+        id: newProjectId(),
+        name: `project-${index}`,
+        description: "d".repeat(4 * 1024),
+        createdBy: author,
+      });
+    }
+    const client = await team.connect(team.tokenFor("ada"));
+
+    expect(sent(await client.value(TEAM_METHODS.projectsList))).toBeLessThanOrEqual(
+      ANSWER_BYTES_LIMIT,
+    );
+    expect(sent(await client.value(TEAM_METHODS.membersList))).toBeLessThanOrEqual(
+      ANSWER_BYTES_LIMIT,
+    );
   });
 });
 
