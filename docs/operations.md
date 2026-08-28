@@ -11,7 +11,8 @@ run from anywhere at all — see
 which also says which three do not and why that is deliberate.
 
 For what Team is, see [architecture.md](architecture.md); for how any of it is put
-together, [internals.md](internals.md).
+together, [internals.md](internals.md); for what a server on a network does and
+does not protect, [security.md](security.md).
 
 ## Running loreserver
 
