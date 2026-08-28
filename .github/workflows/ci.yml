@@ -17,3 +17,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # The contract is generated from protocol/src, and Studio holds a copy of
+      # it that its own tests pin. An edit to the source that is committed
+      # without the generated file beside it leaves the two repositories
+      # describing different protocols, and nothing else here would notice.
+      - run: npm run contract
+      - name: the committed contract is the one the source generates
+        run: git diff --exit-code -- protocol/contract.json
