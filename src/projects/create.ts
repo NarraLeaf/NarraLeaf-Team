@@ -104,6 +104,24 @@ function projectCreateKey(clientId: string): string {
  * open — finds the row already there. A create carrying a repository id asks
  * loreserver for nothing: the repository exists on the author's disk under that
  * id, and what is missing is only the row.
+ *
+ * **The write and the undo are two commits, and have to be.** Everywhere else
+ * that a call writes more than one row it writes them in one transaction — see
+ * `inTransaction` in src/identity/database.ts — and this is the one place that
+ * cannot. What sits between the two is a request to another server, so a
+ * transaction around them would be one held open across an `await`, on the
+ * single connection this whole process shares: every unrelated write that
+ * happened to land while loreserver was answering would be inside it, and would
+ * go with it if it rolled back. Worse, the row is written early *so that another
+ * caller can see it* — loreserver announces the repository back over the gRPC
+ * service while this call is still open, and a row inside an uncommitted
+ * transaction is a row that announcement would not find.
+ *
+ * So this stays a compensating write, and what it costs is bounded: the window
+ * is one refused create, the undo is a delete of a row nothing else has reached
+ * yet, and a row left behind by a process that died in the middle is a project
+ * on the list with no repository — which `nlteam project forget` takes off, and
+ * which denies nobody anything in the meantime.
  */
 export async function makeOrAdoptProject(
   options: ProjectCreationSource,

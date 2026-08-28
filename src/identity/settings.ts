@@ -22,7 +22,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { DEFAULT_IDENTITY, type IdentityConfig } from "./config.js";
-import { textColumn } from "./database.js";
+import { inTransaction, textColumn } from "./database.js";
 
 /**
  * The two lifetimes, under the names the identity settings already give them.
@@ -455,6 +455,11 @@ export function storedTokenLifetimes(database: DatabaseSync): TokenLifetimes {
  *
  * Everything named is checked before anything is written, so a call carrying
  * one good value and one bad leaves neither behind rather than half of it.
+ *
+ * The pair goes down in one commit for the second half of that promise. Checking
+ * both first stops a bad value being written; it does nothing about a server
+ * that stopped between the two rows, which would leave a caller that set both
+ * lifetimes with one of them changed and no sign that the other had not been.
  */
 export function setTokenLifetimes(
   database: DatabaseSync,
@@ -474,9 +479,11 @@ export function setTokenLifetimes(
   }
 
   const now = Date.now();
-  for (const [key, seconds] of writes) {
-    writeSetting(database, key, String(seconds), now);
-  }
+  inTransaction(database, () => {
+    for (const [key, seconds] of writes) {
+      writeSetting(database, key, String(seconds), now);
+    }
+  });
 
   return storedTokenLifetimes(database);
 }
@@ -693,6 +700,13 @@ export function storedIdentity(database: DatabaseSync): Partial<IdentityConfig> 
  * `up --hostname newname`, and this is where that becomes the default every
  * other command mints by. It is `up` that owns this identity and refreshes it;
  * the mint commands only read it.
+ *
+ * All nine rows in one commit, because a half-written identity is not a
+ * half-configured server but a wrong one: the issuer, the audience and the auth
+ * origin are read together by every command that mints or verifies a token, and
+ * a new issuer stored beside the old audience would mint tokens this server
+ * refuses. Nine commits is also nine times the disk this owes — see the note
+ * above `SYNCHRONOUS` in ./database.ts — for something `up` does on every start.
  */
 export function persistIdentity(database: DatabaseSync, config: IdentityConfig): void {
   const now = Date.now();
@@ -707,7 +721,9 @@ export function persistIdentity(database: DatabaseSync, config: IdentityConfig):
     [IDENTITY_DATA_PORT_KEY, String(config.dataPort)],
     [IDENTITY_HOSTNAMES_KEY, config.hostnames.join(",")],
   ];
-  for (const [key, value] of writes) {
-    writeSetting(database, key, value, now);
-  }
+  inTransaction(database, () => {
+    for (const [key, value] of writes) {
+      writeSetting(database, key, value, now);
+    }
+  });
 }

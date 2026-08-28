@@ -251,6 +251,23 @@ interface Repeatable {
  * between the two would let a replay act a second time, which is the same window
  * a crash between the effect and the answer already opens; claiming the key
  * first would trade that for a write nothing did and nobody can retry.
+ *
+ * **The effect and the note stay two commits.** Joining them looks obvious and
+ * is not available here, for three reasons that each rule it out on their own.
+ * The handler may `await` — creating an account hashes a password, rotating a
+ * key writes a file — and a transaction held open across an await is one that
+ * unrelated writes on this process's single connection would fall inside. The
+ * handler already opens a transaction of its own where its effect is more than
+ * one row, and `inTransaction` in src/identity/database.ts refuses to nest
+ * rather than let SQLite throw the outer one away. And the handler announces
+ * what it did before returning, which has to happen after the effect is
+ * committed rather than while it is still provisional.
+ *
+ * What the second commit costs is the write barrier, which is what a write costs
+ * anyway; the half-write it leaves open is the window the paragraph above
+ * describes, and every method below is written to survive it — a repeat re-reads
+ * the record rather than replaying an answer, and the two whose effect is not a
+ * row at all are exactly the two no transaction could have covered.
  */
 function administeredWrite(
   name: string,
