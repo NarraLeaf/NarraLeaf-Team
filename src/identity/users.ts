@@ -84,6 +84,25 @@ export class WeakPasswordError extends Error {
   }
 }
 
+/**
+ * Raised when a display name is longer than Team will store.
+ *
+ * The sentence says why rather than only that, because the reason is not one
+ * anybody would guess from a name being refused: this is not a limit about
+ * screen space.
+ */
+export class InvalidDisplayNameError extends Error {
+  constructor() {
+    super(
+      `a display name must be at most ${DISPLAY_NAME_LIMIT} bytes. It is carried by every ` +
+        "token this account is issued, tokens travel in an authorization header, and a " +
+        "header past what will be sent leaves the account unable to open a connection at " +
+        "all — so a name too long is an account locked out by its own name.",
+    );
+    this.name = "InvalidDisplayNameError";
+  }
+}
+
 /** Raised when a role is not a name a group can have. */
 export class InvalidRoleError extends Error {
   constructor(role: string) {
@@ -97,6 +116,24 @@ export class InvalidRoleError extends Error {
 
 /** The shortest password Team will store. */
 export const MINIMUM_PASSWORD_LENGTH = 10;
+
+/**
+ * The most a display name may be, in UTF-8 bytes.
+ *
+ * What a person is called, not a biography — which is the figure the protocol
+ * method has always read one at. It lives here, beside the write that enforces
+ * it, because the method is not the only way in: `nlteam user create --root` and
+ * `nlteam init --root` reach this store with no frame reader in front of them,
+ * and a bound only one of the three paths honoured is not a bound.
+ *
+ * **What it is really guarding is not the column.** A minted token carries the
+ * display name, tokens are sent in an `authorization` header, and a header past
+ * what Node will put on the wire means that account's socket cannot open. The
+ * account is then locked out by its own name, from a client that has no way to
+ * change it — so this is the one field here where storing what somebody typed
+ * takes their access away rather than merely looking wrong.
+ */
+export const DISPLAY_NAME_LIMIT = 128;
 
 /** The group an account joins when no role is named. */
 export const DEFAULT_ROLE = "member";
@@ -333,6 +370,18 @@ export async function prepareUser(
   if (input.password.length < MINIMUM_PASSWORD_LENGTH) {
     throw new WeakPasswordError();
   }
+  // The name an account falls back to is its username, which the pattern above
+  // has already held to thirty-two characters - so this only ever refuses a
+  // name somebody typed.
+  const displayName = input.displayName ?? username;
+  // Checked here for the reason a group name is: it reaches every token this
+  // account is issued, and every path that writes an account comes through
+  // here. The protocol method reads it at the same figure and refuses first, so
+  // this is what covers the two `--root` commands, which have no frame reader
+  // in front of them at all.
+  if (Buffer.byteLength(displayName, "utf-8") > DISPLAY_NAME_LIMIT) {
+    throw new InvalidDisplayNameError();
+  }
   // Checked here rather than where a role is read from a command line, because
   // a group name reaches the `groups` claim of every token this account is
   // issued, and every path that writes one comes through here.
@@ -345,7 +394,7 @@ export async function prepareUser(
   return {
     id: randomUUID(),
     username,
-    displayName: input.displayName ?? username,
+    displayName,
     email: input.email,
     passwordHash: await hasher.hash(input.password),
     isServiceAccount: input.isServiceAccount === true,

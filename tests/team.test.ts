@@ -41,6 +41,7 @@ import {
   ADMIN_ROLE,
   createUser,
   disableUser,
+  DISPLAY_NAME_LIMIT,
   findUser,
   listUsers,
   requireUser,
@@ -679,12 +680,17 @@ describe("the people on this server", () => {
     const team = await harness();
     await account(team.database, "ada");
     // Sixty accounts whose display names are long enough that the answer is
-    // bounded by its bytes rather than by the row ceiling above them. A display
-    // name is whatever an operator typed, and nothing under this method's own
-    // parameters bounds what is already in the table.
+    // bounded by its bytes rather than by the row ceiling above them. The names
+    // go straight into the table, because a name this long is one stored before
+    // this server bounded them - which is the case the byte ceiling still has
+    // to answer, since nothing shortens a name that is already written.
     const displayName = "n".repeat(20 * 1024);
     for (let index = 0; index < 60; index += 1) {
-      await account(team.database, `member-${String(index).padStart(2, "0")}`, { displayName });
+      const username = `member-${String(index).padStart(2, "0")}`;
+      await account(team.database, username);
+      team.database
+        .prepare("UPDATE users SET display_name = ? WHERE username = ?")
+        .run(displayName, username);
     }
     const client = await team.connect(team.tokenFor("ada"));
 
@@ -3665,6 +3671,24 @@ describe("making an account over the session", () => {
     expect((await ada.call(TEAM_METHODS.adminUsersCreate, { username: "cleo" })).code).toBe(
       "bad-params",
     );
+  });
+
+  it("refuses a display name longer than a token can carry, and stores nothing", async () => {
+    const { ada, team } = await administered();
+
+    const answer = await ada.call(TEAM_METHODS.adminUsersCreate, {
+      username: "cleo",
+      password: "a password nobody guesses",
+      displayName: "n".repeat(DISPLAY_NAME_LIMIT + 1),
+    });
+
+    // The figure is the store's, so this refusal and the one `nlteam user
+    // create --root` gives are the same rule. An account made with a name this
+    // long would carry it in every token it was issued, and a token past what
+    // an authorization header will hold is an account that cannot open a
+    // connection at all.
+    expect(answer.code).toBe("bad-params");
+    expect(findUser(team.database, "cleo")).toBeUndefined();
   });
 
   it(

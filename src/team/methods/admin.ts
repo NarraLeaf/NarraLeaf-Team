@@ -79,8 +79,10 @@ import {
   createUser,
   DEFAULT_ROLE,
   disableUser,
+  DISPLAY_NAME_LIMIT,
   enableUser,
   findUser,
+  InvalidDisplayNameError,
   InvalidRoleError,
   InvalidUsernameError,
   isOperator,
@@ -174,9 +176,6 @@ const USERNAME_LIMIT = 64;
  * this server does while answering a call.
  */
 const PASSWORD_LIMIT = 1024;
-
-/** The most a display name may be: what a person is called, not a biography. */
-const DISPLAY_NAME_LIMIT = 128;
 
 /** The most an email address may be, which is what RFC 5321 allows a path to be. */
 const EMAIL_LIMIT = 320;
@@ -470,6 +469,10 @@ export function adminMethods(): TeamMethod[] {
     administeredWrite(TEAM_METHODS.adminUsersCreate, async (read, context, repeat) => {
       const username = requiredText(read, "username", USERNAME_LIMIT);
       const secret = password(read, "password");
+      // The figure comes from the store that enforces it rather than being
+      // written twice. This reader refuses first and in the wording every
+      // over-long field on this wire is refused with; the store is what holds
+      // the two `--root` commands, which reach it with no reader in front.
       const displayName = optionalText(read, "displayName", DISPLAY_NAME_LIMIT);
       const email = optionalText(read, "email", EMAIL_LIMIT);
       // Which group it joins, as one flag rather than a list of names. Being in
@@ -507,6 +510,7 @@ export function adminMethods(): TeamMethod[] {
         if (
           error instanceof InvalidUsernameError ||
           error instanceof WeakPasswordError ||
+          error instanceof InvalidDisplayNameError ||
           error instanceof InvalidRoleError
         ) {
           // Carried through as they were written rather than reworded. These

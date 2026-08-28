@@ -10,8 +10,10 @@ import {
   countUsers,
   createUser,
   disableUser,
+  DISPLAY_NAME_LIMIT,
   enableUser,
   findUser,
+  InvalidDisplayNameError,
   InvalidUsernameError,
   listUsers,
   pageUsers,
@@ -89,6 +91,78 @@ describe("createUser", () => {
       createUser(connection, hasher, { username: "ada", password: "short" }),
     ).rejects.toBeInstanceOf(WeakPasswordError);
     expect(countUsers(connection)).toBe(0);
+  });
+
+  it("refuses a display name longer than a token can carry", async () => {
+    const connection = await database();
+
+    // The store rather than the method, because the method is not the only way
+    // in: `nlteam user create --root` and `nlteam init --root` reach this
+    // function with nothing in front of them.
+    await expect(
+      createUser(connection, hasher, {
+        username: "ada",
+        password: PASSWORD,
+        displayName: "n".repeat(DISPLAY_NAME_LIMIT + 1),
+      }),
+    ).rejects.toBeInstanceOf(InvalidDisplayNameError);
+    expect(countUsers(connection)).toBe(0);
+  });
+
+  it("counts a display name in bytes, not in characters", async () => {
+    const connection = await database();
+
+    // What has to fit is a header, and a header is bytes. A name of a hundred
+    // characters that are three bytes each is three hundred bytes on the wire,
+    // and counting characters would have let it through.
+    await expect(
+      createUser(connection, hasher, {
+        username: "ada",
+        password: PASSWORD,
+        displayName: "名".repeat(DISPLAY_NAME_LIMIT / 2),
+      }),
+    ).rejects.toBeInstanceOf(InvalidDisplayNameError);
+  });
+
+  it("says what is wrong with a display name it will not store", async () => {
+    const connection = await database();
+
+    const refusal = await createUser(connection, hasher, {
+      username: "ada",
+      password: PASSWORD,
+      displayName: "n".repeat(DISPLAY_NAME_LIMIT + 1),
+    }).catch((error: unknown) => error);
+
+    // The command line prints this sentence and nothing else, so it has to
+    // carry the figure and the reason - a name being refused for its length is
+    // not something anybody would guess is about a header.
+    expect((refusal as Error).message).toContain(String(DISPLAY_NAME_LIMIT));
+    expect((refusal as Error).message).toContain("authorization header");
+  });
+
+  it("takes a display name of exactly the figure", async () => {
+    const connection = await database();
+
+    const user = await createUser(connection, hasher, {
+      username: "ada",
+      password: PASSWORD,
+      displayName: "n".repeat(DISPLAY_NAME_LIMIT),
+    });
+
+    expect(user.displayName).toHaveLength(DISPLAY_NAME_LIMIT);
+  });
+
+  it("goes on reading a name stored before there was a figure for one", async () => {
+    const connection = await database();
+    await createUser(connection, hasher, { username: "ada", password: PASSWORD });
+    const stored = "n".repeat(DISPLAY_NAME_LIMIT * 4);
+    connection.prepare("UPDATE users SET display_name = ? WHERE username = ?").run(stored, "ada");
+
+    // The bound is on the write and on nothing else. A name already in the
+    // table is read back whole, so an account that has one is exactly as
+    // usable — or as locked out — as it was before there was a bound, and
+    // nothing that reads an account had to learn a second shape.
+    expect(findUser(connection, "ada")?.displayName).toBe(stored);
   });
 
   it("keeps no password hash on the record it hands back", async () => {
