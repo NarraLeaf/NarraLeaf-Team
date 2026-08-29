@@ -19,6 +19,9 @@ terminal on the machine it is on.
 
 ## Requirements
 
+None of these apply to the container image, which carries all of them
+— see **Running one** below.
+
 - **Node.js 24 or newer.** The accounts live in node's built-in `node:sqlite`,
   which is unflagged from 24 onwards.
 - **The operating system's `tar`.** Windows has shipped one since Windows 10
@@ -33,6 +36,31 @@ terminal on the machine it is on.
 
 `loreserver` is not something to install. Team downloads the version it pins, on
 first run, into a per-user cache.
+
+## Running one
+
+The short way. `compose.yaml` in this repository is the whole of it, and the one
+line to change is the name people will reach this server by:
+
+```sh
+docker compose up -d
+docker compose exec -T team nlteam init ada < admin-password
+```
+
+The second is once, ever: it makes the first account, and refuses from the
+moment this server has one. After it, three things reach the people who will use
+this server — the address, that account, and the certificate fingerprint the
+first lines of `docker compose logs team` carry — and everything else is managed
+from Studio.
+
+The image carries `loreserver` already unpacked, so nothing is downloaded on
+first start. It is `linux/amd64` only, for the reason under **The pinned build**
+in [operations.md](docs/operations.md#the-pinned-build). If you already hold a
+certificate for the name people use, give Team that too and there is no
+fingerprint for anybody to compare:
+[a certificate you already hold](docs/operations.md#a-certificate-you-already-hold).
+
+Installing it yourself, without a container, is below.
 
 ## Installing
 

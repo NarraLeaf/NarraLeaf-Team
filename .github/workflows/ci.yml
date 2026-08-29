@@ -25,3 +25,21 @@ jobs:
       - run: npm run contract
       - name: the committed contract is the one the source generates
         run: git diff --exit-code -- protocol/contract.json
+
+  # The suites that need a real loreserver, which `npm test` skips unless it is
+  # told where one may be installed. They are the half of the repository reader
+  # nothing else covers - a checkout, a revision page, reading a project while
+  # the server holds its store - and they were skipped everywhere, including
+  # here, until this job existed.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # One directory for the download and the instances, outside the checkout
+      # so that nothing it leaves behind can be mistaken for a change.
+      - run: NLTEAM_TEST_LORESERVER_ROOT="${RUNNER_TEMP}/loreserver" npm test

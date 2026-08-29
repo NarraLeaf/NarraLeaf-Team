@@ -18,7 +18,12 @@ npm run build       # esbuild, which the two above never run
 npm run contract    # and then: git diff --exit-code -- protocol/contract.json
 ```
 
-All five are in CI and all five have caught something the others could not. The
+A sixth runs in CI only: the image is built on every push, started, and made to
+answer its own health check and take a first account before anything is pushed
+to a registry. `docker build .` from a checkout does the same build.
+
+All five above are in CI and all five have caught something the others could
+not. The
 last pair is the one that is easy to forget: `protocol/contract.json` is
 generated from `protocol/src/index.ts`, and Studio holds a copy of it that its
 own tests pin, so a change to the source committed without the generated file

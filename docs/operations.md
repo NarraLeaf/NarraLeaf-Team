@@ -14,6 +14,117 @@ For what Team is, see [architecture.md](architecture.md); for how any of it is p
 together, [internals.md](internals.md); for what a server on a network does and
 does not protect, [security.md](security.md).
 
+## Running it in a container
+
+The shortest way to a working server, and the one that needs least of the rest
+of this document. The image carries `loreserver` and the library Team reads
+projects with already unpacked, so nothing is downloaded on first start and a
+machine with no route to GitHub is as good as one with.
+
+`compose.yaml` in this repository is the whole of it. Two things to change: the
+name people will reach this server by, and nothing else.
+
+```yaml
+services:
+  team:
+    image: ghcr.io/narraleaf/team:latest
+    restart: unless-stopped
+    environment:
+      NLTEAM_HOSTNAME: team.example.com
+    ports:
+      - "41402:41402"
+      - "41337:41337/tcp"
+      - "41337:41337/udp"
+    volumes:
+      - team:/var/lib/nlteam
+volumes:
+  team:
+```
+
+```sh
+docker compose up -d
+docker compose exec -T team nlteam init ada < admin-password
+```
+
+The second is once, ever: `init` makes the first account and refuses from the
+moment this server has one. It reads the password from standard input, which is
+why `-T` is there and why the password is in a file rather than in the command —
+an argument would be in the process list and in your shell history.
+
+After that, three things reach the people who will use it: the address
+(`team.example.com:41402`), the account you just made, and this server's
+certificate fingerprint, which the first lines of `docker compose logs team`
+carry. Everything else — accounts, projects, who may administer this server — is
+managed from Studio.
+
+`NLTEAM_HOSTNAME` is the one setting that has to be right. It goes into the
+certificate, into the audience of every token, and into the address the
+discovery document tells clients to sign in at. A server told none issues tokens
+that work on its own machine and nowhere else. Comma-separated for more than
+one; the first is the one clients are sent to.
+
+### What the image is, and is not
+
+**`linux/amd64` only.** Team pins one `loreserver` build per platform, and the
+only 64-bit ARM Linux build Epic publishes targets Neoverse cores with 512-bit
+SVE — its own caveat says it is liable to die on an illegal instruction
+elsewhere. An `arm64` image would run until it did not, so there is not one.
+
+**The volume is the server.** `/var/lib/nlteam` holds the accounts, the
+projects, the signing keys, the certificate authority and `loreserver`'s store.
+Back it up and you have backed up the server. Lose it and every machine that
+trusted this one has to be told to trust its replacement.
+
+**Two ports and no more.** 41402 is where people sign in and where Studio holds
+its session; 41337 is where a project's data moves, and it is one number
+carrying two listeners — gRPC over TCP and QUIC over UDP. Publish both halves,
+or a client whose connection settles on QUIC will hang rather than fall back.
+Team's own HTTP listener and `loreserver`'s health check are bound to the
+loopback inside the container and are not exposed.
+
+**Every option is an environment variable.** `--hostname` is
+`NLTEAM_HOSTNAME`, `--data-port` is `NLTEAM_DATA_PORT`, and so on for all of
+them; [the whole layer is above](#ports). The storage root and the binary cache
+are already set, and there is no reason to change either.
+
+**Upgrading is a pull and a restart.** `docker compose pull && docker compose up
+-d`. The database migrates itself on start, and the certificate authority is
+kept, so nobody is asked to trust anything again.
+
+### A certificate you already hold
+
+If you have a certificate for the name people use — from a public authority, or
+from one your organisation already runs — give it to Team and the trust step
+disappears for everybody: their machines trust that issuer already, so nobody
+compares a fingerprint or installs anything.
+
+```yaml
+    environment:
+      NLTEAM_HOSTNAME: team.example.com
+      NLTEAM_TLS_CERT: /etc/nlteam/tls/fullchain.pem
+      NLTEAM_TLS_KEY: /etc/nlteam/tls/privkey.pem
+    volumes:
+      - team:/var/lib/nlteam
+      - ./tls:/etc/nlteam/tls:ro
+```
+
+Both or neither, the certificate first in the file if others follow it, and the
+key without a passphrase. The pair is read before anything binds a port, and a
+key that does not belong to its certificate is refused there and then — left to
+the handshake it would be reported on somebody else's machine as a certificate
+problem that says nothing about a key.
+
+Team goes on issuing its own certificate as well, and goes on serving it, and
+that is not tidiness. `loreserver` asks Team who a caller is at
+`https://127.0.0.1`, and no certificate from a public authority names the
+loopback. So the two are served side by side and the connection chooses: a
+client that asks for a name your certificate covers is shown yours, and
+everything else — the loopback included, which asks for no name at all — is
+shown Team's. Nothing about the fingerprint, `nlteam trust`, or a client that
+reaches this server by some other name changes.
+
+Renewal is a restart: replace the files and `docker compose restart team`.
+
 ## Running loreserver
 
 ```sh

@@ -1,4 +1,5 @@
 import { createHash, X509Certificate } from "node:crypto";
+import { hostname } from "node:os";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { connect, createServer, type TLSSocket } from "node:tls";
 
@@ -82,6 +83,29 @@ describe("the certificate authority", () => {
     expect(der).toContain("0603551d0e04160414");
     // An authority that could serve TLS is an authority doing two jobs.
     expect(der).not.toContain(ENCODED.serverAuth);
+  });
+
+  it("is named after the host the operator gave, not the machine it happens to be on", async () => {
+    // The subject is how somebody finds this entry in a trust store full of
+    // well-known authorities. A container's own hostname is a dozen random hex
+    // characters and is no help at all; and two servers on one machine used to
+    // take the same subject, which matters because two authorities sharing one
+    // in a client's trust list shadow each other rather than both being tried.
+    const certificates = await ensureCertificates(await temporaryRoot(), {
+      hostnames: ["team.example.com", "192.168.1.10"],
+    });
+
+    expect(certificates.authority.certificate.subject).toContain(
+      "CN=NarraLeaf Team CA on team.example.com",
+    );
+  });
+
+  it("falls back to the machine's name when the operator gave none", async () => {
+    const certificates = await ensureCertificates(await temporaryRoot());
+
+    expect(certificates.authority.certificate.subject).toContain(
+      `CN=NarraLeaf Team CA on ${hostname()}`,
+    );
   });
 
   it("lasts ten years, and starts an hour ago against a clock that disagrees", async () => {

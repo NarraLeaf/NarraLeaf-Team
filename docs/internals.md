@@ -657,6 +657,25 @@ npx esbuild scripts/bench.ts --bundle --platform=node --format=cjs   --external:
 node bench.cjs
 ```
 
+`scripts/prefetch.ts` fills a directory with the binaries a Team server would
+otherwise download on first start. It is what the container image is built with,
+and it knows no URL and no checksum of its own: it calls what `up` calls, so the
+digests it verifies against are the pinned ones and there is no second copy of a
+pin to fall behind.
+
+```sh
+npx esbuild scripts/prefetch.ts --bundle --platform=node --format=cjs \
+  --external:koffi --define:__NLTEAM_VERSION__=\"0.0.0-prefetch\" --outfile=prefetch.cjs
+NLTEAM_CACHE_DIR=/opt/nlteam/cache node prefetch.cjs
+```
+
+Two things are fetched and both matter. The binary is what runs; `LICENSE.txt`
+and `THIRD-PARTY-NOTICES.txt` beside it are Epic's terms for the program Team
+installs on your behalf, and an image that redistributes one without the other
+is not something to publish. It is also what `up` looks for: the check is all
+three files, so an image carrying only the executable would download the release
+again on first start while appearing to have everything.
+
 The certificate tests are worth knowing about before changing anything under
 `src/tls/`. They read what the writer produced back with
 `crypto.X509Certificate`, compare the extensions against the exact bytes DER

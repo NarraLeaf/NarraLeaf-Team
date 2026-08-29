@@ -1,0 +1,51 @@
+# A Team server, as a deployment.
+#
+# Two things to change before this runs: the host people will reach this server
+# by, and where its files live. Everything else has a default that is right.
+#
+#     docker compose up -d
+#     docker compose exec -T team nlteam init ada < admin-password
+#
+# The second is once, ever: it makes the first account, and refuses from the
+# moment this server has one. After it, the address, that account and the
+# fingerprint in `docker compose logs team` are all anybody needs - accounts,
+# projects and the rest are managed from Studio.
+
+services:
+  team:
+    image: ghcr.io/narraleaf/team:latest
+    # Or, from a checkout of this repository:
+    # build: .
+    restart: unless-stopped
+    environment:
+      # The name people will use. It goes into the certificate, into the
+      # audience of every token, and into the address this server tells clients
+      # to sign in at - a server told none issues tokens that work on its own
+      # machine and nowhere else. Comma-separated for more than one.
+      NLTEAM_HOSTNAME: team.example.com
+
+      # A certificate you already hold, if you have one for that name. With it
+      # nobody compares a fingerprint or installs anything: their machines trust
+      # its issuer already. Mount the files read-only below.
+      # NLTEAM_TLS_CERT: /etc/nlteam/tls/fullchain.pem
+      # NLTEAM_TLS_KEY: /etc/nlteam/tls/privkey.pem
+
+    ports:
+      # Where people sign in and where Studio holds its session.
+      - "41402:41402"
+      # Where a project's data actually moves. One number, two listeners: gRPC
+      # over TCP and QUIC over UDP. Publish both or a client whose connection
+      # settles on QUIC will hang rather than fall back.
+      - "41337:41337/tcp"
+      - "41337:41337/udp"
+
+    volumes:
+      # Everything this server owns: the accounts, the projects, the signing
+      # keys, the certificate authority and loreserver's store. Back this up and
+      # you have backed up the server; lose it and every machine that trusted
+      # this one has to be told to trust its replacement.
+      - team:/var/lib/nlteam
+      # - ./tls:/etc/nlteam/tls:ro
+
+volumes:
+  team:

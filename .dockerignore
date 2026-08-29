@@ -1,0 +1,13 @@
+# Everything the image does not build from. The build needs the sources, the
+# manifest and the lockfile; anything else is either produced inside the image
+# or belongs to somebody's workstation.
+.git
+.github
+node_modules
+dist
+docs
+*.md
+.oxlintrc.json
+compose.yaml
+Dockerfile
+.dockerignore

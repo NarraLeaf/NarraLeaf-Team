@@ -243,15 +243,23 @@ export function endpointNames(hostnames: readonly string[]): SubjectAltName {
 /** Generate the authority: a key, and a self-signed certificate over it. */
 async function issueAuthority(
   layout: TlsLayout,
+  hostnames: readonly string[],
   now: Date,
 ): Promise<{ pem: string; x509: X509Certificate }> {
   const { publicKey, privateKey } = await generateRsaKeyPair();
-  // The machine's name is in the subject so that a person scrolling a trust
-  // store full of well-known authorities can tell which entry is theirs. It is
-  // not an identity check — the fingerprint is, which is what `nlteam trust`
-  // prints and what a person compares.
+  // A name in the subject so that a person scrolling a trust store full of
+  // well-known authorities can tell which entry is theirs. It is not an
+  // identity check — the fingerprint is, which is what `nlteam trust` prints
+  // and what a person compares.
+  //
+  // The name the operator gave, ahead of the machine's own, because the
+  // machine's own is not always one anybody recognises: inside a container it
+  // is a dozen random hex characters, which is exactly no help in the list this
+  // is meant to be findable in. It also separates two servers on one machine,
+  // which used to take the same subject — and two authorities with one subject
+  // in a client's trust list shadow each other rather than both being tried.
   const subject = {
-    commonName: `NarraLeaf Team CA on ${hostname()}`,
+    commonName: `NarraLeaf Team CA on ${hostnames[0] ?? hostname()}`,
     organizationName: ORGANIZATION,
   };
 
@@ -412,7 +420,7 @@ export async function ensureCertificates(
   await mkdir(layout.tlsDir, { recursive: true, mode: 0o700 });
 
   const existingCa = await readCertificate(layout.caCertPath);
-  const authority = existingCa ?? (await issueAuthority(layout, now));
+  const authority = existingCa ?? (await issueAuthority(layout, hostnames, now));
   const generatedAuthority = existingCa === undefined;
 
   let caPrivateKey: KeyObject;

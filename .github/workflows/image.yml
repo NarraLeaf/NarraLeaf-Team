@@ -1,0 +1,90 @@
+name: Image
+
+# Built on every push, so a change that breaks the image is found by the push
+# that broke it. Sent to the registry only from this repository's own branches:
+# a pull request from a fork is built, started, and goes no further.
+on:
+  push:
+    branches: [develop]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built into the local daemon first, and pushed afterwards from the same
+      # cache, because a build that succeeds proves nothing about what the image
+      # does when it is started. The second build re-uses every layer and takes
+      # seconds.
+      - name: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: nlteam-check:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: it starts, answers its own health check, and takes its first account
+        run: |
+          set -eux
+          docker run -d --name team-check \
+            -e NLTEAM_HOSTNAME=team.invalid \
+            -v team-check:/var/lib/nlteam \
+            nlteam-check:latest
+          for _ in $(seq 1 60); do
+            state="$(docker inspect -f '{{.State.Health.Status}}' team-check)"
+            if [ "${state}" = "healthy" ]; then break; fi
+            if [ "${state}" = "unhealthy" ]; then docker logs team-check; exit 1; fi
+            sleep 5
+          done
+          test "$(docker inspect -f '{{.State.Health.Status}}' team-check)" = healthy
+          # Nothing was downloaded on that start: the binaries are in the image.
+          docker logs team-check 2>&1 | grep -q "already installed at"
+          # The one command a deployment runs by hand, exactly as written down.
+          printf '%s' 'a-strong-passphrase-for-ci' | docker exec -i team-check nlteam init ada
+          docker exec team-check nlteam user list | grep -q ada
+
+      - name: what this build is called
+        id: naming
+        run: |
+          repository=ghcr.io/narraleaf/team
+          case "${GITHUB_REF}" in
+            refs/tags/v*)
+              version="${GITHUB_REF#refs/tags/v}"
+              # `latest` moves only when a version is tagged. `develop` follows
+              # the integration branch and moves under anybody who pulls it, so
+              # a deployment that wants neither pins the version.
+              echo "tags=${repository}:${version},${repository}:latest" >> "${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo "tags=${repository}:develop" >> "${GITHUB_OUTPUT}"
+              ;;
+          esac
+
+      - name: sign in to the registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: push
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.naming.outputs.tags }}
+          cache-from: type=gha
