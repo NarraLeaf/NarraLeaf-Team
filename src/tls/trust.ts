@@ -56,21 +56,37 @@ export interface TrustPlan {
 const LINUX_FILE_NAME = "narraleaf-team.crt";
 
 /**
+ * The platform to answer for, defaulting to the one this is running on.
+ *
+ * A parameter rather than a read of `process.platform` inside each branch, for
+ * one reason: two of the three answers below could not otherwise be checked by
+ * anything. A Windows workstation exercises the win32 branch and nothing else,
+ * CI runs on Linux and exercises the default branch and nothing else, and the
+ * macOS commands — which are the ones a person is asked to trust with their
+ * account password — were checked by no automated run anywhere. The same shape
+ * `instanceLayout` uses for the loreserver version it installs under.
+ */
+export type TrustPlatform = NodeJS.Platform;
+
+/**
  * Quote a path for the shell a person will paste this into.
  *
  * Windows paths hold spaces and backslashes; a POSIX shell needs single quotes
  * and Windows' own command line needs double ones.
  */
-function quote(path: string): string {
-  if (process.platform === "win32") {
+function quote(path: string, platform: TrustPlatform): string {
+  if (platform === "win32") {
     return path.includes(" ") ? `"${path}"` : path;
   }
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
 }
 
 /** How this platform installs a certificate authority for the current user. */
-export function installPlan(caCertPath: string): TrustPlan {
-  switch (process.platform) {
+export function installPlan(
+  caCertPath: string,
+  platform: TrustPlatform = process.platform,
+): TrustPlan {
+  switch (platform) {
     case "win32":
       // -user is the whole of the difference between this and an installation
       // every account on the machine inherits. `Root` is the store a chain is
@@ -78,7 +94,7 @@ export function installPlan(caCertPath: string): TrustPlan {
       // trusted for nothing.
       return {
         support: "runs-here",
-        command: `certutil -user -addstore Root ${quote(caCertPath)}`,
+        command: `certutil -user -addstore Root ${quote(caCertPath, platform)}`,
         argv: ["certutil", "-user", "-addstore", "Root", caCertPath],
         // Measured on Windows 11: adding to the current user's Root store goes
         // through without a dialog. Whether it does is a matter of policy, so
@@ -94,7 +110,7 @@ export function installPlan(caCertPath: string): TrustPlan {
       // certificate the system merely holds a copy of.
       return {
         support: "runs-here",
-        command: `security add-trusted-cert -r trustRoot ${quote(caCertPath)}`,
+        command: `security add-trusted-cert -r trustRoot ${quote(caCertPath, platform)}`,
         argv: ["security", "add-trusted-cert", "-r", "trustRoot", caCertPath],
         interaction:
           "macOS will ask for your account password, in a window of its own. " +
@@ -108,7 +124,7 @@ export function installPlan(caCertPath: string): TrustPlan {
       return {
         support: "print-only",
         command:
-          `sudo cp ${quote(caCertPath)} /usr/local/share/ca-certificates/${LINUX_FILE_NAME}\n` +
+          `sudo cp ${quote(caCertPath, platform)} /usr/local/share/ca-certificates/${LINUX_FILE_NAME}\n` +
           "  sudo update-ca-certificates",
         argv: [],
         interaction: undefined,
@@ -117,8 +133,12 @@ export function installPlan(caCertPath: string): TrustPlan {
 }
 
 /** How this platform takes the same certificate authority out again. */
-export function removePlan(caCertPath: string, certificate: X509Certificate): TrustPlan {
-  switch (process.platform) {
+export function removePlan(
+  caCertPath: string,
+  certificate: X509Certificate,
+  platform: TrustPlatform = process.platform,
+): TrustPlan {
+  switch (platform) {
     case "win32": {
       // certutil identifies a certificate to delete by its SHA-1 thumbprint,
       // written without separators. The subject would also be accepted and is
@@ -143,7 +163,7 @@ export function removePlan(caCertPath: string, certificate: X509Certificate): Tr
     case "darwin":
       return {
         support: "runs-here",
-        command: `security remove-trusted-cert ${quote(caCertPath)}`,
+        command: `security remove-trusted-cert ${quote(caCertPath, platform)}`,
         argv: ["security", "remove-trusted-cert", caCertPath],
         interaction:
           "macOS will ask for your account password, in a window of its own. " +
@@ -165,8 +185,11 @@ export function removePlan(caCertPath: string, certificate: X509Certificate): Tr
  * The command to install, on one line, for a message that mentions it in
  * passing.
  */
-export function trustCommandFor(caCertPath: string): string {
-  const plan = installPlan(caCertPath);
+export function trustCommandFor(
+  caCertPath: string,
+  platform: TrustPlatform = process.platform,
+): string {
+  const plan = installPlan(caCertPath, platform);
   return plan.support === "runs-here"
     ? plan.command
     : `nlteam trust --install (it will print what to run)`;
