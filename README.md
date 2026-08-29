@@ -12,6 +12,8 @@ terminal on the machine it is on.
 - **[Running a Team server](docs/operations.md)** — the ports, the certificate,
   and every command in full.
 - **[How Team works](docs/internals.md)** — why the parts are the shape they are.
+- **[Adding to Team](docs/contributing.md)** — the shape of the work: what a new
+  method touches, why a migration is never edited, what each check catches.
 - **[What a Team server protects](docs/security.md)** — and what it does not,
   before you put one on a network.
 
