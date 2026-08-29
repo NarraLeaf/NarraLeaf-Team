@@ -1,11 +1,12 @@
-# Adding to Team
+# Contributing
 
-This repository has a house style, and most of it is visible on any page of it.
+NarraLeaf Team has a house style, and most of it is visible on any page of this
+repository.
 What is not visible is the shape of the work: which five files a new protocol
 method touches, why a migration is never edited, what a refusal has to say. That
-is what this is for. It is not a rulebook — [architecture.md](architecture.md)
+is what this is for. It is not a rulebook, [architecture.md](architecture.md)
 says what Team is, [protocol.md](protocol.md) is the wire specification and
-[internals.md](internals.md) is how the parts work — it is the list of things
+[internals.md](internals.md) is how the parts work, it is the list of things
 somebody adding to this would otherwise have to find out by reading everything.
 
 ## Before pushing
@@ -32,7 +33,7 @@ beside it leaves the two repositories describing different protocols.
 Some of `npm test` is skipped unless a real loreserver is available. See
 [internals.md](internals.md#tests-and-the-endpoint-driver) for the two
 environment variables that switch those suites on, and for the two scripts in
-`scripts/` — a listener to point a real client at, and the benchmark every
+`scripts/`, a listener to point a real client at, and the benchmark every
 performance figure in these documents came from.
 
 ## How this is written
@@ -48,8 +49,18 @@ about. `no-await-in-loop` fires seventy-four times in this repository and is
 wrong every time: the project reader takes one repository at a time on purpose,
 and that sentence belongs beside the loop rather than in a changelog.
 
-**Prose in `docs/` uses British spelling.** Identifiers and comments are in
-English. There is no other spelling rule.
+**Prose uses American spelling**, as the rest of the NarraLeaf documentation
+does. Identifiers and comments are in English.
+
+**Prose carries no em dashes.** A parenthetical takes commas or parentheses; an
+aside that runs to the end of a clause takes a colon or a comma.
+
+**Headings are noun phrases.** Not sentences, and not a claim the section then
+argues for.
+
+**NarraLeaf Team is the product's name.** Write it in full the first time each
+document uses it. `Team` on its own is the abbreviation, and is used only after
+the full name has appeared above it. The same rule applies to NarraLeaf Studio.
 
 **A refusal is one sentence, and the same sentence on both paths.** Something
 that can be refused from a command line and over the protocol says the same
@@ -58,7 +69,7 @@ the way out: a protocol refusal that names the local command which would work is
 useful, and two wordings of one rule are two rules to keep in step.
 
 **Numbers have a reason next to them.** Every limit here says what it is derived
-from — a page size from what a real project holds, a concurrency limit from the
+from, a page size from what a real project holds, a concurrency limit from the
 size of libuv's threadpool, a retention window from what it is protecting. A
 number without one is a number nobody can ever change safely.
 
@@ -68,10 +79,10 @@ number without one is a number nobody can ever change safely.
 
 Five places, and the fifth is in another repository:
 
-1. `protocol/src/index.ts` — add the wire name to `TEAM_METHODS`. This is the
+1. `protocol/src/index.ts`, add the wire name to `TEAM_METHODS`. This is the
    only place a method name is written as a string.
-2. `npm run contract` — regenerates `protocol/contract.json`. Never edit it.
-3. `src/team/methods/` — a `TeamMethod`: a `name` from `TEAM_METHODS`, the
+2. `npm run contract`, regenerates `protocol/contract.json`. Never edit it.
+3. `src/team/methods/`, a `TeamMethod`: a `name` from `TEAM_METHODS`, the
    `capability` it is announced under, and a `handle`. Register it in that
    file's own `...Methods()` function, which `teamMethods()` in
    `src/team/endpoint.ts` already collects.
@@ -123,7 +134,7 @@ time a setting of a new type appears.
 
 Settings are read **when they are used**, not when the server starts. An
 operator changing one over ssh should reach the next connection, not the next
-restart — and a capability list settled at startup was exactly the bug that made
+restart, and a capability list settled at startup was exactly the bug that made
 `server.collaboration` appear to do nothing until somebody restarted.
 
 ### A new command
@@ -143,8 +154,8 @@ does it. Then one question decides where it may live:
 
 `src/i18n/messages.ts` is an interface and `en.ts`, `zh.ts` and `ja.ts` fill it
 in. A message is a field, and one that needs a value is a function of exactly
-the values it needs, so a catalogue missing a message — or a translation that
-forgot a name inside one — does not compile. There is no key lookup and no
+the values it needs, so a catalogue missing a message, or a translation that
+forgot a name inside one, does not compile. There is no key lookup and no
 template syntax, and adding either would move every one of those mistakes to the
 moment somebody in Tokyo reads the sentence.
 
@@ -155,8 +166,8 @@ something the database does not hold.
 ### A new limit
 
 If only this server needs the number, it belongs beside the code that enforces
-it. If **both ends of the wire** need it — the largest page a client may ask
-for, the largest answer it must be able to receive — it belongs in the contract.
+it. If **both ends of the wire** need it, the largest page a client may ask
+for, the largest answer it must be able to receive, it belongs in the contract.
 A client and a server disagreeing about a ceiling is a session that dies on a
 message neither end thinks is too large, and that has happened here once: it
 took a Studio installation's socket down every time it reconnected.
@@ -166,7 +177,7 @@ took a Studio installation's socket down every time it reconnected.
 Not open questions. A change that reverses one has to say so out loud rather
 than arriving as a refactor.
 
-- **An anchor is three opaque strings** — `{document, element, revision}` — and
+- **An anchor is three opaque strings**, `{document, element, revision}`, and
   Team never parses them. It is what lets Studio and Team ship on their own
   schedules, and it is why a comment can be attached to a kind of thing this
   build has never heard of.

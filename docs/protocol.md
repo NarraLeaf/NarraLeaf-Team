@@ -1,10 +1,10 @@
-# The Team protocol
+# Protocol
 
-What a Studio installation and a Team server say to each other, on the wire. This
-is the contract, stated once so that a client written against it and the server
-that answers it cannot come to disagree quietly. Where a shape or a name is given
-below, it is the one in the canonical contract package — `@narraleaf/team-protocol`,
-under [`protocol/`](../protocol/) — which the server imports and from which
+What a NarraLeaf Studio installation and a NarraLeaf Team server say to each
+other, on the wire. This is the contract, stated once so that a client written
+against it and the server that answers it cannot come to disagree quietly. Where a shape or a name is given
+below, it is the one in the canonical contract package, `@narraleaf/team-protocol`,
+under [`protocol/`](../protocol/), which the server imports and from which
 [`protocol/contract.json`](../protocol/contract.json) is generated. Every shape
 here is one the server answers with today, not one it means to.
 
@@ -17,15 +17,15 @@ connection whose certificate was compared.
 ## The address a client is given
 
 An author is handed one address, `nlteam://host:port`, and nothing else. That is
-not where anything is served — it names a deployment, and reading the discovery
+not where anything is served, it names a deployment, and reading the discovery
 document is what turns it into the URLs a client actually uses. The default port
 is `41402`.
 
 That address resolves to a TLS listener bound on every interface. It speaks
-HTTP/1.1 for the three things a client needs — the discovery document, the
-sign-in route and the WebSocket upgrade — over the same certificate. A deployment
+HTTP/1.1 for the three things a client needs, the discovery document, the
+sign-in route and the WebSocket upgrade, over the same certificate. A deployment
 also runs listeners bound to the loopback for its own supervised `loreserver` to
-reach: a JWKS document and a gRPC authorisation service. A client never speaks to
+reach: a JWKS document and a gRPC authorization service. A client never speaks to
 those, and they are not part of this protocol.
 
 ## The discovery document
@@ -59,7 +59,7 @@ served as JSON, is never cached, and answers `GET` and `HEAD`.
   only for a server whose storage was brought up with no identity at all, which
   accepts anyone who can reach it; asking such a server's authors for a token
   would be asking for something nobody can issue.
-- `auth.url` is where a token is presented — the `https` origin of this same
+- `auth.url` is where a token is presented, the `https` origin of this same
   listener.
 - `data.url` is the remote the repositories live on. A client stores it and shows
   it to nobody: which storage a server runs is a detail, not something a person
@@ -67,8 +67,8 @@ served as JSON, is never cached, and answers `GET` and `HEAD`.
 - `capabilities` is described under [Capabilities](#capabilities).
 - `authority.sha256` is the fingerprint of the authority this endpoint's
   certificate chains to. It lets a client that has already trusted this server
-  recognise the machine answering. It proves nothing on its own — it arrives over
-  the connection it describes — and is treated as a label rather than as evidence.
+  recognize the machine answering. It proves nothing on its own, it arrives over
+  the connection it describes, and is treated as a label rather than as evidence.
 - `version` is the server's own build, for a support conversation rather than for
   a decision.
 
@@ -89,7 +89,7 @@ hand a person a username and a password instead of a token through a chat window
 
 Everything else an author does is a method on the session below. Any other
 address under `/api/studio/v1` is a `404`, and a client must never discover what
-a server can do by trying one — the capability list is what that is for.
+a server can do by trying one, the capability list is what that is for.
 
 The request is a JSON object, `{ "username": …, "password": … }`, at most four
 kilobytes. On success it answers `200` with the token and the account it belongs
@@ -109,7 +109,7 @@ its password never looked at. The password is never written to a log.
 
 A client that has a token already does not use this route. It presents the token
 as a bearer on the socket upgrade below, and the token's lifetime is the whole of
-how long that works — there is no session to sign out of.
+how long that works, there is no session to sign out of.
 
 ## The session
 
@@ -121,7 +121,7 @@ Authorization: Bearer <token>
 ```
 
 The bearer is on the upgrade request, and it is checked before the `101` is
-written — a refusal is worth far more to a client as an HTTP status it can show a
+written, a refusal is worth far more to a client as an HTTP status it can show a
 person than as a close code on a socket that connected and then did not. A
 missing or refused token is `401`; a request that is not a WebSocket handshake
 this server speaks is `400`.
@@ -144,7 +144,7 @@ this protocol uses, and no more.
 - A frame from a client must be masked, as the specification requires of a client.
 - A message may total at most **128 KiB**, fragments included. One larger is
   refused with `1009` on the header that announces it, before any of the body is
-  waited for — and what the fragments already held total counts towards it, so a
+  waited for, and what the fragments already held total counts towards it, so a
   frame is judged as part of its message rather than on its own.
 - Ping, pong and close are control frames and carry at most 125 bytes. The server
   pings on the heartbeat interval it announced and closes a peer it has not heard
@@ -178,7 +178,7 @@ person the session is, so that a client can show whose comments are its own
 without parsing a token it is told to treat as opaque; `operator` says the
 account may administer the server, and is not a permission over any project.
 `methods` is every method this build answers and `capabilities` is described
-below — a client checks either before it asks. `serverTime` lets a client say
+below, a client checks either before it asks. `serverTime` lets a client say
 "two minutes ago" without trusting its own clock, and `heartbeatMs` is how often
 each side should expect to hear something.
 
@@ -202,8 +202,8 @@ no body. A session holds at most 64 calls in flight at once.
 
 Every write accepts an optional `clientId`, and repeating a write with the same
 one is safe: the key is `(account, method, clientId)`, so a write that arrives
-twice — the same client, the same id, over a socket that dropped between the
-request and the answer — returns the row it already made rather than a second
+twice, the same client, the same id, over a socket that dropped between the
+request and the answer, returns the row it already made rather than a second
 one, and a repeat announces nothing on any topic.
 
 **A server remembers an id for a day and no longer.** That is what a retry
@@ -230,7 +230,7 @@ failure:
 | `not-found` | The thing named is not on this server. |
 | `refused` | The caller may not do that. |
 | `conflict` | It would collide with something already there. |
-| `unavailable` | True now and perhaps not in a moment — a repository not read yet, or a content server that would not complete a call. |
+| `unavailable` | True now and perhaps not in a moment, a repository not read yet, or a content server that would not complete a call. |
 | `unauthenticated` | The token is no longer good; reconnecting will not help. |
 | `internal` | Something nobody planned for. The message is kept off the wire. |
 
@@ -262,7 +262,7 @@ An event names its topic and carries a sequence and a payload:
 Delivery is deliberately weak. The sequences live in the server's memory and
 start again at nought when it restarts, and events are never queued or replayed.
 A client compares each sequence with the last it saw, and **anything other than
-exactly the next number means read the collection again** — a gap, or a restart,
+exactly the next number means read the collection again**, a gap, or a restart,
 both mean the same thing and both have the same answer. A client too slow to read
 may be dropped, because dropping it is correct: it reconnects and re-reads.
 
@@ -270,7 +270,7 @@ may be dropped, because dropping it is correct: it reconnects and re-reads.
 
 A clean end is a WebSocket close of `1000`. When the server ends a session
 itself, it first sends a `bye` saying why, because a close code is two bytes and
-cannot tell a token that expired from a server that is shutting down — only one
+cannot tell a token that expired from a server that is shutting down, only one
 of those is worth reconnecting into at once:
 
 ```json
@@ -304,39 +304,39 @@ with it, and a capability is never announced by a server that cannot answer it.
 | `clients` | Which installations are connected, and what each has open. |
 | `live` | Live sessions: rooms on a project, for finding installations and broadcasting to them. |
 | `overlay` | Data attached to a project at a revision, which never enters the repository. |
-| `admin` | This server's own state — its accounts, settings, keys, decisions and health — may be read and changed over the socket, by an operator. |
+| `admin` | This server's own state, its accounts, settings, keys, decisions and health, may be read and changed over the socket, by an operator. |
 | `password-sign-in` | A username and a password may be exchanged for a token, before any session. This names the sign-in route above. |
-| `project-history` | A project's revisions may be read a page at a time, through `projects.history`. Present only where the server has a reader that can page one — a build without one answers an empty page, which is not the same as a project with no revisions. |
+| `project-history` | A project's revisions may be read a page at a time, through `projects.history`. Present only where the server has a reader that can page one, a build without one answers an empty page, which is not the same as a project with no revisions. |
 | `blobs` | A live session's files may be put down on this server and collected from it, over `/api/team/v1/blobs/{project}/{transfer}`. The one capability that is about bytes rather than about a call: the socket carries sixteen kilobytes a message, and a file is not a message. Present only where the build has somewhere to put one. |
 
 A client decides what a server can do from `capabilities` or from `hello.methods`,
 never by probing for a `404`.
 
-### The five a deployment can turn off
+### Capabilities a deployment can close
 
 Most of what a server announces follows from its build. Five names do not.
-`comments`, `live`, `overlay`, `clients` and `blobs` are the coordination plane —
-everything on this server that is a remote-collaboration service — and an operator
+`comments`, `live`, `overlay`, `clients` and `blobs` are the coordination plane,
+everything on this server that is a remote-collaboration service, and an operator
 may decide that their deployment holds projects and is administered and is not a
 place people work together. The setting is `server.collaboration`, which is `open`
 or `closed`, and on a closed deployment:
 
 - the five are absent from the discovery document and from the `hello` frame, and
-  every method under them is refused — to everybody, operators included. An
+  every method under them is refused, to everybody, operators included. An
   operator has no use for `live.say`, and an exception for them would be a hole in
   a switch whose whole purpose is that there is nothing on the other side of it.
 - the blob addresses are refused as well, and that is a separate check rather than
   a consequence of the capability going quiet. They are HTTP rather than methods,
   and they admit an installation this server currently knows to have the project
-  open — an installation that announced itself before the switch keeps that
+  open, an installation that announced itself before the switch keeps that
   standing until its socket closes, so nothing about the capability list or the
   methods would have stopped it collecting a transfer it had already agreed. The
   route reads the setting as it stands at the moment of the request.
 - `projects.list`, `projects.get`, `projects.history`, `members.list`,
   `projects.create` and `projects.forget` are refused to anybody who is not an
   operator: what is on this server becomes its operators' to read and to change.
-  Those are `session` methods, and `session` cannot be withdrawn — a server
-  answering the socket has it — so this is a refusal per call rather than a
+  Those are `session` methods, and `session` cannot be withdrawn, a server
+  answering the socket has it, so this is a refusal per call rather than a
   capability that disappears. The refusal says what happened and names the
   setting, because the account it refuses has done nothing wrong and would
   otherwise read it as a server that is broken. The two writes are in the list
@@ -359,7 +359,7 @@ advice and the gate on the call is the authority. So the worst a stale list can 
 is lead a client to call something and be refused, which is the ordinary shape of
 a refusal and the one thing every client already handles. A new session is told
 the truth. A subscription held under a capability that has just been turned off is
-left alone as well — those topics carry nothing an account of this server may not
+left alone as well, those topics carry nothing an account of this server may not
 see, and with the methods that publish on them refused there is nothing left to
 publish, so the subscription goes quiet by itself.
 
@@ -368,9 +368,9 @@ publish, so the subscription goes quiet by itself.
 including the ones every `admin.*` method will refuse, because it says this
 server has a management surface rather than that whoever is reading it may use
 one. That second question is answered in the same `hello` frame, by
-`account.operator`. A client draws a management surface from the two together —
+`account.operator`. A client draws a management surface from the two together,
 the capability says the surface can exist here, the account says whether to draw
-it — and folding them into one would leave a client unable to tell "this server
+it, and folding them into one would leave a client unable to tell "this server
 is too old to be administered over the socket" from "you are not an operator",
 which are different sentences to show a person and only one of them is about
 them.
@@ -383,25 +383,25 @@ unless a capability is named.
 On a deployment closed to collaboration, every method under `comments`, `live`,
 `overlay` and `clients` is refused to everybody, and `projects.list`,
 `projects.get`, `projects.history`, `members.list`, `projects.create` and
-`projects.forget` are refused to anybody who is not an operator — see
+`projects.forget` are refused to anybody who is not an operator, see
 [Capabilities](#capabilities).
 
 | Method | Capability | What it does |
 |---|---|---|
-| `projects.list` | `session` | The projects on this server, in name order. Bounded rather than paged: at most a thousand rows, and a shorter answer once they total a mebibyte. `total` is how many there are in all, so a list shorter than `total` was cut. There is no cursor — a client reads this whole, and one that ignored a cursor would quietly take the first page for the server. |
-| `projects.get` | `session` | One project: its row, and the project file read out of its repository — the title, the stage, how many scenes and assets. A file the server could not make sense of comes back `readable: false` with a sentence, never a refusal, and so does one whose first clone has not landed. Takes an id or a name. |
-| `projects.history` | `session` | A page of one project's revisions, newest first. `limit` defaults to 20 and is capped at 100, and a page also ends once the revisions on it total a mebibyte — whichever comes first, since a revision carries the message it was pushed with and that message comes out of a repository rather than out of a field this server bounds. The cursor is the id of the revision to carry on after, and is absent when there is no page beyond this one. A project the server has no checkout of yet answers an empty page rather than a refusal, which is not the same as a project with no revisions. |
-| `projects.create` | `session` | Make a project, or — given a `repositoryId` — register a repository the author already has. Making one asks the content server for the repository and takes the row back if it refuses; registering one asks it for nothing, because the repository already exists under that id. Announces `project-created` on the `projects` topic. |
+| `projects.list` | `session` | The projects on this server, in name order. Bounded rather than paged: at most a thousand rows, and a shorter answer once they total a mebibyte. `total` is how many there are in all, so a list shorter than `total` was cut. There is no cursor, a client reads this whole, and one that ignored a cursor would quietly take the first page for the server. |
+| `projects.get` | `session` | One project: its row, and the project file read out of its repository, the title, the stage, how many scenes and assets. A file the server could not make sense of comes back `readable: false` with a sentence, never a refusal, and so does one whose first clone has not landed. Takes an id or a name. |
+| `projects.history` | `session` | A page of one project's revisions, newest first. `limit` defaults to 20 and is capped at 100, and a page also ends once the revisions on it total a mebibyte, whichever comes first, since a revision carries the message it was pushed with and that message comes out of a repository rather than out of a field this server bounds. The cursor is the id of the revision to carry on after, and is absent when there is no page beyond this one. A project the server has no checkout of yet answers an empty page rather than a refusal, which is not the same as a project with no revisions. |
+| `projects.create` | `session` | Make a project, or, given a `repositoryId`, register a repository the author already has. Making one asks the content server for the repository and takes the row back if it refuses; registering one asks it for nothing, because the repository already exists under that id. Announces `project-created` on the `projects` topic. |
 | `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Any account may, and forgetting a project that is already gone answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
 | `members.list` | `session` | The accounts on this server, as a name beside a piece of work, in name order. Bounded the way `projects.list` is and for the same reason, with the same `total` and no cursor. |
-| `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. `limit` defaults to 50 and is capped at 200, and a page also ends once the threads on it total a mebibyte — whichever comes first, since a thread carries the comment that opened it and that comment may hold a suggestion, so the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. |
+| `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. `limit` defaults to 50 and is capped at 200, and a page also ends once the threads on it total a mebibyte, whichever comes first, since a thread carries the comment that opened it and that comment may hold a suggestion, so the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. |
 | `threads.get` | `comments` | One thread and a page of its comments, oldest first. `limit` defaults to 50 and is capped at 200, and a page also ends once the comments on it total a mebibyte; `after` carries the reader on from the cursor the last page ended with, and the cursor is absent when the conversation ends there. The thread's own `comments` count is how many there are in all, so a client knows what it holds a page of. |
 | `threads.create` | `comments` | Open a thread on an anchor, with its first comment. |
 | `threads.reply` | `comments` | Add a comment to a thread. |
 | `threads.resolve` | `comments` | Mark a thread resolved, or open it again. Idempotent: resolving a thread that is already in the asked-for state changes nothing and announces nothing. |
 | `comments.edit` | `comments` | Change the wording of one's own comment. |
 | `comments.delete` | `comments` | Withdraw one's own comment, keeping the shape of the conversation. |
-| `clients.announce` | `clients` | Say which installation this is, and what it has open. Announcing an id one already holds is ordinary — it is how a reconnect keeps its place — and an id held by another account is a `conflict`. |
+| `clients.announce` | `clients` | Say which installation this is, and what it has open. Announcing an id one already holds is ordinary, it is how a reconnect keeps its place, and an id held by another account is a `conflict`. |
 | `clients.withdraw` | `clients` | Take one window's presence back. |
 | `clients.list` | `clients` | Which installations are connected, optionally on one project. |
 | `live.list` | `live` | The live sessions open on one project. |
@@ -410,13 +410,13 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `live.leave` | `live` | Leave one. The last one out closes it. |
 | `live.close` | `live` | Close one outright, which only its opener may do. |
 | `live.say` | `live` | Say something to everybody in one. Kept by nobody. |
-| `overlay.list` | `overlay` | A page of what is attached to one project, newest change first, and what the server last read its head to be. `limit` defaults to 500 and is capped at 2 000, and a page also ends once the records on it total a mebibyte — whichever comes first, since a record's body may be 64 KiB and the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. `total` is how many the project holds in all, whatever this page or a narrowing left out. |
+| `overlay.list` | `overlay` | A page of what is attached to one project, newest change first, and what the server last read its head to be. `limit` defaults to 500 and is capped at 2 000, and a page also ends once the records on it total a mebibyte, whichever comes first, since a record's body may be 64 KiB and the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. `total` is how many the project holds in all, whatever this page or a narrowing left out. |
 | `overlay.put` | `overlay` | Attach something, or replace something one attached before. A project holds at most 20 000 records; past that a new one is `refused`, in a sentence naming `overlay.drop` as the way back under. Replacing a record already there is never refused, since it adds none. |
 | `overlay.drop` | `overlay` | Take one's own record off again. |
-| `admin.users.list` | `admin` | A page of this server's accounts, newest first. Each carries the groups it is in, whether those make it an operator, whether it is disabled, and when its tokens were last refused — which is more than `members.list` says, and deliberately so. `limit` defaults to 50 and is capped at 200. |
+| `admin.users.list` | `admin` | A page of this server's accounts, newest first. Each carries the groups it is in, whether those make it an operator, whether it is disabled, and when its tokens were last refused, which is more than `members.list` says, and deliberately so. `limit` defaults to 50 and is capped at 200. |
 | `admin.audit.list` | `admin` | A page of the decisions this server has been asked to make, newest first. `limit` defaults to 50 and is capped at 200. |
-| `admin.settings.list` | `admin` | Everything this server keeps in its settings, which rows may be changed, and — on the rows that have a default behind them — whether the value was chosen or that default is answering for it. Answered whole rather than paged: the rows are a literal in the server rather than a query, so there is nothing for a cursor to be a cursor over. |
-| `admin.keys.list` | `admin` | The signing keys this server holds, published and retired, newest first, and which of them signs. The public half of each and nothing else. Bounded rather than paged, the way `projects.list` is: at most a thousand rows, with `total` beside them, so a list shorter than `total` was cut. Unlike the settings this list grows — it is however many times a server has rotated, and a retired key is kept rather than deleted — and the two surfaces that read it read it whole, so a cursor would be a bound only for whichever client learned it. |
+| `admin.settings.list` | `admin` | Everything this server keeps in its settings, which rows may be changed, and, on the rows that have a default behind them, whether the value was chosen or that default is answering for it. Answered whole rather than paged: the rows are a literal in the server rather than a query, so there is nothing for a cursor to be a cursor over. |
+| `admin.keys.list` | `admin` | The signing keys this server holds, published and retired, newest first, and which of them signs. The public half of each and nothing else. Bounded rather than paged, the way `projects.list` is: at most a thousand rows, with `total` beside them, so a list shorter than `total` was cut. Unlike the settings this list grows, it is however many times a server has rotated, and a retired key is kept rather than deleted, and the two surfaces that read it read it whole, so a cursor would be a bound only for whichever client learned it. |
 | `admin.server.status` | `admin` | What this server is, what it can reach, and how much of each thing it holds. Worked out when somebody asks and kept briefly; the answer carries the moment it was worked out and how long one is kept, so a client shows "as of" rather than implying it is live. |
 | `admin.users.create` | `admin` | Make an account from a username and a password, optionally with a display name, an address, and `operator: true` to put it in the admin group. Answers with the account. A name already taken is a `conflict`; a username, a display name or a password this server will not store is `bad-params`, carrying the sentence that says what each may be. A display name is at most 128 bytes, which is a bound on the token that will carry it rather than on the column it is written to: a name past it would be sent in an `authorization` header the account then cannot open a connection with. Announces `user-created`. |
 | `admin.users.disable` | `admin` | Stop an account being issued anything, and refuse the tokens it already holds. Answers with the account. Idempotent: one already disabled is answered and nothing is announced, and its token epoch is not moved a second time. Announces `user-disabled`. |
@@ -424,10 +424,10 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `admin.users.grantAdmin` | `admin` | Put an account in the admin group. Idempotent, and announces `user-granted-admin`. |
 | `admin.users.revokeAdmin` | `admin` | Take one out again. Idempotent, and announces `user-revoked-admin`. **Refused for the last operator**; see below. |
 | `admin.users.revokeTokens` | `admin` | Refuse every token an account already holds, without disabling it. Answers with the account, whose `tokensInvalidatedAt` is the moment. Never a no-op, which is why it is worth a `clientId`. Announces `user-tokens-revoked`. |
-| `admin.tokens.mint` | `admin` | Mint a sign-in token for an account without knowing its password, to be handed to the person. Answers with the account, when it expires, and the token — **shown once and kept nowhere**. A repeat under the same `clientId` mints nothing and answers without a token. Refused for a disabled account. Announces nothing on any topic. |
+| `admin.tokens.mint` | `admin` | Mint a sign-in token for an account without knowing its password, to be handed to the person. Answers with the account, when it expires, and the token, **shown once and kept nowhere**. A repeat under the same `clientId` mints nothing and answers without a token. Refused for a disabled account. Announces nothing on any topic. |
 | `admin.settings.set` | `admin` | Change one setting, named by the `label` the settings list gives it, to `value`. A lifetime takes the words the row shows, `7d`, or a bare number of seconds. Answers with the row as the list carries it. A row that is not editable is `refused`; a label this server has not got is `not-found`. Announces `setting-changed`, and nothing when the value was already that. |
-| `admin.keys.rotate` | `admin` | Generate a signing key and sign with it from now on. Every key that is not retired goes on being published, so a token signed a second ago still verifies. Answers with the key list as `admin.keys.list` carries it — the same ceiling and the same `total` — and announces `keys-rotated` carrying that. |
-| `admin.keys.retire` | `admin` | Stop publishing the key named by `kid`, which **refuses every token that key signed**, here and anywhere else verifying against this server's JWKS. The opposite of rotating and not a stronger version of it: whoever held one of those tokens signs in again. The key's file is kept, so `total` does not move and the row stays on the list as `retired`. **The key that signs is refused**, in a sentence saying to rotate first — retiring it would refuse the token the call arrived on and leave nothing able to sign a replacement. Retiring the last key that was only verifying is not refused: it is what somebody does about a key they believe has got out, and the cost is the point. A `kid` this server has never held is `not-found`; one already retired is answered and nothing is announced, as with every idempotent write here. Answers with the key list exactly as `admin.keys.rotate` does and announces `key-retired` carrying it. |
+| `admin.keys.rotate` | `admin` | Generate a signing key and sign with it from now on. Every key that is not retired goes on being published, so a token signed a second ago still verifies. Answers with the key list as `admin.keys.list` carries it, the same ceiling and the same `total`, and announces `keys-rotated` carrying that. |
+| `admin.keys.retire` | `admin` | Stop publishing the key named by `kid`, which **refuses every token that key signed**, here and anywhere else verifying against this server's JWKS. The opposite of rotating and not a stronger version of it: whoever held one of those tokens signs in again. The key's file is kept, so `total` does not move and the row stays on the list as `retired`. **The key that signs is refused**, in a sentence saying to rotate first, retiring it would refuse the token the call arrived on and leave nothing able to sign a replacement. Retiring the last key that was only verifying is not refused: it is what somebody does about a key they believe has got out, and the cost is the point. A `kid` this server has never held is `not-found`; one already retired is answered and nothing is announced, as with every idempotent write here. Answers with the key list exactly as `admin.keys.rotate` does and announces `key-retired` carrying it. |
 
 ### Administering a server
 
@@ -442,7 +442,7 @@ reconnect.
 acknowledgement, so a panel updates the row it is already holding instead of
 re-reading a page to find out what it did. **Every write takes an optional
 `clientId`** and is done at most once under it, keyed by the account, the method
-and that id together — one id reused across two methods is two writes rather than
+and that id together, one id reused across two methods is two writes rather than
 one, and one reused a day later is a fresh write rather than a repeat. **A write
 that changed nothing announces nothing**: enabling an account that is already
 enabled is the state that was asked for.
@@ -450,13 +450,13 @@ enabled is the state that was asked for.
 **The last operator cannot be removed over this protocol.** Demoting the only
 account that can administer this server, or disabling it, is refused: it would
 leave a server nobody could put right over the session. The refusal names the way
-back — `nlteam user grant-admin` or `nlteam user enable`, run on the machine that
+back, `nlteam user grant-admin` or `nlteam user enable`, run on the machine that
 holds the storage root. The command line is the rescue plane, and is deliberately
 allowed to do what this one will not.
 
 **A management subscription does not outlive the operator who took it.** A topic
 is judged when it is subscribed to, and an account demoted afterwards keeps a
-perfectly good token — so the check is made again on every call the session
+perfectly good token, so the check is made again on every call the session
 makes, and on its revalidation timer for a session making none. The window for a
 silent one is **thirty seconds**. Each topic taken back is said on that topic as
 an ordinary event, `{ kind: "subscription-withdrawn", topic, why }`, and to that
@@ -498,8 +498,8 @@ is an account being made, which `admin/users` already says.
 
 `admin/refusals` is named for what it publishes rather than for the collection it
 belongs to, and that is the design rather than a shortening. A decision is
-recorded on the path that answers every repository access — thousands in an
-afternoon of one team working — so a topic firing per decision would push more
+recorded on the path that answers every repository access, thousands in an
+afternoon of one team working, so a topic firing per decision would push more
 frames than the rest of this protocol together, to say something a panel could
 only act on by re-reading a page it already holds. **An allowed decision is
 published nowhere.** A client that wants the whole log pages `admin.audit.list`,
@@ -518,12 +518,12 @@ it by being refused.
 | `overlayBody` | 65 536 | One overlay record. |
 | `livePayload` | 16 384 | One thing said in a live session. |
 | `instanceField` | 256 | Each field describing a client installation. |
-| `pageBytes` | 1 048 576 | The rows on one page of any list this server answers with, weighed as the whole of what a client wrote into each — a comment's body and the suggestion beside it, an overlay record's body and its anchor. A page ends at this or at its count, whichever comes first, and its first row goes on it whatever it weighs. |
-| `answerBytes` | 2 097 152 | The largest answer a server composes, derived from the limits above: a page of rows, the one row a page admits beyond its budget, and the fields around them that are not weighed. It is what a client sizes its reader from — a reader smaller than this refuses an answer the server it is talking to built. One answer stands outside that working-out: a page of a project's history is weighed like every other page, but the one row a page admits beyond its budget is a commit message read out of a repository, so one revision pushed with a very long message is one answer past this figure. |
+| `pageBytes` | 1 048 576 | The rows on one page of any list this server answers with, weighed as the whole of what a client wrote into each, a comment's body and the suggestion beside it, an overlay record's body and its anchor. A page ends at this or at its count, whichever comes first, and its first row goes on it whatever it weighs. |
+| `answerBytes` | 2 097 152 | The largest answer a server composes, derived from the limits above: a page of rows, the one row a page admits beyond its budget, and the fields around them that are not weighed. It is what a client sizes its reader from, a reader smaller than this refuses an answer the server it is talking to built. One answer stands outside that working-out: a page of a project's history is weighed like every other page, but the one row a page admits beyond its budget is a commit message read out of a repository, so one revision pushed with a very long message is one answer past this figure. |
 
 Two transport ceilings sit above the per-field limits: a WebSocket message a
-client sends may total **128 KiB**, and an HTTP request body — the sign-in
-route's — at most **4 KiB**. Both are refused before they are read in full. What
+client sends may total **128 KiB**, and an HTTP request body, the sign-in
+route's, at most **4 KiB**. Both are refused before they are read in full. What
 a server sends back is bounded by `answerBytes` instead, which is the larger of
 the two directions: a call is one client's sentence, an answer is a page of
 rows.

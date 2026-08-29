@@ -1,28 +1,19 @@
-# Running a Team server
+# Deployment
 
-The detail behind the quick start in the [README](../README.md): where Team keeps
-its files, which ports have to be reachable, how signing in and the certificate
-work, and the commands for accounts, tokens and access.
+How a NarraLeaf Team server is deployed, what it keeps, which ports it uses, and
+every command that administers it. For what Team is, see
+[Architecture](architecture.md). For what a server on a network protects, see
+[Security](security.md).
 
-Every command below is written with `--root`, the storage root on the machine
-the server runs on. Nearly all of them also take `--server`, and then they are
-run from anywhere at all — see
-[Administering a server from somewhere else](#administering-a-server-from-somewhere-else),
-which also says which three do not and why that is deliberate.
+Commands below are written with `--root`, the storage root on the machine the
+server runs on. Most of them also take `--server`, and are then run from any
+machine that has signed in. See [Remote administration](#remote-administration).
 
-For what Team is, see [architecture.md](architecture.md); for how any of it is put
-together, [internals.md](internals.md); for what a server on a network does and
-does not protect, [security.md](security.md).
+## Container deployment
 
-## Running it in a container
-
-The shortest way to a working server, and the one that needs least of the rest
-of this document. The image carries `loreserver` and the library Team reads
-projects with already unpacked, so nothing is downloaded on first start and a
-machine with no route to GitHub is as good as one with.
-
-`compose.yaml` in this repository is the whole of it. Two things to change: the
-name people will reach this server by, and nothing else.
+`compose.yaml` in this repository is a complete deployment. The image carries the
+version-control server and the library Team reads projects with already
+unpacked, so nothing is downloaded on first start.
 
 ```yaml
 services:
@@ -46,69 +37,61 @@ docker compose up -d
 docker compose exec -T team nlteam init ada < admin-password
 ```
 
-The second is once, ever: `init` makes the first account and refuses from the
-moment this server has one. It reads the password from standard input, which is
-why `-T` is there and why the password is in a file rather than in the command —
-an argument would be in the process list and in your shell history.
+The second command runs once. `init` creates the first account and is refused
+from the moment the server has one. It reads the password from standard input,
+which is what `-T` is for; a password given as an argument appears in the process
+list and in the shell history.
 
-After that, three things reach the people who will use it: the address
-(`team.example.com:41402`), the account you just made, and this server's
-certificate fingerprint, which the first lines of `docker compose logs team`
-carry. Everything else — accounts, projects, who may administer this server — is
-managed from Studio.
+Three things then reach the people who will use the server: the address
+(`team.example.com:41402`), the account just created, and the server's
+certificate fingerprint, printed in the first lines of `docker compose logs
+team`. Accounts, projects and administration are managed from NarraLeaf Studio.
 
-`NLTEAM_HOSTNAME` is the one setting that has to be right. It goes into the
-certificate, into the audience of every token, and into the address the
-discovery document tells clients to sign in at. A server told none issues tokens
-that work on its own machine and nowhere else. Comma-separated for more than
-one; the first is the one clients are sent to.
+`NLTEAM_HOSTNAME` is the value that has to be correct. It goes into the
+certificate, into the audience of every token, and into the address the discovery
+document gives clients. A server given no hostname issues tokens that work on its
+own machine only. Separate several names with commas; the first is the address
+clients are sent to.
 
-### What the image is, and is not
+### Image contents
 
-**`linux/amd64` only.** Team pins one `loreserver` build per platform, and the
-only 64-bit ARM Linux build Epic publishes targets Neoverse cores with 512-bit
-SVE — its own caveat says it is liable to die on an illegal instruction
-elsewhere. An `arm64` image would run until it did not, so there is not one.
+**`linux/amd64` only.** Team pins one version-control build per platform. The
+only 64-bit ARM Linux build published targets Neoverse cores with 512-bit SVE and
+is not expected to run on other ARM hardware, so no `arm64` image is published.
 
-**The volume is the server.** `/var/lib/nlteam` holds the accounts, the
-projects, the signing keys, the certificate authority and `loreserver`'s store.
-Back it up and you have backed up the server. Lose it and every machine that
-trusted this one has to be told to trust its replacement.
+**The volume is the server.** `/var/lib/nlteam` holds the accounts, the projects,
+the signing keys, the certificate authority and the repository store. Backing up
+that volume backs up the server. Losing it means every machine that trusted this
+server has to be told to trust its replacement.
 
-**Two ports and no more.** 41402 is where people sign in and where Studio holds
-its session; 41337 is where a project's data moves, and it is one number
-carrying two listeners — gRPC over TCP and QUIC over UDP. Publish both halves,
-or a client whose connection settles on QUIC will hang rather than fall back.
-Team's own HTTP listener and `loreserver`'s health check are bound to the
-loopback inside the container and are not exposed.
+**Two published ports.** 41402 carries sign-in and the session Studio holds.
+41337 carries project data, and is one number with two listeners: gRPC over TCP
+and QUIC over UDP. Publish both. A client whose connection settles on QUIC waits
+rather than falling back. Team's own HTTP listener and the version-control health
+check are bound to the loopback inside the container.
 
-**Every option is an environment variable.** `--hostname` is
-`NLTEAM_HOSTNAME`, `--data-port` is `NLTEAM_DATA_PORT`, and so on for all of
-them; [the whole layer is above](#ports). The storage root and the binary cache
-are already set, and there is no reason to change either.
+**Environment variables.** Every command-line option has one: `--hostname` is
+`NLTEAM_HOSTNAME`, `--data-port` is `NLTEAM_DATA_PORT`, and so on. The storage
+root and the binary cache are already set in the image.
 
-**Upgrading is a pull and a restart.** `docker compose pull && docker compose up
--d`. The database migrates itself on start, and the certificate authority is
-kept, so nobody is asked to trust anything again.
+**Upgrading.** `docker compose pull && docker compose up -d`. The database
+migrates on start and the certificate authority is kept, so no machine is asked
+to trust anything again.
 
-**If the pull is refused**, the package is private. A container package on
-GitHub starts that way, and it is one switch on its own settings page to make it
-public. Until it is, every machine that pulls this image needs
-`docker login ghcr.io` with a token that may read packages — which is a
-credential on every deployment, to fetch something that is public source anyway.
+**A refused pull** means the package is private. A container package on GitHub
+starts private and is made public from its own settings page. Until it is, every
+machine that pulls the image needs `docker login ghcr.io` with a token that may
+read packages.
 
-**Which tag.** `develop` follows the integration branch and moves under you,
-which is what to run while this is the only tag there is. A tagged release
-publishes `X.Y.Z` and moves `latest`, and a deployment should then name the
-version it means: an image that changes under a server nobody restarted is a
-change nobody chose.
+**Image tags.** `develop` follows the integration branch and changes under a
+deployment that pulls it. A tagged release publishes `X.Y.Z` and moves `latest`.
+Name the version in a deployment that is in use.
 
 ### A certificate you already hold
 
-If you have a certificate for the name people use — from a public authority, or
-from one your organisation already runs — give it to Team and the trust step
-disappears for everybody: their machines trust that issuer already, so nobody
-compares a fingerprint or installs anything.
+An organization that holds a certificate for the name people use gives it to Team
+and no fingerprint is compared: the certificate's issuer is already trusted on
+each machine.
 
 ```yaml
     environment:
@@ -120,149 +103,120 @@ compares a fingerprint or installs anything.
       - ./tls:/etc/nlteam/tls:ro
 ```
 
-Both or neither, the certificate first in the file if others follow it, and the
-key without a passphrase. The pair is read before anything binds a port, and a
-key that does not belong to its certificate is refused there and then — left to
-the handshake it would be reported on somebody else's machine as a certificate
-problem that says nothing about a key.
+Both values or neither. The server's own certificate comes first in the file if
+others follow it, and the key carries no passphrase. The pair is read before any
+port is bound, and a key that does not belong to its certificate is refused at
+startup.
 
-Team goes on issuing its own certificate as well, and goes on serving it, and
-that is not tidiness. `loreserver` asks Team who a caller is at
-`https://127.0.0.1`, and no certificate from a public authority names the
-loopback. So the two are served side by side and the connection chooses: a
-client that asks for a name your certificate covers is shown yours, and
-everything else — the loopback included, which asks for no name at all — is
-shown Team's. Nothing about the fingerprint, `nlteam trust`, or a client that
-reaches this server by some other name changes.
+Team continues to issue and serve its own certificate as well. The version-control
+server asks Team who a caller is at `https://127.0.0.1`, and no certificate from
+a public authority carries the loopback address. Each connection is answered with
+one of the two: a client that asks for a name the supplied certificate covers is
+given that certificate, and everything else, including the loopback, is given
+Team's own. The fingerprint, `nlteam trust`, and clients reaching the server by
+any other name are unaffected.
 
-Renewal is a restart: replace the files and `docker compose restart team`.
+Renewal is a restart. Replace the files and run `docker compose restart team`.
 
-## Running loreserver
+## Installation
 
 ```sh
+npm i @narraleaf/team -g
 nlteam up --root /srv/team
 ```
 
-One directory is the only setting there is; `--root` names it, or `NLTEAM_ROOT`
-where a container entrypoint would rather not compose a command line. Everything
-else has a default, and everything Team writes goes underneath it:
+`--root` names one directory, or `NLTEAM_ROOT` does. Everything else has a
+default, and everything Team writes goes underneath it:
 
 ```
-<root>/loreserver/config/          local.toml, generated by Team on every run
-<root>/loreserver/store/           loreserver's immutable and mutable stores
-<root>/logs/loreserver.log         loreserver's output, and Team's notes about it
-<root>/team.db                      the accounts, the projects and the decisions
-<root>/keys/                       the RSA private keys tokens are signed with
-<root>/tls/                        the certificate authority and the auth endpoint's certificate
-<root>/credentials/                the session Team signs in to its own repositories with
-<root>/cache/projects/             Team's own checkouts, disposable at any moment
+<root>/loreserver/config/   local.toml, written by Team on every run
+<root>/loreserver/store/    the immutable and mutable repository stores
+<root>/logs/loreserver.log  the version-control server's output
+<root>/team.db              the accounts, the projects and the decisions
+<root>/keys/                the RSA private keys tokens are signed with
+<root>/tls/                 the certificate authority and the endpoint certificate
+<root>/credentials/         the session Team signs in to its own repositories with
+<root>/cache/projects/      Team's own checkouts, disposable at any moment
 ```
 
-The binaries are the one thing that is not under it. A downloaded release is
-about a version rather than about one Team server, so it goes in a per-user cache, one
-copy per version per machine:
+`<root>/keys/`, `<root>/tls/` and `<root>/team.db` are what to guard. Together
+they are every account on the server, the authority to issue a token for any of
+them, and the authority every machine that trusted this server believes. Key
+files are written `0600` where the platform supports it.
+
+Deleting `<root>/credentials/` costs one sign-in and nothing else.
+`<root>/cache/projects/` may be deleted at any time.
+
+The binaries are kept outside the storage root, one copy per version per machine:
 
 ```
-%LOCALAPPDATA%\nlteam\cache\bin\    Windows
-$XDG_CACHE_HOME/nlteam/bin/         Linux, or ~/.cache/nlteam/bin/
-~/Library/Caches/nlteam/bin/        macOS
+%LOCALAPPDATA%\nlteam\cache\bin\   Windows
+$XDG_CACHE_HOME/nlteam/bin/        Linux, or ~/.cache/nlteam/bin/
+~/Library/Caches/nlteam/bin/       macOS
 ```
 
-That is not tidiness. Windows raises a firewall prompt the first time a program
-at a given path binds a port, and writes a rule naming that path; a copy per
-storage root meant a prompt and a permanent rule for every Team server anybody ever
-started, including every throwaway one. `NLTEAM_CACHE_DIR` names a directory to
-use instead, which is what a container image wants: the binaries baked in at a
-known path, with nothing to download and no per-user directory to depend on.
+`NLTEAM_CACHE_DIR` names a different directory. An installation left under
+`<root>/bin/` by an earlier version is used where it is. Deleting `<root>/bin`
+while the server is stopped is safe; the next start fetches one copy into the
+cache.
 
-A Team server that has already run keeps whatever it has. An installation under
-`<root>/bin/` from before this is used where it lies rather than moved — moving
-it would mean renaming a directory whose executable a running `loreserver` was
-started from, which Windows refuses outright. Deleting `<root>/bin` while Team is
-stopped is safe, and the next start fetches one copy into the cache.
-
-`<root>/credentials/` is Team's own Lore session store, and it is there rather
-than in the machine-wide one on purpose: Lore selects a stored session by the
-host of the remote, so a machine that has run two Team servers has two sessions
-for `127.0.0.1` and the wrong one is chosen without a word. `docs/internals.md`
-records what that failure looks like. Deleting the directory costs one sign-in.
-
-`<root>/keys/`, `<root>/tls/` and `<root>/team.db` are what is worth guarding:
-together they are every account on this Team server, the authority to issue a token for
-any of them, and the authority to be believed by every machine that has trusted
-this Team server. The key files are written 0600 where the platform has such a thing.
-
-`up` installs the pinned build if it is not already there, checks that the
+`up` installs the pinned build if it is not already present, checks that the
 binary reports the version Team expects, writes the configuration, starts the
-server and waits for `GET /health_check` to answer. It then runs until it is
-interrupted, restarting `loreserver` if it exits, and stops it on the way out.
+version-control server, and waits for its health check to answer. It then runs
+until it is interrupted, restarting the version-control server if it exits, and
+stopping it on the way out.
 
-### Ports
+## Ports
 
-| Port  | What listens             | Protocol                | Reachable from another machine     |
-| ----- | ------------------------ | ----------------------- | ---------------------------------- |
-| 41337 | `loreserver` data        | gRPC over TCP, and QUIC over UDP | Yes — this is what Studio opens a project through |
-| 41339 | `loreserver` health      | HTTP                    | No                                 |
-| 41400 | Team's signing keys and its health, for `loreserver` | HTTP/1.1 | No |
-| 41402 | Team's auth endpoint, the discovery document, the same two documents as 41400, and the API Studio talks to | gRPC over TLS, with HTTP/1.1 beside it | Yes — this is where people sign in |
+| Port | Listener | Protocol | Reachable from another machine |
+| --- | --- | --- | --- |
+| 41337 | Version-control data | gRPC over TCP, QUIC over UDP | Yes. Studio opens a project through it |
+| 41339 | Version-control health check | HTTP | No |
+| 41400 | Team's signing keys and health | HTTP/1.1 | No |
+| 41402 | Sign-in, the discovery document, and the API Studio uses | gRPC over TLS, with HTTP/1.1 | Yes. People sign in here |
 
-Only 41337 and 41402 belong on a network a collaborator can reach. The other two
-are between programs on the Team server machine, and `up` binds them to the
-loopback so that they are not reachable from anywhere else even if a firewall
-says they are.
+Only 41337 and 41402 belong on a network a collaborator reaches. `up` binds the
+other two to the loopback, so they are unreachable from another machine whatever
+a firewall allows.
 
-41400 deserves a note, because it is the one thing this server says about itself
-in the clear. It carries two documents and nothing else: the public halves of the
-signing keys, and whether this process is answering. Both are served on 41402 as
-well, and that is where an operator should read them. 41400 exists because
-`loreserver` will not fetch the keys anywhere else: it is given Team's authority
-as its only trust anchor and verifies the certificate on the address it asks
-about callers at, but the client behind its `[server.auth.jwk]` setting does not
-use that anchor — pointed at the https address it fails the handshake and exits
-at startup. So the fetch stays in plain HTTP on the loopback, and what bounds the
-risk is that a tampered answer would have to come from the same machine.
+41400 carries two documents and nothing else: the public halves of the signing
+keys, and whether the process is answering. Both are served on 41402 as well, and
+that is where an operator reads them.
 
 Each port is moved by an option: `--data-port`, `--health-port`, `--team-port`
-and `--auth-tls-port`. All four must differ, and `up` says so
-rather than letting whichever lost the race go silently missing. `--data-port`
-carries both of `loreserver`'s data listeners — one number, because gRPC listens
-on TCP and QUIC on UDP. Each option is read from an environment variable of the
-same name — `NLTEAM_DATA_PORT`, `NLTEAM_HEALTH_PORT`, `NLTEAM_TEAM_PORT` and
-`NLTEAM_AUTH_TLS_PORT` — for a container entrypoint that
-has no command line to compose; a flag on the line still wins over its variable,
-and where a stored value and the default fall in that order is set out with the
-token's audience under "Signing in" below.
+and `--auth-tls-port`. All four must differ, and `up` refuses a command line
+where they do not. `--data-port` carries both version-control data listeners,
+because gRPC listens on TCP and QUIC on UDP under one number. Each option is read
+from an environment variable of the same name: `NLTEAM_DATA_PORT`,
+`NLTEAM_HEALTH_PORT`, `NLTEAM_TEAM_PORT` and `NLTEAM_AUTH_TLS_PORT`. An option on
+the command line takes precedence over its variable.
 
-### The pinned build
+## The pinned version
 
-Team installs one `loreserver` version, from the GitHub releases of
-[EpicGames/lore](https://github.com/EpicGames/lore). `src/loreserver/pin.ts`
-records two SHA-256 digests per platform: one for the release archive, checked
-as it downloads, and one for the executable inside it, checked every time Team
-is about to run it. A download that does not match is discarded rather than
-installed, and an installed binary that does not match is refused rather than
-run — a file that has changed since it was installed is worth a person looking
-at, so Team says so and stops instead of quietly replacing it.
+Team installs one version of the version-control server, from the GitHub releases
+of [EpicGames/lore](https://github.com/EpicGames/lore). Two SHA-256 digests are
+recorded per platform: one for the release archive, checked as it downloads, and
+one for the executable inside it, checked before each run. A download that does
+not match is discarded. An installed binary that does not match is refused, and
+the server stops rather than replacing it.
 
-Those digests are Team's own, taken by hashing the files: upstream publishes no
-checksums and no signatures.
+The digests are Team's own. Upstream publishes no checksums and no signatures.
 
-Builds exist for 64-bit Linux, Windows and Apple silicon. There is a 64-bit ARM
-Linux build, but the only one published targets Neoverse cores with 512-bit SVE
-and is not expected to run on other ARM hardware. Any other platform is refused
-by name.
+Builds exist for 64-bit Linux, Windows and Apple silicon. A 64-bit ARM Linux
+build is published, but the only one available targets Neoverse cores with
+512-bit SVE and is not expected to run on other ARM hardware. Any other platform
+is refused by name.
 
-`LICENSE.txt` and `THIRD-PARTY-NOTICES.txt` are kept beside the binary, in the
-same cache directory. They are Epic Games' terms for the program Team installs on
-your behalf, and they travel with it.
+`LICENSE.txt` and `THIRD-PARTY-NOTICES.txt` are kept beside the binary in the
+same cache directory. They are Epic Games' terms for the program Team installs.
 
 ## Identity
 
-Team issues the JSON Web Tokens a Studio installation presents to `loreserver`.
-`loreserver` verifies them against a JWKS document Team publishes, and asks Team
-nothing else about them.
+Team issues the JSON Web Tokens a Studio installation presents to the
+version-control server, which verifies them against a JWKS document Team
+publishes.
 
-`up` always serves Team's own endpoint, on port 41400 unless `--team-port` says
+`up` serves Team's own endpoint on port 41400 unless `--team-port` says
 otherwise:
 
 ```
@@ -270,198 +224,158 @@ GET /.well-known/jwks.json   the public halves of the signing keys
 GET /health                  {"ok":true,"version":"..."}
 ```
 
-Nothing else is served there: no user data, no way to write anything, and no
-CORS headers. It is plain HTTP because a set of public keys is not a secret, and
-because `loreserver` fetches it over the loopback of the machine Team runs on.
+Nothing else is served there: no account data, no way to write anything, and no
+CORS headers.
 
-`up` additionally writes the `[server.auth]` and `[environment.endpoint]` blocks
-into `local.toml`, which is what makes `loreserver` demand a token. Both blocks
-are written together: with the first alone, the server demands a token while
-having nowhere to ask about one, and every repository access fails with "Failed
-to connect to lore auth service".
+`up` writes the `[server.auth]` and `[environment.endpoint]` blocks into
+`local.toml`, which is what makes the version-control server demand a token.
 
-`up --no-identity` writes neither, and that is the whole of what it does. A
-`loreserver` configured that way demands nothing and never calls back into Team,
-so the accounts, the tokens, the signing keys and the decision log are all
-bypassed at once and every repository on the server is readable and writable by
-whoever can reach the port. It is a deliberate configuration for a machine
-nothing else can reach, and `up` says so on standard error each time it starts
-that way. `--identity` is still accepted and asks for the default, so a command
-line written before this was the default still runs. `NLTEAM_IDENTITY` decides
-the same thing from the environment — `0`, `false` or `no` turns identity off,
-`1`, `true` or `yes` leaves it on — and either flag overrides it.
+`up --no-identity` writes neither. A version-control server configured that way
+demands nothing and never calls back into Team: the accounts, the tokens, the
+signing keys and the decision record are all bypassed, and every repository on
+the server is readable and writable by whoever can reach the port. It is a
+configuration for a machine nothing else can reach, and `up` reports it on
+standard error at every start. `--identity` asks for the default.
+`NLTEAM_IDENTITY` sets the same thing from the environment: `0`, `false` or `no`
+turns identity off, `1`, `true` or `yes` leaves it on. Either flag overrides the
+variable.
 
-## Signing in, and the certificate that makes it possible
+## Sign-in
 
-A Studio installation signs in by calling two methods, over TLS, on port 41402:
+A Studio installation signs in over TLS on port 41402, by calling two methods:
 
 ```
 epic_urc.UrcAuthApi/ExchangeExternalTokenForUserToken       signing in
 epic_urc.UrcAuthApi/ExchangeUserTokenForMultiresourceToken  before touching a repository
 ```
 
-The first presents a token Team minted and gets a fresh one back. Minting rather
-than echoing is the point of the exchange: the new token carries the account's
-state as it stands now, so an account disabled a minute ago gets nothing, and a
-token with a lifetime cannot renew itself for ever.
+The first presents a token Team issued and receives a fresh one. The new token
+carries the account's state as it stands at that moment, so an account disabled
+since the first token was issued receives nothing.
 
-The second is what a client asks for before it opens a repository's data
-connection, naming the resources it wants. Team checks every one and refuses the
-whole request unless each is a project of this server the caller's account may
-still reach — which is where a disabled or revoked account is stopped, before a
-data connection is opened at all. There is nothing per-project to weigh: every
-account of this server reaches every project on it, so what this refuses is a
-resource that is not one of them, or a caller Team has since disabled or whose
-tokens it has revoked. What it hands back is the shorter-lived of Team's two
-tokens, for the reason set out under "Tokens and taking access away".
+The second is called before a client opens a repository's data connection, and
+names the resources it wants. Team refuses the whole request unless every
+resource is a project of this server that the caller's account may still reach.
+A disabled account, or one whose tokens have been revoked, is stopped here,
+before a data connection is opened. Every account on a server reaches every
+project on it, so what this refuses is a resource that is not a project of this
+server, or a caller Team no longer admits.
 
-Both tokens carry a `resources` claim: which projects, and what the bearer may
-do to each. It is not decoration. The data connection is a separate leg from the
-gRPC one, and it authorizes with this token; loreserver refuses a token that
-arrives without the claim. Between them, the audience and the resources are the
-two things that turn a token from something a client will accept into something
-it can actually use — and both fail in ways that name neither. See
-`src/identity/config.ts` and `src/identity/tokens.ts` for what each failure
-looks like from the outside.
+Both tokens carry a `resources` claim naming the projects and what the bearer may
+do to each. The version-control server refuses a token that arrives without it.
 
-The transport is not a choice. Studio's client library accepts the `https` and
-`ucs-auth` schemes and refuses `http` and `grpc` by name, and it verifies the
-endpoint's certificate against its own host's trust store. There is no
-certificate-pinning hook. The library does read `SSL_CERT_FILE`, on every
-platform — it is how Team's own reader trusts this server — but that variable
-belongs to whoever starts the process, and on a collaborator's machine that is
-Studio. So nothing inside the connection can establish trust the first time — a
-person has to. That is the one manual step, and it is deliberately manual:
+## Trusting the certificate
+
+Studio verifies the endpoint's certificate against its own host's trust store and
+offers no certificate-pinning hook, so the first connection to a server is
+established by a person:
 
 ```sh
-nlteam trust --root /srv/team                # prints a fingerprint; changes nothing
-nlteam trust --root /srv/team --install      # after comparing it
+nlteam trust --root /srv/team
+nlteam trust --root /srv/team --install
 nlteam trust --root /srv/team --remove
 ```
 
-With no arguments it prints the authority's SHA-256 fingerprint, the file it is
-in, and the command for the platform it is run on. Compare that fingerprint with
-the one the Team server printed when it started, over something other than the
-connection you are about to trust. Nothing is ever installed as a side effect of
-`up`.
+With no arguments, `trust` prints the authority's SHA-256 fingerprint, the file
+it is in, and the command for the platform it is run on. Compare that fingerprint
+with the one the server printed at startup, over a channel other than the
+connection being trusted. Nothing is installed as a side effect of `up`.
 
 `--install` puts the authority into the **current user's** trust store: the
 `Root` store on Windows, the login keychain on macOS. Both operating systems may
-raise a window of their own, and Team says so before starting the command,
-because a dialog that opened behind another window looks exactly like a program
-that has hung. On Windows it is the opposite way round from what you would
-expect: adding is silent, and **removing** raises a confirmation dialog that
-nothing suppresses. Linux has no per-user store that other programs read, so
-nothing is run there and the two commands to run under `sudo` are printed
-instead.
+open a window of their own, which Team reports before starting the command. On
+Windows, adding is silent and removing raises a confirmation dialog. Linux has no
+per-user store that other programs read, so nothing is run and the two commands
+to run under `sudo` are printed instead.
 
-### The certificates
+A client that signs in with a token receives the authority's fingerprint in that
+token, so trusting the server is one action in Studio rather than a command.
+
+### Certificates
 
 Team is its own certificate authority. On first run it writes two key pairs into
-`<root>/tls/`, both keys at mode 0600:
+`<root>/tls/`, both keys at mode `0600`:
 
 ```
-<root>/tls/ca.crt     the authority, self-signed, ten years — this is what is trusted
+<root>/tls/ca.crt    the authority, self-signed, ten years. This is what is trusted
 <root>/tls/ca.key
-<root>/tls/auth.crt   the auth endpoint's certificate, issued by the authority
+<root>/tls/auth.crt  the endpoint certificate, issued by the authority
 <root>/tls/auth.key
 ```
 
-The split is what makes the manual step happen once. The endpoint's certificate
-lasts 397 days — the longest Apple's platforms accept — and is reissued whenever
-it nears its expiry or a name is added, by the next `up`, without anybody being
-asked to trust anything again. The authority is what people trusted, and it is
-untouched by any of that.
-
-A certificate proves a name, so Team has to be told the names people will use:
+The endpoint certificate lasts 397 days, the longest Apple's platforms accept,
+and is reissued by the next `up` whenever it nears expiry or a name is added or
+changed. The authority is untouched by that, so nobody is asked to trust anything
+again.
 
 ```sh
 nlteam up --root /srv/team --hostname team.example.com
 ```
 
-`--hostname` is repeatable, and `DNS:localhost`, `IP:127.0.0.1` and `IP:::1` are
-always included. It does two jobs at once, and the second is the one that bites:
-the name goes into the certificate, and into the audience of every token Team
-mints. A Team server told no hostname issues tokens a client will use from the Team server
-machine and from nowhere else — see below. `NLTEAM_HOSTNAME` names the same list
-where there is no command line to repeat a flag on; its hosts are separated by
-commas, since a variable cannot be given more than once.
+`--hostname` is repeatable. `DNS:localhost`, `IP:127.0.0.1` and `IP:::1` are
+always included. The name goes into the certificate and into the audience of
+every token Team issues. A server given no hostname issues tokens a client will
+use from the server machine only. `NLTEAM_HOSTNAME` names the same list where
+there is no command line, separated by commas.
 
-`--hostname` and `--data-port` are not the only settings that shape what a token
-says: the issuer and the audience it carries, the auth origin, its `env` and
-`idp` claims, and the four ports are all identity options, and every command that
-mints a token — `token mint` and `project create` among them — accepts the same
-set `up` does. You need not repeat them: `up` records the identity it was started
-with and the mint commands read it, so a bare `nlteam token mint` names the
-audience the running server mints for. A flag is only how you override that on
-purpose, and overriding it with a set that disagrees with the running server
-produces a token whose audience names an address nothing answers on — it signs
-in and then fails every repository operation — so pass one only when you mean to.
+The certificates are written without an external tool. A server is not assumed to
+have `openssl` on it.
 
-Each of these settings has an environment variable of the same name as its flag —
-`NLTEAM_ISSUER`, `NLTEAM_AUDIENCE`, `NLTEAM_AUTH_ORIGIN`, `NLTEAM_ENV`,
-`NLTEAM_IDP`, alongside the port and hostname variables named above — so a
-container entrypoint can give them with no command line at all. Where one setting
-is named more than one way the last word in a fixed order wins: the built-in
-default, then what this server has stored, then the environment, then a flag on
-the line.
+### Token audience
 
-Both are written by hand, from `src/tls/der.ts` upwards: the ASN.1, the
-extensions and the DER. Team shells out to nothing and depends on nothing, and a
-server cannot be assumed to have `openssl` on it.
+A token's `aud` is the list of remotes the client is willing to send that token
+to. It will send it to nothing else. Two addresses must be present:
 
-### What a token's audience authorises
+- Team's endpoint, `https://host:41402`, where the client signs in.
+- The version-control data port, `lore://host:41337`, where the work happens.
 
-A token's `aud` is not a label. The client turns it into the list of remotes it
-is willing to send that token to, and it will send it to nothing else — a remote
-missing from the list is one it treats as a third party it would be leaking the
-token to. Two addresses have to be in there:
-
-- Team's auth endpoint, `https://host:41402`, where the client signs in.
-- `loreserver`'s data port, `lore://host:41337`, where the work happens.
-
-Leave the second out and the client signs in perfectly, stores the token, and
-then fails every repository operation with "Failed to resolve repository: No
-token stored" — which reads like a missing token rather than a token the client
-has decided it may not use here. Team therefore writes both, for the auth
-origin's host and for every `--hostname` given, each in the several spellings
-the client has been observed to compare against. `up` prints the list it built:
+Without the second, a client signs in, stores the token, and then fails every
+repository operation with "Failed to resolve repository: No token stored". Team
+writes both, for the auth origin's host and for every `--hostname` given, in each
+of the spellings the client compares against. `up` prints the list it built:
 
 ```
 tokens are good for lore://127.0.0.1:41337, lore://team.example.com:41337
 ```
 
-That line is worth reading on a Team server other people connect to. A name missing from
-it is a person who cannot open a project.
+Read that line on a server other people connect to. A name missing from it is a
+person who cannot open a project.
 
-### What `loreserver` does with the same address
+### Identity options
 
-`[environment.endpoint] auth_url` is one setting with two readers. It is what a
-client is told to sign in at, so it is the https origin — and it is also where
-`loreserver` asks whether a caller may touch a repository. Measured against
-`loreserver` 0.8.6 with nothing else done, it connects, starts a TLS handshake,
-and refuses the certificate with `tlsv1 alert unknown ca`; every repository
-access then fails with "Failed to connect to rebac service".
+The issuer, the audience, the auth origin, the `env` and `idp` claims, the four
+ports and the hostnames are identity options. Every command that issues a token,
+including `token mint` and `project create`, accepts the set that `up` accepts.
 
-Its TLS client is `rustls` with `rustls-native-certs`, which reads
-`SSL_CERT_FILE` before the platform's own store. So Team starts `loreserver` with
-that variable naming `<root>/tls/ca.crt`, and the whole flow works with no trust
-store on the server machine touched at all. It is narrower than installing the
-authority there would be: only that process is affected, and only while Team is
-running it.
+They need not be repeated. `up` records the identity it was started with, and the
+issuing commands read it, so `nlteam token mint` with no options names the
+audience the running server issues for. Passing a set that disagrees with the
+running server produces a token whose audience names an address nothing answers
+on: it signs in and then fails every repository operation.
 
-The cost is that a Team server-supervised `loreserver` trusts Team's authority and no
-other. Everything it reaches is on the same machine — the JWKS over the loopback
-in plain HTTP, and this endpoint — so there is nothing else for it to verify. A
-configuration giving it a remote store or a telemetry endpoint over https would
-need the public roots back.
+Each option has an environment variable of the same name as its flag:
+`NLTEAM_ISSUER`, `NLTEAM_AUDIENCE`, `NLTEAM_AUTH_ORIGIN`, `NLTEAM_ENV`,
+`NLTEAM_IDP`, alongside the port and hostname variables above. Where one setting
+is named more than once, the order is: the built-in default, then what this
+server has stored, then the environment, then the command line.
 
-### The address a server is found at
+### The version-control server's trust anchor
 
-One address is the whole of what an author is given.
-`nlteam://team.example.lan:41402` names the auth endpoint, and the document
-served there is what turns it into everything else. It is answered over HTTP/1.1
-on the same TLS listener, while gRPC goes on with h2:
+The version-control server asks Team who a caller is over the loopback, at
+`https://127.0.0.1`, and verifies the certificate it is shown. Team starts it
+with `SSL_CERT_FILE` naming `<root>/tls/ca.crt`, so no trust store on the server
+machine is touched. Only that process is affected, and only while Team is running
+it.
+
+A version-control server started this way trusts Team's authority and no other.
+Everything it reaches is on the same machine. A configuration giving it a remote
+store or a telemetry endpoint over HTTPS would need the public roots restored.
+
+### The server address
+
+One address is what an author is given. `nlteam://team.example.com:41402` names
+the endpoint, and the document served there provides the rest. It is answered
+over HTTP/1.1 on the same TLS listener that carries gRPC:
 
 ```
 GET /.well-known/nlteam
@@ -469,170 +383,150 @@ GET /.well-known/nlteam
 
 ```json
 {
-  "protocol": 1,
-  "name": "team.example.lan",
-  "auth": { "required": true, "url": "https://team.example.lan:41402" },
-  "data": { "url": "lore://team.example.lan:41337" },
-  "capabilities": ["projects", "project-detail", "members", "project-history"],
-  "authority": { "sha256": "3D:38:9F:E6:…" },
+  "protocol": 2,
+  "name": "Winterlight",
+  "policy": { "publishLineage": true },
+  "auth": { "required": true, "url": "https://team.example.com:41402" },
+  "data": { "url": "lore://team.example.com:41337" },
+  "capabilities": ["session", "comments", "clients", "live", "overlay", "admin"],
+  "authority": { "sha256": "3D:38:9F:E6:..." },
   "version": "0.1.0"
 }
 ```
 
 It is served to whoever asks, before anybody has signed in. Nothing in it is
-secret: it is what an operator would otherwise have written
-in a chat message, and every field of it is checkable against the token that
-arrives later.
+secret, and every field is checkable against the token that arrives later.
 
-`auth.required` is false on a server brought up with `--no-identity`, which
-accepts anyone who can reach it; asking its authors for a token would be asking
-for something nobody can issue. `data.url` is the remote
-the repositories live on — Studio stores it and shows it to nobody, because it
-is a detail of the storage this server happens to run, and naming it in an
-interface would make it something people learn and type. `authority.sha256` lets
-a client that has already trusted this server notice, before anything else
-happens, that the machine answering is the one it trusted; it arrives over the
-connection it describes, so it is a label and not evidence.
+`auth.required` is false on a server started with `--no-identity`, which accepts
+anyone who can reach it.
 
-`name` is what this deployment calls itself, and it is what Studio shows in
-place of the address. Until somebody chooses one it is the server's own host,
-which is honest and says nothing the address did not:
+`capabilities` is what this build serves and this deployment allows. A server
+closed to collaboration announces fewer of them; see
+[Collaboration](#collaboration).
+
+`authority.sha256` lets a client that has already trusted this server confirm,
+before anything else happens, that the machine answering is the one it trusted.
+
+`name` is what the deployment calls itself, and is what Studio shows in place of
+the address. Until one is chosen it is the server's own host name:
 
 ```sh
 nlteam settings set server.name "Winterlight" --root /srv/team
 ```
 
-It is read as each document is answered, so the next client to ask is told the
-new name and nothing is restarted.
+The name is read as each document is answered. The next client to ask is told the
+new name, with nothing restarted.
 
-`protocol` is a number rather than a range, so a client can say "this server
-speaks something I do not" in one comparison. It changes only when a field an
-older client relies on stops meaning what it meant.
+`protocol` is a single number, so a client compares once to decide whether it
+speaks this server's protocol. It changes only when a field an older client
+relies on stops meaning what it meant.
 
-## Administering a server from somewhere else
+## Remote administration
 
-Every command on this page is written with `--root`, which opens the storage
-root on the machine the server runs on. For all but three of them that is not
-the only way. `nlteam login` signs in to a server, and the command then takes
+Every command on this page is written with `--root`, which opens the storage root
+on the machine the server runs on. For all but three of them that is not the only
+way. `nlteam login` signs in to a server, after which the command takes
 `--server <host:port>` in place of `--root` and does the same thing from any
-machine at all:
+machine:
 
 ```sh
-nlteam login team.example.lan:41402 ada < password.txt
-nlteam user list --server team.example.lan:41402
-nlteam settings set token.sign_in_lifetime_seconds 7d --server team.example.lan:41402
-nlteam logout team.example.lan:41402
+nlteam login team.example.com:41402 ada < password.txt
+nlteam user list --server team.example.com:41402
+nlteam settings set token.sign_in_lifetime_seconds 7d --server team.example.com:41402
+nlteam logout team.example.com:41402
 ```
 
-`NLTEAM_SERVER` stands in for the flag, exactly as `NLTEAM_ROOT` stands in for
-`--root`. The two are refused together rather than settled one way: there is no
-reading of a command line naming both that is obviously what somebody meant, and
-choosing one silently is how an operator comes to administer the wrong server.
+`NLTEAM_SERVER` stands in for the flag, as `NLTEAM_ROOT` does for `--root`. A
+command line naming both is refused rather than settled one way.
 
-### What login settles, and where it keeps it
+### What login stores
 
-Signing in settles three things in order. **Which machine this is**: a Team
-server's certificate chains to an authority it made for itself, so the
-fingerprint is compared once and the certificate kept — pass `--fingerprint` to
-say what it must be, which is the path an automated deployment takes, or leave it
-out and whatever is presented is pinned and printed for comparing. **What that
-machine is**: the discovery document turns an address into a server, and what it
-serves is read from that document rather than found out by calling something and
-being refused. **Who is asking**: a username and a password, over the verified
-connection, exchanged for a token.
+Signing in settles three things in order.
 
-What it keeps — the token, the address and the certificate authority it verified
-against — goes under the signed-in person's own configuration directory and never
-under a server's storage root, because the token belongs to whoever signed in
-rather than to the deployment:
+**Which machine this is.** A server's certificate chains to an authority it made
+for itself. `--fingerprint` states what that fingerprint must be, which is the
+path an automated deployment takes. Without it, whatever is presented is pinned
+and printed for comparison.
+
+**What that machine is.** The discovery document turns an address into a server,
+and what it serves is read from that document.
+
+**Who is asking.** A username and a password over the verified connection,
+exchanged for a token.
+
+The token, the address and the certificate authority go under the signed-in
+person's own configuration directory, never under a server's storage root:
 
 ```
-%APPDATA%\nlteam                            Windows
-~/Library/Application Support/nlteam        macOS
+%APPDATA%\nlteam                              Windows
+~/Library/Application Support/nlteam          macOS
 $XDG_CONFIG_HOME/nlteam, or ~/.config/nlteam  elsewhere
 ```
 
-`NLTEAM_CONFIG_DIR` names another outright, which is what a container mounting a
-credential in wants. The file is created 0600 and the directory 0700 where the
-platform has such things. More than one server may be signed in to at once, and
+`NLTEAM_CONFIG_DIR` names another directory outright, which is what a container
+mounting a credential uses. The file is created `0600` and the directory `0700`
+where the platform supports it. Several servers may be signed in to at once, and
 `logout` forgets one of them.
 
-Every call is checked against the account behind that token as it arrives, not
-once when the session opened. An account taken out of the `admin` group a minute
-ago is refused on its very next command rather than when its token would have
-expired.
+Every call is checked against the account behind the token as it arrives, not
+once when the session opened. An account taken out of the `admin` group is
+refused on its next command.
 
-### The commands that are deliberately not reachable over the protocol
+### Commands that require the storage root
 
-`up`, `init` and `trust` take `--root` and nothing else, and it is worth saying
-plainly why, because it looks like an omission.
+`up`, `init` and `trust` take `--root` and nothing else.
 
-They are the rescue path. `up` is what brings a server up; `init` makes the first
+They are the recovery path. `up` brings a server up. `init` creates the first
 account on a server that has none, and there is nobody to sign in as until it has
-run; `trust` prints the fingerprint a person compares before trusting anything at
-all. Each of them is what you reach for when the protocol is not answering — a
-server that is down, a server nobody can sign in to, a certificate nothing yet
-trusts. **A rescue reachable only over the thing being rescued would not be a
-rescue.** So these are guarded by nothing more than access to the disk, which is
-the point rather than a gap: they are the floor under everything else here.
+run. `trust` prints the fingerprint a person compares before trusting anything.
+Each of them is what an operator reaches for when the protocol is not answering.
+They are guarded by access to the storage root and by nothing else.
 
-The same reasoning runs the other way, once. The protocol will not take the last
-operator's administration away or disable their account, because that would leave
-a server nobody could administer over it and nobody who could put that right over
-it either. It refuses, and names the command to run on the machine that holds the
-storage root. `nlteam user grant-admin ... --root` and `nlteam user enable ...
---root` will do it, and that is what makes them the way back.
+The protocol will not take the last operator's administration away, and will not
+disable the last operator's account. It refuses, and names the command to run on
+the machine that holds the storage root. `nlteam user grant-admin ... --root` and
+`nlteam user enable ... --root` are the way back.
 
-### What differs between the two, and what does not
+### Differences between the two paths
 
-What a command prints does not depend on which of the two it took, wherever both
-have the same facts. One place they genuinely do not, and it is stated by
-`nlteam --help` as well:
+What a command prints is the same on both paths wherever both have the same
+facts. One command differs, and `nlteam --help` states it as well:
 
-- **`token mint` reads a password with `--root` and none with `--server`.** On
-  the machine itself, the password is how the operator shows the account is
-  theirs to mint for, and checking it is also the only exercise the sign-in path
-  gets. Over the protocol the caller has already proved who they are by holding
-  an operator's session, and minting a token for somebody whose password nobody
-  knows is the whole point of asking a server to do it. A command demanding a
-  password it does not need would be asking for something the operator may not
-  have.
+**`token mint` reads a password with `--root` and none with `--server`.** On the
+machine itself, the password is how the operator shows the account is theirs to
+issue for. Over the protocol the caller has already proved who they are by
+holding an operator's session, and issuing a token for an account whose password
+nobody knows is what the command is for.
 
-`settings list` prints the same three columns on both paths, the last of them
-included. Each row a server carries says whether its value was chosen or a
-default is answering for it, because the difference is real — a server that
-never chose follows a later version of Team if the default moves, and one that
-chose keeps its number — and it is exactly the fact a reader cannot recover from
-the value. That column is blank only against a server too old to carry it, where
-a blank means "not said" rather than "nobody chose".
+`settings list` prints the same three columns on both paths. Each row says
+whether its value was set on this server or a default is answering for it: a
+server that never chose follows a later version of Team if the default moves, and
+one that chose keeps its value. The column is blank against a server too old to
+carry it.
 
-Four options are refused beside `--server` rather than quietly dropped, because
-something that looks like it worked is worse than something that says it cannot:
-`--as` on `project create` (over the protocol the account that asked is the
-account it belongs to), `--service-account` on `user create` (nothing over the
-protocol writes that mark), a `--role` that is neither `admin` nor the default
-(the protocol carries whether an account administers this server and nothing
-else about groups), and `--health-port` on `status` (a server checks the
-`loreserver` it started, on the port it was started with). The identity options — `--issuer`, `--hostname`, the
-ports — are refused beside `--server` for the same reason: they describe the
-deployment a token is minted for, and a server asked to mint one mints from what
-it was started with.
+Four options are refused beside `--server` rather than dropped:
 
-`user list --server` pages through the whole list before it prints, because the
-method hands back a page at a time and this command has always printed the lot.
-`audit` pages on both paths and stops at what was asked for rather than at the
-end of the log, which is a different bargain and is set out under
-[The decisions this server has made](#the-decisions-this-server-has-made).
+- `--as` on `project create`. Over the protocol the account that asked is the
+  account the project belongs to.
+- `--service-account` on `user create`. Nothing over the protocol writes that
+  mark.
+- A `--role` that is neither `admin` nor the default. The protocol carries
+  whether an account administers this server and nothing else about groups.
+- `--health-port` on `status`. A server checks the version-control server it
+  started, on the port it was started with.
 
-## What this server is
+The identity options, `--issuer`, `--hostname` and the ports among them, are
+refused beside `--server` for the same reason: they describe the deployment a
+token is issued for, and a server issues from what it was started with.
 
-One screenful: the versions it is running, whether `loreserver` is answering,
-what it holds and how much of it, the addresses somebody has to be told in order
-to reach it, and the fingerprint they compare once.
+`user list --server` reads the whole list before printing. `audit` pages on both
+paths and stops at the number of entries asked for.
+
+## Server status
 
 ```sh
 nlteam status --root /srv/team
-nlteam status --server team.example.lan:41402
+nlteam status --server team.example.com:41402
 ```
 
 ```
@@ -644,8 +538,8 @@ loreserver 0.8.6, answering
   size          4.2 GiB
 
 reachable at
-  sign in       https://team.example.lan:41402
-  data          lore://team.example.lan:41337
+  sign in       https://team.example.com:41402
+  data          lore://team.example.com:41337
   fingerprint   AB:CD:EF:...
   loopback      41339 health, 41400 jwks
 
@@ -656,41 +550,31 @@ on this server
   signing keys  1
 ```
 
-**The answer is not live, and the second line says so.** Two of its parts are
-expensive — the health check is a request to another server, and measuring the
-store stats every file underneath it — so a server works one out when it is
-asked and hands that same one to everybody who asks within the next ten seconds.
-Whoever reads "as of" is being told when the answer was true rather than when
-the question was put, which is what a clock in its place would have shown.
+The answer is not live, and the second line says so. A server works one out when
+it is asked and gives that same answer to everyone who asks within the next ten
+seconds. The `as of` line reports when the answer was true.
 
-Two values are printed as `unknown` rather than guessed at. The **size** is
-absent where the store could not be added up — one too large to walk, at fifty
-thousand files, or one `loreserver` has not made yet — because a partial total
-looks exactly like a real one, and a store that appeared to halve would read as
-a store that had lost half of what was in it. The **fingerprint** is absent on a
-server with no certificates, which is one that has never been brought up.
+Two values are printed as `unknown` rather than estimated. **Size** is absent
+where the store could not be measured: one too large to walk, at fifty thousand
+files, or one the version-control server has not created yet.
+**Fingerprint** is absent on a server that has never been started.
 
-The loopback ports are there for one question: which of them this server is
-holding, for somebody looking at a port that is already taken. Nobody off the
-machine can reach any of them.
+The loopback ports are listed so that an operator looking at a port already in
+use can tell which of them this server holds.
 
-`--health-port` is the one thing `status --root` has to be told, because it is
-the one thing a storage root does not record. The identity settings are written
-into the database by `up` and read back out of it; the health port is not one of
-them. Left out it is the default, and a status taken with the wrong number says
-`loreserver` is not answering when it is. It is refused beside `--server`,
-because a server checks the `loreserver` it started, on the port it was started
-with.
+`--health-port` is the one value `status --root` has to be told, because a
+storage root does not record it. Left out it is the default, and a status taken
+with the wrong number reports the version-control server as not answering. It is
+refused beside `--server`.
 
-## The decisions this server has made
+## Access decisions
 
-Every repository access `loreserver` serves is a question put to Team — may this
-account touch this resource — and every answer is kept, with the short reason
-the log line already carried.
+Every repository access is a question put to Team, and every answer is recorded
+with the reason.
 
 ```sh
 nlteam audit --root /srv/team
-nlteam audit --refused --limit 200 --server team.example.lan:41402
+nlteam audit --refused --limit 200 --server team.example.com:41402
 ```
 
 ```
@@ -698,58 +582,38 @@ nlteam audit --refused --limit 200 --server team.example.lan:41402
 2026-08-27T09:12:31.114Z  refused  bob  lighthouse  no grant
 ```
 
-Newest first, because the order somebody looking for a refusal reads in is
-backwards from now. The account is `unknown` for a caller whose token was
-missing, expired or not one of this server's. The resource is the project's name
-where Team knew it and the repository id where it did not.
+Newest first. The account is `unknown` for a caller whose token was missing,
+expired, or not one this server issued. The resource is the project's name where
+Team knew it and the repository id where it did not.
 
-**`--limit` is how many rows are printed**, and it is fifty unless you say
-otherwise — a screenful. It is worth being exact that it counts rows printed
-rather than rows read: the command reads back through the log until it has
-printed what was asked for, and how far back that took is not something anybody
-has to think about.
+`--limit` is how many rows are printed, fifty by default. It counts rows printed
+rather than rows read: the command reads back through the record until it has
+printed what was asked for.
 
-This is deliberately unlike `user list`, which pages through the whole list
-before it prints. The size of the account list is the size of the team, which is
-small and is meaningful. The size of this one is how busy the server has been,
-and it is bounded by the server rather than by anything a person did — a couple
-of thousand rows, with the oldest allowances dropped first when the bound forces
-a choice. Nobody asking for "the audit" wants all of it; what they want is the
-last screenful, or the last screenful of refusals.
+`--refused` prints refusals only. The command keeps reading back until it has the
+refusals asked for or the record ends, so **an empty listing means nothing on
+record was refused**.
 
-`--refused` shows the refusals and nothing else, and it is what this command is
-usually opened for. A refusal is the rare outcome: an afternoon of ordinary work
-is thousands of allowances, so the last fifty decisions on a working server
-often hold no refusal at all, and a screenful without one reads like a server
-with nothing wrong. With the flag the command keeps reading back until it has
-the refusals asked for or the log ends, so **an empty listing means nothing on
-record was refused** — a statement about the server rather than about the page.
+The record is bounded by the server at a few thousand rows. When that bound
+forces a choice, the oldest allowances are dropped first, and a refusal is
+dropped only on a server whose refusals alone have filled the record.
 
-The same judgement about refusals is made in two other places, which is why it
-is worth trusting here: the protocol publishes refusals on a topic of their own
-and publishes an allowance nowhere, and the table itself drops the oldest
-allowances before it drops any refusal. Only a server whose refusals alone have
-filled the log loses one, and that is a server with a problem worth noticing.
-
-How many are on record is one of the lines `nlteam status` prints.
+`nlteam status` reports how many decisions are on record.
 
 ## Accounts
 
-An operator makes them, at the server or from anywhere they have signed in from,
-and hands out a token for each. The first account is the exception, because there
-is nobody to hand it out and nobody to sign in as:
+An operator creates accounts, at the server or from any machine they have signed
+in from. The first account is the exception:
 
 ```sh
 nlteam init ada --root /srv/team < password.txt
 ```
 
-`init` works only while the server has no accounts at all, and refuses from the
-moment it has one. The account it makes joins the `admin` group — it is the only
-account there is, and one that could not administer its own server would leave
-the operator needing a second command to undo the first.
-`up` says this line, and nothing else about accounts, while there is nobody.
+`init` works only while the server has no accounts, and is refused from the
+moment it has one. The account it creates joins the `admin` group. While a server
+has no accounts, `up` prints this command and nothing else about accounts.
 
-Everybody after that is made by somebody who is already here:
+Every account after the first is created by an account that is already there:
 
 ```sh
 nlteam user create bob --root /srv/team --role authors < password.txt
@@ -757,118 +621,91 @@ nlteam user list --root /srv/team
 nlteam user disable bob --root /srv/team
 ```
 
-`--role` is the group the account joins, `member` unless it says otherwise, and
-only accounts in `admin` may administer this server. What reaches the person is
-not the account but a token minted for it — see "Tokens and taking access away"
-below, and hand them that together with this server's address.
+`--role` is the group the account joins, `member` unless stated otherwise. Only
+accounts in `admin` may administer the server. What reaches the person is a token
+issued for the account, together with the server's address.
 
-The same four commands take `--server` in place of `--root`, and do the same
-things to a server somewhere else:
+The same commands take `--server` in place of `--root`:
 
 ```sh
-nlteam user create bob --server team.example.lan:41402 < password.txt
-nlteam user list --server team.example.lan:41402
-nlteam user disable bob --server team.example.lan:41402
-nlteam user enable bob --server team.example.lan:41402
+nlteam user create bob --server team.example.com:41402 < password.txt
+nlteam user list --server team.example.com:41402
+nlteam user disable bob --server team.example.com:41402
+nlteam user enable bob --server team.example.com:41402
 ```
 
-`--role` over the protocol is `admin` or the default and nothing else, because
-whether an account administers this server is the whole of what the protocol
-carries about a group; a third group is refused rather than dropped, and the
-account is made with `--root` if it is to be in one. `--service-account` is
-refused there for the same reason.
+Over the protocol, `--role` is `admin` or the default and nothing else. A third
+group is refused rather than dropped, and an account that is to be in one is
+created with `--root`. `--service-account` is refused there for the same reason.
 
-Passwords are read from standard input rather than from an argument, which
-would be visible in the process list and left behind in a shell's history — and
-that holds on both paths. `user create --server` sends the password over the
-session, which is TLS to a server whose authority this account pinned when it
-signed in; it never reaches an argument, a log line or an error message. They
-are hashed with scrypt at N = 2^17, r = 8, p = 1, and the stored string carries
-those numbers, so the cost can be raised later without invalidating anything: an
-existing hash keeps verifying under the parameters it was made with, and is
-replaced the next time its owner signs in.
+Passwords are read from standard input on both paths. `user create --server`
+sends the password over the session, which is TLS to a server whose authority
+this account pinned when it signed in; it never reaches an argument, a log line
+or an error message. Passwords are hashed with scrypt at N = 2^17, r = 8, p = 1,
+and the stored string carries those parameters. An existing hash keeps verifying
+under the parameters it was made with, and is replaced the next time its owner
+signs in.
 
-## Tokens and taking access away
+## Tokens
 
 ```sh
 printf '%s' "$PASSWORD" | nlteam token mint ada --root /srv/team
-nlteam token mint ada --server team.example.lan:41402
+nlteam token mint ada --server team.example.com:41402
 ```
 
 The token goes to standard output on its own; what is in it goes to standard
 error. It is a sign-in token, and it lasts thirty days.
 
-**The two lines above ask for different things, and that is the point of the
-second.** With `--root` the password is checked first, through the same path a
-sign-in would take. Whoever runs it already holds the storage root and could sign
-anything they liked with the key in it, so that is not a barrier: it is how the
-operator shows the account is theirs to mint for, and it is the only exercise the
-sign-in path gets. With `--server` no password is read at all. The caller has
-already proved who they are by holding an operator's session, and minting a token
-for somebody whose password nobody knows — which is every account but your own —
-is the whole reason to ask the server rather than the disk. Somebody who can
-disable an account can hardly be stopped from issuing it a token.
+With `--root` the password is checked first, through the same path a sign-in
+takes. With `--server` no password is read: the caller has already proved who
+they are by holding an operator's session.
 
-The token is shown once and kept nowhere: not in this server's log, not in its
-database. A person who lost one is minted another.
+The token is shown once and stored nowhere: not in the server's log, not in its
+database. A person who has lost one is issued another.
 
-The same token is handed out over the network, to somebody who has the address
-and the password of an account here:
+The same token is issued over the network to somebody who has the address and the
+password of an account on the server:
 
 ```
 POST /api/studio/v1/sign-in   {"username": "ada", "password": "..."}
 ```
 
-which answers `{"token": "...", "account": {…}}`, or one sentence. That sentence
-is the same for an account that is not here, a password that is wrong, an
-account that has been disabled and an account marked as a machine's, so nobody
-learns from it which accounts exist. It is the same mint the command makes,
-claim for claim, so an operator can hand over an address and let people sign in
-rather than sending each of them a token.
+The answer is `{"token": "...", "account": {...}}`, or one sentence. That
+sentence is the same for an account that is not there, a password that is wrong,
+an account that has been disabled and an account marked as a machine's. It is the
+same token the command issues, claim for claim, so an operator hands out an
+address rather than a token for each person.
 
-Checking a password is the most expensive thing this server does for somebody
-who has presented nothing — scrypt at the parameters here is about 128 MiB and a
-few hundred milliseconds — and an unknown username costs the same as a known one
-because it is hashed against a decoy. So the one door that takes a password from
-the network — this one — is guarded before the check rather than after it:
+The sign-in route is guarded before the password is checked:
 
 - A name refused several times from one address is answered `429` with a
-  `Retry-After`, and the wait doubles with each refusal after that up to five
-  minutes. It is the check that is held off, so the right password is not
-  accepted during the wait either; a sign-in that succeeds clears the run.
-  The count is against the pair, so nobody can lock somebody else's account out
-  by knowing their name.
-- Two password checks run at once across the whole process, and the rest queue.
-  Node's threadpool is four threads shared with every file this server reads, so
-  a handful of simultaneous attempts would otherwise stop everything else it is
-  doing.
-- Both refuse a request whose `origin` names another site. Neither answers with
-  a cookie, so a page elsewhere gains nothing by the answer — but without this,
-  any page a person visits can drive their browser at this server's sign-in.
+  `Retry-After`, and the wait doubles with each refusal after that, up to five
+  minutes. The check itself is held off, so the right password is not accepted
+  during the wait either. A sign-in that succeeds clears the run. The count is
+  against the name and the address together.
+- Two password checks run at once across the process, and the rest queue.
+- Both routes refuse a request whose `origin` names another site. Neither answers
+  with a cookie.
 
-There are two kinds of token here, with two lifetimes, and what separates them
-is who is asked before one is honoured.
+### Token lifetimes
 
-A sign-in token is one Team is asked about every time it matters. It comes back
-to Team to be exchanged for a fresh one, and every repository access `loreserver`
-serves goes on to ask Team whether that caller may have that repository. Team
-refuses a caller whose account has been disabled, or whose token was issued
-before their access was revoked, so the expiry is not what bounds this token: a
-thirty-day lifetime is not thirty days in which a revoked account keeps working.
+There are two kinds of token, with two lifetimes.
 
-A repository token is what `ExchangeUserTokenForMultiresourceToken` hands back,
-and it is presented on the data connection rather than to Team. `loreserver`
-checks its signature and its expiry there, and is not obliged to ask Team
-anything more before it runs out; nothing Team does reaches a connection that is
-already open. The lifetime is that token's only bound, which is the whole reason
-it is fifteen minutes.
+A **sign-in token** is one Team is asked about every time it matters. It is
+exchanged for a fresh one, and every repository access asks Team whether that
+caller may have that repository. Team refuses a caller whose account has been
+disabled, or whose token was issued before their access was revoked. A thirty-day
+lifetime is not thirty days in which a revoked account keeps working.
 
-Both lifetimes are settings. They are kept in `team.db` and read as each token is
-minted, so changing one reaches a Team server that is already running, and a Team server nobody
-has told otherwise uses the two numbers above. `--token-lifetime` overrides the
-sign-in lifetime for one run of one command, and leaves the stored setting
-alone; `NLTEAM_TOKEN_LIFETIME` names the same override where there is no command
-line, with a flag winning over it.
+A **repository token** is presented on the data connection rather than to Team.
+The version-control server checks its signature and its expiry there, and asks
+Team nothing further before it runs out. Its lifetime is its only bound, which is
+why it is fifteen minutes.
+
+Both lifetimes are settings, kept in `team.db` and read as each token is issued,
+so a change reaches a running server. `--token-lifetime` overrides the sign-in
+lifetime for one run of one command and leaves the stored setting alone.
+`NLTEAM_TOKEN_LIFETIME` names the same override where there is no command line.
 
 ```sh
 nlteam settings list --root /srv/team
@@ -878,222 +715,166 @@ nlteam settings set server.name "Winterlight" --root /srv/team
 nlteam settings set server.collaboration closed --root /srv/team
 ```
 
-A lifetime is written as `--token-lifetime` takes one: `30m`, `48h`, `7d`, or a
-bare number of seconds. `server.name` takes the name itself, which is what a
-person reads in Studio rather than an address. `server.collaboration` takes `open`
-or `closed` and is the subject of its own section below. `list` says of each setting whether it is the default or
-something somebody chose here, because those are different facts — a Team server that
-never chose follows a later version of Team if the default moves, and one that
-chose keeps its number.
+A lifetime is written as `30m`, `48h`, `7d`, or a bare number of seconds.
+`server.name` takes the name a person reads in Studio. `server.collaboration`
+takes `open` or `closed`; see [Collaboration](#collaboration).
 
-Both take `--server` in place of `--root`, and a value written that way reaches
-the running server exactly as one written on its own disk does — every setting is
-read where it is used, so nothing is restarted either way. A server answers with
-whether each value was chosen as well as with what it is, so `settings list
---server` fills that column in too; it is blank only for a server too old to say,
-where either word would be a claim about what a later version of Team does with
-the default.
+`settings list` reports whether each value is the default or was set on this
+server. Both commands take `--server` in place of `--root`, and a value written
+that way reaches the running server as one written on its own disk does. Every
+setting is read where it is used, so nothing is restarted either way.
 
-Taking access away is two commands, and they are not the same one:
+### Removing access
 
 ```sh
-nlteam user disable ada --root /srv/team          # the account, entirely
-nlteam user revoke-tokens ada --root /srv/team    # only the tokens it holds
+nlteam user disable ada --root /srv/team
+nlteam user revoke-tokens ada --root /srv/team
 ```
 
-`revoke-tokens` refuses every token Team has already issued to that account and
-changes nothing else, so the person can sign in a second later and be given one
-that works. It is the command for a token that has got out, where disabling
-would take the account away from somebody who has done nothing wrong.
+`disable` stops the account. `revoke-tokens` refuses every token already issued to
+that account and changes nothing else, so the person signs in again and is given
+one that works. It is the command for a token that has been exposed.
 
-Both reach the same distance where tokens are concerned, and both say so when
-they run — in the same words with `--server`, which asks the server for the
-repository lifetime that sentence carries rather than leaving it out. Every token
-Team has issued to that account is refused from that moment wherever Team is the
-one asked — signing in, exchanging, and the permission question behind every
-repository access. A data connection already open is checked by `loreserver`'s
-data plane rather than by Team, and may last until the repository token it was
-opened with expires. Nothing short of retiring the key that signed it shortens
-that, and retiring one refuses everybody's tokens rather than that person's —
-see [Signing keys](#signing-keys).
+Both reach the same distance where tokens are concerned, and both report it when
+they run. Every token issued to that account is refused from that moment wherever
+Team is asked: signing in, exchanging, and the permission question behind every
+repository access. A data connection already open is checked by the
+version-control server rather than by Team, and may last until the repository
+token it was opened with expires. Retiring the key that signed it is what ends
+that sooner, and retiring a key refuses everybody's tokens; see
+[Signing keys](#signing-keys).
 
 `disable` over the protocol will not take the last operator's account away, and
-says so with the command that will; `disable --root` will, because the machine
-holding the storage root is the way back from everything.
+reports the command that will. `disable --root` will.
 
-## Whether this deployment is a collaboration server
+## Collaboration
 
 ```sh
 nlteam settings set server.collaboration closed --root /srv/team
-nlteam settings set server.collaboration open --server team.example.lan:41402
+nlteam settings set server.collaboration open --server team.example.com:41402
 ```
 
-A Team server is a collaboration server, and that is what `open` — the value a
-deployment nobody has told otherwise has — means. `closed` says this deployment
-holds projects and is administered and is not a place people work together.
+`open` is the value a deployment that has not been told otherwise has. `closed`
+states that this deployment holds projects and is administered, and is not a place
+people work together.
 
-What an operator is choosing is which of two things their deployment is, not who
-may do what on it. Closing one is the right answer for a server kept as the place
-the repositories live, on a team that coordinates somewhere else entirely; it is
-the wrong answer for a team that is having trouble with one person, because it
-takes the same thing away from all of them. Accounts are what a person is refused
-by: `user disable` and `user revoke-tokens` are above.
+The setting says which of two things the deployment is. It does not say who may
+do what on it: an account is refused with `user disable` and
+`user revoke-tokens`.
 
 On a closed deployment:
 
 - Comments, live sessions, overlays, the client list and the files a live session
-  carries are gone. The five capabilities are not announced in the discovery
+  carries are unavailable. Those capabilities are not announced in the discovery
   document or in the opening frame of a session, every call under them is refused
-  — to everybody, operators included — and the addresses a file travels over are
-  refused too. An operator does not need `live.say`; what they need is the
-  administration, which is untouched.
-- The projects and the members are the operators' business. Anybody else asking
-  what is on this server, or trying to put a project on it or take one off, is
-  refused, and told that it is closed to collaboration and which setting says so,
-  so that they know to ask for it to be opened rather than to report a server that
-  looks broken.
-- Everything else about the server carries on. It signs people in, it holds the
-  repositories, `loreserver` serves them, and the accounts, settings, keys,
-  decisions and status are read and changed exactly as before.
+  to everyone including operators, and the addresses a file travels over are
+  refused as well.
+- The projects and the members are the operators' business. Any other account
+  asking what is on this server, or trying to add a project or take one off, is
+  refused and told that the server is closed to collaboration and which setting
+  says so.
+- Everything else carries on. The server signs people in, holds the repositories,
+  and its accounts, settings, keys, decisions and status are read and changed as
+  before.
 
-Closing one reaches a running server, as every setting here does. A session that
-was already open was told, when it connected, a list of capabilities that has
-since changed; nothing goes and takes that back, because the refusal on the call
-is what decides and the list is only what a client checks first. So a client that
-acts on the old list is refused, which is a thing every client already copes with,
-and the next client to connect is told the truth. A file transfer that was already
-under way is refused on its next request, which is the one place a stale list would
-otherwise have gone on working: the addresses admit an installation this server
-knows to have the project open, and one that said so before the switch keeps that
-standing until its socket closes. Opening the deployment again is the same command
-with `open`, and it takes effect on the next call rather than on the next restart.
+The setting reaches a running server. A session that was already open was told a
+list of capabilities that has since changed; a client acting on the old list is
+refused on the call, and the next client to connect is told the current list. A
+file transfer already under way is refused on its next request.
 
 ## Signing keys
 
 An RSA-2048 key is generated on first run into `<root>/keys/`. A key's `kid` is
-the RFC 7638 thumbprint of its public half, so it is derived rather than stored.
+the RFC 7638 thumbprint of its public half.
 
-Team holds more than one key at a time. The newest signs; every key that has not
-been retired is published in the JWKS, so a rotation invalidates nothing:
+Team holds more than one key at a time. The newest signs, and every key that has
+not been retired is published in the JWKS, so a rotation invalidates nothing:
 
 ```sh
 nlteam key rotate --root /srv/team
 nlteam key list --root /srv/team
-nlteam key rotate --server team.example.lan:41402
-nlteam key list --server team.example.lan:41402
+nlteam key rotate --server team.example.com:41402
+nlteam key list --server team.example.com:41402
 ```
 
-Rotating over the protocol rotates the store the running server is holding, so
-the next token it mints is signed by the new key with nothing restarted.
-Rotating on the disk writes a file that server has not seen, and it re-reads the
-directory before it answers about keys for exactly that reason — the two cannot
-come to disagree about which keys this server has.
+Rotating over the protocol rotates the store the running server holds, so the next
+token it issues is signed by the new key with nothing restarted. Rotating on the
+disk writes a file the running server has not seen, and the server re-reads the
+directory before it answers about keys.
 
-Taking a key out of the JWKS is deliberately not part of rotating: tokens it
-signed are valid until they expire, so it has to keep verifying for at least one
-sign-in token lifetime after it stops signing — thirty days, unless this Team server has
-been set to something else.
+Removing a key from the JWKS is not part of rotating. Tokens a key signed remain
+valid until they expire, so it keeps verifying for at least one sign-in token
+lifetime after it stops signing.
 
-### Retiring a key
-
-Retiring is the other verb, and it is the one that ends a key's life:
+### Key retirement
 
 ```sh
-nlteam key retire nEQBz…  --root /srv/team
-nlteam key retire nEQBz…  --server team.example.lan:41402
+nlteam key retire nEQBz... --root /srv/team
+nlteam key retire nEQBz... --server team.example.com:41402
 ```
 
-The key stops being published, so **every token it signed is refused from that
-moment** — by this server on every call, on every subscription and on every
-repository access it is asked about, and by `loreserver` too, which verifies
-against the same JWKS. Whoever held one signs in again. The command says so when
-it runs rather than asking whether it was meant: a `kid` has to be copied off
-`key list` to get here, and what the person who typed it needs told is what has
-just happened to everybody else.
+The key stops being published, and **every token it signed is refused from that
+moment**: by this server on every call, every subscription and every repository
+access it is asked about, and by the version-control server, which verifies
+against the same JWKS. Everyone holding one signs in again. The command reports
+this when it runs.
 
-That is why it is not part of rotating and not a stronger version of it. A
-rotation is invisible to everybody holding a token; a retirement is visible to
-all of them at once. **Retiring is what to reach for when a private key is
-believed to have got out**, and shortening
-`token.sign_in_lifetime_seconds` is not: the setting bounds tokens minted after
-it changes, while the ones already issued are exactly the problem.
+Retirement is what to use when a private key is believed to have been exposed.
+Shortening `token.sign_in_lifetime_seconds` is not: the setting bounds tokens
+issued after it changes, and the tokens already issued are the problem.
 
-Two things about which key:
+Two rules about which key:
 
-- **The key that is signing is refused.** Retiring it would refuse the tokens
-  this server has just issued — including the one the command is using, over
-  `--server` — and leave nothing able to sign the replacements. The command
-  says to rotate first, which makes a key to sign with and turns the old one
-  into an ordinary key to retire. This is refused on both paths, `--root`
-  included: it is not a rule about who may ask but about the state a keys
-  directory can be left in, and the way past it on the disk is the rotation
-  rather than a flag.
-- **Retiring the last key that was only verifying is not refused.** Rotate, then
-  retire everything else, and nothing but the new key is published: every token
-  this server issued before that rotation stops working, and everybody signs in.
-  That is not a mistake to be guarded against, it is the reason the command
-  exists, so what it does is say the cost rather than ask for the intention a
-  second time.
+- **The key that is signing is refused.** Retiring it would refuse the tokens the
+  server has just issued, including the one the command is using over `--server`,
+  and leave nothing able to sign the replacements. The command says to rotate
+  first. This is refused on both paths.
+- **Retiring the last key that was only verifying is allowed.** Rotate, then
+  retire everything else, and only the new key is published: every token issued
+  before that rotation stops working and everyone signs in again. The command
+  reports the cost rather than asking for confirmation.
 
-The file is kept either way. `<serial>.pem` becomes `<serial>.retired.pem`, so
-the key stays on `key list` as `retired` rather than vanishing, and an operator
-can see that it happened. Putting one back is a rename on the disk and is
-nothing this command does — a key restored to the JWKS goes back to verifying
-the very tokens it was retired to refuse.
+The file is kept. `<serial>.pem` becomes `<serial>.retired.pem`, so the key stays
+on `key list` as `retired`. Restoring one is a rename on the disk and is not
+something this command does.
 
 ## Projects
 
-A project is one `loreserver` repository, plus Team's record of it.
+A project is one repository plus Team's record of it.
 
 ```sh
 nlteam project create harbour --root /srv/team --as ada --description "..."
 nlteam project list --root /srv/team
-nlteam project create harbour --server team.example.lan:41402 --description "..."
-nlteam project list --server team.example.lan:41402
-nlteam project create harbour --repository 19c0d42… --root /srv/team --as ada
+nlteam project create harbour --server team.example.com:41402 --description "..."
+nlteam project list --server team.example.com:41402
+nlteam project create harbour --repository 19c0d42... --root /srv/team --as ada
 ```
 
-**Every account of this server reaches every project on it.** There is no
-per-project access to give or take away: the question `loreserver` asks on each
-repository access is answered from the account alone — an account of this
-server, not disabled, holding a token this server has not refused. A resource
-that is not one of this server's projects is still refused, and that is the
-whole of what is left to decide.
+**Every account on a server reaches every project on it.** There is no
+per-project access to grant or remove. The question asked on each repository
+access is answered from the account alone: an account of this server, not
+disabled, holding a token this server has not refused. A resource that is not one
+of this server's projects is refused.
 
-Which means the way to stop somebody is to stop the account:
-`nlteam user disable` for good, `nlteam user revoke-tokens` for a token that got
-out. Both are above, under "Tokens and taking access away".
+To stop somebody, stop the account: `nlteam user disable`, or
+`nlteam user revoke-tokens` for a token that has been exposed.
 
-`project create` generates the repository id, asks `loreserver` to create the
-repository over gRPC with a token Team mints, and records the project. `--as`
-names the account to record as its creator and can be left out on a server with
-one account; who made a project is shown and is not consulted afterwards. Team
-never opens the store `loreserver` is serving: `loreserver` holds an exclusive
-lock on it, and a second process opening the same directory does not fail, it
-waits for ever. What Team reads instead is a checkout of its own — see
-[Reading what is inside a project](internals.md#reading-what-is-inside-a-project).
+`project create` generates the repository id, asks the version-control server to
+create the repository, and records the project. `--as` names the account recorded
+as its creator, and may be left out on a server with one account.
 
-`--repository <id>` makes it the other command: given one, nothing is created.
-Team records the row under that id and asks `loreserver` for nothing, because the
-repository is already in the store. It prints `adopted` rather than `created`,
-and says so in a sentence, because a repository with years of history in it and
-one made a moment ago are different things to be holding. Both paths take the
-option — see "Taking a project off the list" below, which is what it is for.
+`--repository <id>` records a repository that already exists. Nothing is created,
+Team records the row under that id, and the command reports `adopted` rather than
+`created`. The id is thirty-two hexadecimal characters. An id that is already a
+project on this server is refused as a conflict.
 
-`--as` is refused with `--server`, and there is no equivalent: over the protocol
-the account that asked is the account it belongs to, because a method letting
-anybody attribute work to somebody else is not one worth having. `--root` has it
-for the opposite reason — whoever runs that is acting on behalf of a team rather
-than as one of them. The line naming the repository's default branch is left out
-over the protocol too: that is `loreserver`'s answer to the command that asked it
-directly, and this server's record of a project says nothing about a
-repository's branches. An adoption leaves it out on either path, and for a
-better reason — nothing asked `loreserver` anything, so there is nothing to
-report about a repository this command did not look at.
+`--as` is refused with `--server`: over the protocol the account that asked is
+the account the project belongs to. The line naming the repository's default
+branch is printed only where the command asked the version-control server
+directly, so it is absent over the protocol and absent on an adoption.
 
-Making a project is not an operator's privilege, and `project create --server`
-is not one of the `admin` methods. Every account of this server may make one, and
-a Studio installation does exactly that, over the session it opened with the
+Creating a project is not an operator's privilege. Every account on a server may
+create one, and a Studio installation does so over the session it opened with the
 token it was given, on the same port it signed in at:
 
 ```
@@ -1101,107 +882,75 @@ projects.list     what this server holds, with the remote for each
 projects.create   {"name": "...", "description": "...", "repositoryId": "..."}
 ```
 
-The socket is carried beside the discovery document, and for the same reason:
-this is how every author finds their work. A repository created any other way —
-`lore` itself, an older Studio — is recorded when `loreserver` announces it,
-with whoever made it as its creator, so it does not become a repository nobody
-can open.
+A repository created another way is recorded when the version-control server
+announces it, with whoever created it as its creator.
 
-`repositoryId` is optional and says which of two things the call is. Left out,
-Team generates an id and asks `loreserver` for the repository, exactly as
-`project create` does. Given, the repository already exists — on the author's own
-machine and they are publishing it, or in this server's own store and it is
-being recorded again: Team records the row under that id and asks `loreserver`
-for nothing. It is thirty-two hexadecimal characters, and one that is already a
-project here is refused as a conflict rather than taken over.
+`repositoryId` is optional. Left out, Team generates an id and asks for the
+repository to be created. Given, Team records the row under that id and asks for
+nothing.
 
-### Taking a project off the list
+### Removing a project from the list
 
-Taking a project off a server takes the row away and nothing else. The
-repository stays in `loreserver`'s store with every revision in it exactly as
-they were; what has gone is this server's record that the repository is a
-project of its. `projects.forget` on a session is what does it;
-there is no `nlteam project forget`, because the command line grows no verb the
-protocol lacks and has not been given every verb the protocol has.
+Removing a project takes the row away and nothing else. The repository stays in
+the store with every revision in it. `projects.forget` on a session is what does
+it; there is no `nlteam project forget`.
 
-What it does reach is real, though, because the record is what the rest of this
-server is written against:
+What the removal reaches:
 
 - **Nobody can open it.** A repository with no row is not one of this server's
-  projects, so the question `loreserver` asks on each access is answered "no"
-  for everybody, whatever their account. That is the same rule as above, seen
-  from the other side.
-- **The conversations go with it.** Threads, their comments and the attachments
-  hang off the project row with `ON DELETE CASCADE`, and `team.db` is opened
-  with `PRAGMA foreign_keys = ON`, so they are deleted in the same statement.
-  They do not come back with the project, because they were not left anywhere.
+  projects, so every access is refused whatever the account.
+- **The conversations go with it.** Threads, their comments and their attachments
+  are deleted with the project row.
 
-Putting the project back is recording one against the repository that is still
-there, and it needs the repository's id:
+Putting the project back means recording one against the repository, which needs
+the repository's id:
 
 ```sh
-# while it is still a project. The id is the second column
+# While it is still a project. The id is the second column.
 nlteam project list --root /srv/team
 
-# afterwards, against the repository that never moved
-nlteam project create harbour --repository 19c0d42… --root /srv/team --as ada
+# Afterwards, against the repository that never moved.
+nlteam project create harbour --repository 19c0d42... --root /srv/team --as ada
 ```
 
-Which makes the id the thing to have kept. Nothing left on the list holds it
-once the row has gone, and a project is named rather than numbered everywhere
-else — including in the `lore://` remote an author clones — so **read it off
-`nlteam project list` before taking a project off, not after**. Failing that it
-is in a backup of `team.db`, which is one of the things the rescue plane is for.
+**Read the id off `nlteam project list` before taking a project off the list.**
+Nothing left on the list holds it once the row has gone. Otherwise it is in a
+backup of `team.db`.
 
-Give the project the name it had, too. The remote Team hands every author is
-built from the row's name, so recording the repository under a different one
-changes the address this server advertises for work that has not moved.
+Give the project the name it had. The remote handed to every author is built from
+the row's name, so recording the repository under a different name changes the
+address this server advertises for work that has not moved.
 
 The row that comes back is a new row: today's date, and the account `--as` named
-as its creator rather than whoever made the old one, because this server kept
-nothing about a project it was told to forget. What an author opens is
-unchanged — every revision and every branch — because none of it was ever in the
+as its creator. What an author opens is unchanged, because none of it was in the
 row.
 
-## Who may administer this server
+## Administrators
 
-The `admin` group, and it means nothing else. It is who may manage the accounts,
-the projects and the settings, and put somebody else in the group.
+The `admin` group is who may manage the accounts, the projects and the settings,
+and add somebody else to the group.
 
 ```sh
 nlteam user grant-admin bob --root /srv/team
 nlteam user revoke-admin bob --root /srv/team
-nlteam user grant-admin bob --server team.example.lan:41402
-nlteam user revoke-admin bob --server team.example.lan:41402
+nlteam user grant-admin bob --server team.example.com:41402
+nlteam user revoke-admin bob --server team.example.com:41402
 ```
 
 `nlteam init` puts the first account in it.
 
-Everything on this page an operator does at the machine can also be done over the
-session, by an account in that group, from a management panel or from a command
-line anywhere — making accounts, disabling and enabling them, granting and
-revoking administration, refusing the tokens somebody holds, minting a token for
-them, changing a setting and rotating the signing keys. The group is read as each
-call arrives rather than once when a session opened, so taking somebody out of it
-takes effect against the very next thing they ask rather than when their token
-would have expired.
+Everything on this page can be done over the session by an account in that group,
+from a management panel or from a command line anywhere: creating accounts,
+disabling and enabling them, granting and revoking administration, refusing the
+tokens somebody holds, issuing a token for them, changing a setting and rotating
+the signing keys. The group is read as each call arrives, so removing somebody
+from it takes effect on the next call.
 
-The last operator is where the two planes deliberately differ, and it is worth
-being exact about which command does what:
+The last operator is where the two paths differ:
 
 - `user revoke-admin --server` and `user disable --server` are **refused** for
   the only operator who can still sign in. Either would leave a server nobody
-  could administer over the protocol and nobody who could put that right over it
-  either. The refusal names the command to run on the machine that holds the
-  storage root.
-- `user revoke-admin --root` and `user disable --root` will both do it, and say
-  nothing about it. `user grant-admin ... --root` and `user enable ... --root`
-  are what undo them.
-
-That asymmetry is the rescue plane doing its job. "This server must not be left
-with nobody who can administer it" is a rule of the management plane, enforced by
-the management plane over the protocol. Whoever runs `nlteam` holds the storage
-root, is not a member of the admin group's world, and is not subject to its
-rules — so the rescue plane does as it is told, and a server whose only operator
-is disabled or demoted is repaired from its own disk, which is the only place it
-could be repaired from.
+  could administer over the protocol. The refusal names the command to run on the
+  machine that holds the storage root.
+- `user revoke-admin --root` and `user disable --root` will both do it.
+  `user grant-admin ... --root` and `user enable ... --root` undo them.
