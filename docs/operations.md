@@ -120,8 +120,10 @@ Renewal is a restart. Replace the files and run `docker compose restart team`.
 
 ## Installation
 
+The package is not published yet. Outside a container, `nlteam` is built from a
+checkout: `npm install && npm run build && npm link`.
+
 ```sh
-npm i @narraleaf/team -g
 nlteam up --root /srv/team
 ```
 

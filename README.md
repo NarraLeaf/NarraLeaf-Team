@@ -88,11 +88,18 @@ presents it and no fingerprint has to be compared. See
 
 ## Installing
 
+The package is not published yet. Until it is, an installation outside a
+container is built from a checkout:
+
 ```sh
-npm i @narraleaf/team -g
+git clone https://github.com/NarraLeaf/NarraLeaf-Team.git
+cd NarraLeaf-Team
+npm install
+npm run build
+npm link
 ```
 
-This puts the `nlteam` command on the path. `nlteam --help` prints every command
+That puts the `nlteam` command on the path. `nlteam --help` prints every command
 with its options.
 
 ## Quick start
@@ -208,13 +215,7 @@ unusable at the moment it is needed.
 
 ## Development
 
-```sh
-git clone https://github.com/NarraLeaf/NarraLeaf-Team.git
-cd NarraLeaf-Team
-npm install
-npm run build
-npm link
-```
+The same checkout as [Installing](#installing).
 
 | Command | Description |
 | --- | --- |
