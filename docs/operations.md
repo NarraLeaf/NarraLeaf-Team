@@ -18,7 +18,7 @@ unpacked, so nothing is downloaded on first start.
 ```yaml
 services:
   team:
-    image: ghcr.io/narraleaf/team:develop
+    image: ghcr.io/narraleaf/team:0.1.0
     restart: unless-stopped
     environment:
       NLTEAM_HOSTNAME: team.example.com
@@ -78,14 +78,10 @@ root and the binary cache are already set in the image.
 migrates on start and the certificate authority is kept, so no machine is asked
 to trust anything again.
 
-**A refused pull** means the package is private. A container package on GitHub
-starts private and is made public from its own settings page. Until it is, every
-machine that pulls the image needs `docker login ghcr.io` with a token that may
-read packages.
-
-**Image tags.** `develop` follows the integration branch and changes under a
-deployment that pulls it. A tagged release publishes `X.Y.Z` and moves `latest`.
-Name the version in a deployment that is in use.
+**Image tags.** A release publishes `X.Y.Z` and moves `latest`. `develop`
+follows the integration branch. A deployment names the version it means: both
+`latest` and `develop` change under a deployment that pulls them, and an image
+that changes under a server nobody restarted is a change nobody chose.
 
 ### A certificate you already hold
 

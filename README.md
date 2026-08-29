@@ -51,6 +51,7 @@ terminal on the server or from any machine that has signed in to it.
 - [Architecture](docs/architecture.md) and the [protocol specification](docs/protocol.md).
 - [Internals](docs/internals.md) and [contributing](docs/contributing.md), for
   work on Team itself.
+- [Changelog](CHANGELOG.md), and [security policy](SECURITY.md).
 
 ## Requirements
 
