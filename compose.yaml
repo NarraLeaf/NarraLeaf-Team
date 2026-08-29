@@ -13,7 +13,10 @@
 
 services:
   team:
-    image: ghcr.io/narraleaf/team:latest
+    # `develop` follows the integration branch and moves under you. There is no
+    # tagged release yet; when there is, it publishes `:X.Y.Z` and `:latest`, and
+    # a deployment should name the version it means rather than either of these.
+    image: ghcr.io/narraleaf/team:develop
     # Or, from a checkout of this repository:
     # build: .
     restart: unless-stopped

@@ -27,7 +27,7 @@ name people will reach this server by, and nothing else.
 ```yaml
 services:
   team:
-    image: ghcr.io/narraleaf/team:latest
+    image: ghcr.io/narraleaf/team:develop
     restart: unless-stopped
     environment:
       NLTEAM_HOSTNAME: team.example.com
@@ -90,6 +90,18 @@ are already set, and there is no reason to change either.
 **Upgrading is a pull and a restart.** `docker compose pull && docker compose up
 -d`. The database migrates itself on start, and the certificate authority is
 kept, so nobody is asked to trust anything again.
+
+**If the pull is refused**, the package is private. A container package on
+GitHub starts that way, and it is one switch on its own settings page to make it
+public. Until it is, every machine that pulls this image needs
+`docker login ghcr.io` with a token that may read packages — which is a
+credential on every deployment, to fetch something that is public source anyway.
+
+**Which tag.** `develop` follows the integration branch and moves under you,
+which is what to run while this is the only tag there is. A tagged release
+publishes `X.Y.Z` and moves `latest`, and a deployment should then name the
+version it means: an image that changes under a server nobody restarted is a
+change nobody chose.
 
 ### A certificate you already hold
 
