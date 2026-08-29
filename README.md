@@ -65,115 +65,99 @@ npm.
 - **64-bit Linux, Windows, or Apple silicon.** These are the platforms the
   version-control server is published for. Any other platform is refused by name.
 
-The version-control server is not installed separately. Team downloads the
-version it pins on first run, into a per-user cache.
+The version-control server is not installed separately. Outside a container,
+Team downloads the version it pins on first run, into a per-user cache; the
+image carries it already unpacked.
 
 ## Running a server
 
 `compose.yaml` in this repository is a complete deployment. The one value to
-change is the name people will reach the server by.
+change is `NLTEAM_HOSTNAME`, the name people will reach the server by.
 
 ```sh
 docker compose up -d
 docker compose exec -T team nlteam init ada < admin-password
+docker compose exec team nlteam status
 ```
 
-The second command runs once. It creates the first account, and is refused from
-the moment the server has one. Three things then reach the people who will use
-the server: the address, that account, and the certificate fingerprint printed in
-`docker compose logs team`. Everything else is managed from Studio.
+`init` runs once. It creates the first account, puts it in the `admin` group, and
+is refused from the moment the server has an account. `admin-password` is a file
+holding that password and nothing else, ten characters or more; delete it
+afterwards. Team reads it from standard input because a password given as an
+argument stands in the process list and in the shell history.
+
+`status` prints the rest of what an author is given: the address they sign in at,
+and the certificate fingerprint each of them compares once. Send that fingerprint
+over something other than the connection it secures. Everything after that is
+done from Studio.
 
 If the organization already holds a certificate for the name people use, Team
-presents it and no fingerprint has to be compared. See
+presents it and nobody compares a fingerprint. See
 [a certificate you already hold](docs/operations.md#a-certificate-you-already-hold).
 
-## Installing
+## Without a container
 
-The package is not published yet. Until it is, an installation outside a
-container is built from a checkout:
+The package is not published yet, so `nlteam` is built from a checkout:
 
 ```sh
 git clone https://github.com/NarraLeaf/NarraLeaf-Team.git
 cd NarraLeaf-Team
-npm install
-npm run build
-npm link
+npm install && npm run build && npm link
 ```
 
-That puts the `nlteam` command on the path. `nlteam --help` prints every command
-with its options.
-
-## Quick start
-
-One directory holds everything a server owns, and `--root` names it. Every
-command takes it, or reads it from `NLTEAM_ROOT`. Each command-line option has a
-matching environment variable; [Deployment](docs/operations.md) lists them.
-
-**1. Start the server.**
+One directory holds everything a server owns, and `--root` names it, or
+`NLTEAM_ROOT` does. Every option has a matching environment variable;
+[Deployment](docs/operations.md) lists them.
 
 ```sh
 nlteam up --root /srv/team --hostname team.example.com
 ```
 
 `up` installs the version-control server, configures it, starts it, serves the
-endpoint Studio signs in at, and runs until it is interrupted. Run the remaining
-steps in a second terminal.
+endpoint Studio signs in at, and runs until it is interrupted. Run the rest in a
+second terminal.
 
 `--hostname` is a name people will reach this server by. It goes into the
 certificate, into the audience of every token, and into the address the server
-tells clients to sign in at. A server given no hostname issues tokens that work
-on its own machine only. The option is repeatable.
-
-**2. Trust the certificate, once on each machine that will connect.**
+sends clients to. A server given no hostname issues tokens that work on its own
+machine only. The option is repeatable.
 
 ```sh
-nlteam trust --root /srv/team
-nlteam trust --root /srv/team --install
+printf '%s' 'the first password' | nlteam init ada --root /srv/team
+nlteam status --root /srv/team
 ```
-
-The first command prints the fingerprint and changes nothing. Compare it against
-the fingerprint the server printed at startup, over a channel other than the
-connection being trusted, then run the second.
-
-**3. Create the first account.** It joins the `admin` group. `init` is refused
-once the server has an account.
-
-```sh
-printf '%s' 'the password' | nlteam init ada --root /srv/team
-```
-
-Every account after the first is created by an account that is already there:
-
-```sh
-printf '%s' 'their password' | nlteam user create bob --root /srv/team --role authors
-```
-
-**4. Create a project.** Every account on a server reaches every project on it.
-
-```sh
-nlteam project create harbour --root /srv/team --as ada
-```
-
-**5. Hand out the address and a token.**
-
-```sh
-printf '%s' 'their password' | nlteam token mint bob --root /srv/team
-```
-
-The address and the token are what an author is given. Studio asks the server for
-everything else, and the token carries the authority's fingerprint, so trusting
-the server is one action in Studio rather than a command.
 
 Two ports must be reachable from an author's machine: **41402**, where people
 sign in, and **41337**, where project data is served. The remaining listeners are
 between programs on the server machine and are bound to the loopback.
+
+## What an author is given
+
+Three things, and Studio asks the server for everything else:
+
+- **The address**, which is a host and a port: `nlteam://team.example.com:41402`.
+  `status` and the startup log write it as an `https://` URL on their `sign in`
+  line, and Studio does not take that spelling.
+- **An account**, created by `nlteam user create` or from Studio.
+- **The fingerprint**, compared once when Studio reports that the server was not
+  trusted. A server presenting a certificate the organization already holds
+  needs none of this.
+
+```sh
+printf '%s' 'their password' | nlteam user create bob --root /srv/team --role authors
+nlteam project create harbour --root /srv/team --as ada
+```
+
+Every account on a server reaches every project on it. An account that should
+never hold a password is given a token instead, with `nlteam token mint`; Studio
+takes one in place of a username under **Use an access token instead**.
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
 | `nlteam up` | Install and run the version-control server, and serve the sign-in endpoint |
-| `nlteam trust` | Show this server's certificate authority, or install it |
+| `nlteam trust` | Print this server's certificate authority and fingerprint, or install it here |
 | `nlteam init <name>` | Create the first account, on a server that has none |
 | `nlteam login <server> <name>` | Sign in to a server, so this machine can administer it |
 | `nlteam logout <server>` | Forget one server's token and its authority |
@@ -209,14 +193,16 @@ output either way.
 
 `up`, `init` and `trust` take `--root` only. They are what a server is recovered
 with, and a recovery path that ran over the thing being recovered would be
-unusable at the moment it is needed.
+unusable at the moment it is needed. `trust` is for a machine administering this
+server from the command line; Studio needs none of it, because a fingerprint
+reaches it with the address and a token carries one of its own.
 
 `nlteam --help` prints the options for each command.
 [Deployment](docs/operations.md) covers the same ground in full.
 
 ## Development
 
-The same checkout as [Installing](#installing).
+The same checkout as [Without a container](#without-a-container).
 
 | Command | Description |
 | --- | --- |

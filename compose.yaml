@@ -5,11 +5,13 @@
 #
 #     docker compose up -d
 #     docker compose exec -T team nlteam init ada < admin-password
+#     docker compose exec team nlteam status
 #
-# The second is once, ever: it makes the first account, and refuses from the
-# moment this server has one. After it, the address, that account and the
-# fingerprint in `docker compose logs team` are all anybody needs - accounts,
-# projects and the rest are managed from Studio.
+# `init` is once, ever: it makes the first account, and refuses from the moment
+# this server has one. Write `admin-password` first - that password and nothing
+# else, ten characters or more - and delete it afterwards. `status` prints the
+# address and the fingerprint, which with that account are all anybody needs;
+# accounts, projects and the rest are managed from Studio.
 
 services:
   team:

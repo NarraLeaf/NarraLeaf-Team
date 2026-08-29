@@ -35,17 +35,20 @@ volumes:
 ```sh
 docker compose up -d
 docker compose exec -T team nlteam init ada < admin-password
+docker compose exec team nlteam status
 ```
 
-The second command runs once. `init` creates the first account and is refused
-from the moment the server has one. It reads the password from standard input,
-which is what `-T` is for; a password given as an argument appears in the process
-list and in the shell history.
+`init` runs once: it creates the first account and is refused from the moment the
+server has one. `admin-password` is a file written beforehand, holding that
+password and nothing else, ten characters or more; delete it afterwards. The
+password is read from standard input, which is what `-T` is for, because one
+given as an argument appears in the process list and in the shell history.
 
-Three things then reach the people who will use the server: the address
-(`team.example.com:41402`), the account just created, and the server's
-certificate fingerprint, printed in the first lines of `docker compose logs
-team`. Accounts, projects and administration are managed from NarraLeaf Studio.
+`status` prints the other two things that reach the people who will use the
+server: the address and the certificate fingerprint. The address is a host and a
+port, `nlteam://team.example.com:41402`; `status` writes it as an `https://` URL
+on its `sign in` line, and Studio does not take that spelling. Accounts, projects
+and administration are managed from NarraLeaf Studio.
 
 `NLTEAM_HOSTNAME` is the value that has to be correct. It goes into the
 certificate, into the audience of every token, and into the address the discovery
@@ -266,7 +269,11 @@ do to each. The version-control server refuses a token that arrives without it.
 
 Studio verifies the endpoint's certificate against its own host's trust store and
 offers no certificate-pinning hook, so the first connection to a server is
-established by a person:
+established by a person comparing a fingerprint.
+
+`trust` is how a machine that holds the storage root reads and installs that
+authority. It is not what a collaborator runs: they have no storage root, and
+Studio asks them to confirm the fingerprint instead.
 
 ```sh
 nlteam trust --root /srv/team
