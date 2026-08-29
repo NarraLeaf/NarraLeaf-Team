@@ -85,6 +85,14 @@ export type Invocation =
        * the one that needs an extra word on the command line.
        */
       readonly identity: boolean;
+      /**
+       * A certificate an operator already holds, and its key.
+       *
+       * Both or neither. Given, it is presented to clients that ask for a name
+       * it covers, and Team's own is still served beside it — src/tls/supplied.ts
+       * says why that is not a choice.
+       */
+      readonly certificate: { readonly certPath: string; readonly keyPath: string } | undefined;
       readonly overrides: IdentityOverrides;
     }
   /** Make the first account, on a server that has none. */
@@ -310,6 +318,11 @@ const ENVIRONMENT: Readonly<Record<string, string>> = {
   // Repeatable on the line and comma-separated in the variable; the split is in
   // {@link hostnamesFrom}, because one host per entry is what the rest expects.
   "--hostname": "NLTEAM_HOSTNAME",
+  // A certificate an operator already has. Two variables rather than one path
+  // to a directory: the two files are conventionally named a dozen ways, and a
+  // container mounting a secret decides where each lands.
+  "--tls-cert": "NLTEAM_TLS_CERT",
+  "--tls-key": "NLTEAM_TLS_KEY",
   // A flag on the line, and a boolean-ish variable off it; the reading is in
   // {@link identityFrom}, because a flag stands for itself and a variable does
   // not.
@@ -806,7 +819,7 @@ function readIdentityOverrides(tokens: Tokens, env: NodeJS.ProcessEnv): Identity
 function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const result = readTokens(
     argv,
-    ["--root", "--health-port", ...IDENTITY_OPTIONS],
+    ["--root", "--health-port", "--tls-cert", "--tls-key", ...IDENTITY_OPTIONS],
     // `--identity` is still taken and means what it has always meant. It now
     // asks for what happens anyway, which is what keeps an operator's existing
     // command line working rather than becoming an unknown argument.
@@ -874,12 +887,27 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
     }
   }
 
+  // Both or neither, and said so rather than half-applied. A server given only
+  // a certificate would fall back to Team's own without a word, and the operator
+  // would be looking at a fingerprint they thought they had stopped needing.
+  const certPath = optionValue(tokens, env, "--tls-cert");
+  const keyPath = optionValue(tokens, env, "--tls-key");
+  if ((certPath === undefined) !== (keyPath === undefined)) {
+    return error(
+      certPath === undefined
+        ? "--tls-key needs --tls-cert: a key on its own is not a certificate to present"
+        : "--tls-cert needs --tls-key: a certificate on its own cannot complete a handshake",
+    );
+  }
+
   return {
     kind: "up",
     root,
     dataPort,
     healthPort,
     identity,
+    certificate:
+      certPath === undefined || keyPath === undefined ? undefined : { certPath, keyPath },
     overrides,
   };
 }

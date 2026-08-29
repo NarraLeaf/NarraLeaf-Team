@@ -168,6 +168,14 @@ Options for up:
       --identity            Ask for what happens anyway; accepted so that a
                             command line written before it was the default
                             still runs
+      --tls-cert <path>     A certificate you already hold, in PEM, presented to
+                            clients that ask for a name it covers. Their
+                            machines trust its issuer already, so those people
+                            compare no fingerprint and install nothing. Team's
+                            own is still served beside it, to the loopback,
+                            because that is where loreserver asks about callers
+      --tls-key <path>      Its private key, without a passphrase. Both or
+                            neither
 
 Options for trust:
       --install             Trust this authority in this account's trust store
@@ -251,7 +259,8 @@ mints from what it was started with:
       --issuer <name>       Token issuer (default ${DEFAULT_IDENTITY.issuer})
       --audience <name>     Audience loreserver requires (default ${DEFAULT_IDENTITY.audience})
       --auth-origin <host>  Host and port clients authenticate against, without
-                            a scheme (default ${DEFAULT_IDENTITY.authOrigin})
+                            a scheme. Defaults to the first --hostname, or to
+                            ${DEFAULT_IDENTITY.authOrigin} where there is none
       --env <name>          Environment claim (default ${DEFAULT_IDENTITY.env})
       --idp <name>          Identity provider claim (default ${DEFAULT_IDENTITY.idp})
       --token-lifetime <duration>
@@ -321,6 +330,9 @@ export async function run(
           dataPort: invocation.dataPort,
           healthPort: invocation.healthPort,
           identity: invocation.identity,
+          ...(invocation.certificate === undefined
+            ? {}
+            : { certificate: invocation.certificate }),
           overrides: invocation.overrides,
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         },

@@ -115,16 +115,28 @@ export const DEFAULT_IDENTITY: IdentityConfig = {
  * its settings this way, so that the same options given to two commands mean
  * the same thing to both.
  *
- * The auth origin follows the TLS port when it is not named outright. Without
- * that, moving the listener with `--auth-tls-port` would leave every token
- * claiming an audience nothing listens on, and a client would refuse the token
- * it had just been given.
+ * The auth origin is worked out rather than left at its default when nobody
+ * names one, because the default is only right for a server nobody else
+ * reaches. Two things decide it, in this order:
+ *
+ *   - **The first `--hostname`.** That option already says "this is what people
+ *     will call this server", and a deployment that gives one and no origin was
+ *     otherwise handed a discovery document telling every collaborator to sign
+ *     in at 127.0.0.1. Nothing said so, and the failure appeared on their
+ *     machines rather than on this one.
+ *   - **Failing that, the loopback**, which is the whole truth about a server
+ *     with no names: it is reached from its own machine and nowhere else.
+ *
+ * The port follows `--auth-tls-port` either way. Without that, moving the
+ * listener would leave every token claiming an audience nothing listens on, and
+ * a client would refuse the token it had just been given.
  */
 export function identityConfig(overrides: Partial<IdentityConfig> = {}): IdentityConfig {
   const merged = { ...DEFAULT_IDENTITY, ...overrides };
-  return overrides.authOrigin === undefined
-    ? { ...merged, authOrigin: `127.0.0.1:${merged.authTlsPort}` }
-    : merged;
+  if (overrides.authOrigin !== undefined) {
+    return merged;
+  }
+  return { ...merged, authOrigin: `${merged.hostnames[0] ?? "127.0.0.1"}:${merged.authTlsPort}` };
 }
 
 /**
@@ -235,4 +247,30 @@ export function tokenAudience(config: IdentityConfig): string[] {
  */
 export function jwksUrl(teamPort: number, host = "127.0.0.1"): string {
   return `http://${host}:${teamPort}/.well-known/jwks.json`;
+}
+
+/**
+ * Where loreserver asks Team who a caller is.
+ *
+ * The loopback, always, and deliberately not {@link authUrl}. These were one
+ * value until it was measured on a server people outside the building could
+ * reach, and the two readers of it want different things:
+ *
+ *   - A **client** needs the address it can reach this server at, which is what
+ *     an operator writes with `--auth-origin` or `--hostname`.
+ *   - **loreserver** runs on this machine, started and supervised by this
+ *     process, and there is no arrangement in which it does not. Sending it out
+ *     to the public address means it leaves the machine and comes back, which a
+ *     router that does not do NAT loopback never allows — and the symptom is
+ *     `INTERNAL: Failed to connect to rebac service` on every project create,
+ *     which names neither the router nor this setting.
+ *
+ * So it asks next door. The endpoint's certificate always carries `127.0.0.1`
+ * — see `endpointNames` in src/tls/authority.ts, where the loopback entries are
+ * written on every issue — so loreserver verifies it against Team's authority
+ * exactly as it would the public name. This is the same journey the JWKS fetch
+ * above already made, for the same reason.
+ */
+export function callbackUrl(config: IdentityConfig): string {
+  return `https://127.0.0.1:${config.authTlsPort}`;
 }

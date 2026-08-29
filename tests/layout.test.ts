@@ -148,7 +148,10 @@ describe("renderConfig, with identity switched on", () => {
     issuer: "narraleaf-team",
     audience: ["loreserver"],
     jwksUrl: "http://127.0.0.1:41400/.well-known/jwks.json",
-    authUrl: "https://team.example.com",
+    // The loopback, and not the address a client is told to sign in at. These
+    // were one value until a deployment people outside the building could reach
+    // showed what it cost: loreserver had to leave the machine and come back.
+    callbackUrl: "https://127.0.0.1:41402",
   };
 
   it("writes both blocks, because one on its own fails as a client bug", () => {
@@ -166,7 +169,7 @@ describe("renderConfig, with identity switched on", () => {
       ].join("\n"),
     );
     expect(toml).toContain(
-      ["[environment.endpoint]", 'auth_url = "https://team.example.com"'].join("\n"),
+      ["[environment.endpoint]", 'auth_url = "https://127.0.0.1:41402"'].join("\n"),
     );
   });
 
@@ -225,7 +228,7 @@ describe("writeInstance", () => {
       issuer: "narraleaf-team",
       audience: ["loreserver"],
       jwksUrl: "http://127.0.0.1:41400/.well-known/jwks.json",
-      authUrl: "https://team.example.com",
+      callbackUrl: "https://127.0.0.1:41402",
     });
     expect(await readFile(layout.configPath, "utf8")).toContain('jwt_audience = ["loreserver"]');
 

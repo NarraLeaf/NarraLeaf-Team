@@ -251,6 +251,45 @@ describe("issuing again", () => {
     expect(second.leafCertificate.subjectAltName).toContain("DNS:team.example.com");
   });
 
+  it("replaces it when the address people reach this server at has changed", async () => {
+    const root = await temporaryRoot();
+    const first = await ensureCertificates(root, { hostnames: ["203.0.113.7"] });
+    // A home connection's address is not a name it keeps. Addresses used not to
+    // be checked at all here, so an operator who edited the command line and
+    // restarted went on serving a certificate for the old one, and the only way
+    // out was to delete the file by hand.
+    const second = await ensureCertificates(root, { hostnames: ["198.51.100.4"] });
+
+    expect(second.issuedLeafBecause).toContain("198.51.100.4");
+    expect(second.leafCertificate.checkIP("198.51.100.4")).toBe("198.51.100.4");
+    expect(second.leafCertificate.serialNumber).not.toBe(first.leafCertificate.serialNumber);
+    // The authority is untouched, so nobody is asked to trust anything again.
+    expect(second.authority.fingerprint256).toBe(first.authority.fingerprint256);
+  });
+
+  it("keeps it when an address is written a second way", async () => {
+    const root = await temporaryRoot();
+    const first = await ensureCertificates(root, { hostnames: ["2001:db8::1"] });
+    // node writes an IPv6 address into a subjectAltName expanded and in upper
+    // case, so `2001:db8::1` reads back as `2001:DB8:0:0:0:0:0:1`. Comparing
+    // what an operator typed against that text finds every IPv6 name missing
+    // and re-issues the certificate on every start, for ever. This asks the
+    // certificate the question a client asks instead.
+    const second = await ensureCertificates(root, { hostnames: ["2001:0db8:0:0:0:0:0:1"] });
+
+    expect(second.issuedLeafBecause).toBeUndefined();
+    expect(second.leafCertificate.serialNumber).toBe(first.leafCertificate.serialNumber);
+  });
+
+  it("keeps it when the loopback is named outright, which it always carries", async () => {
+    const root = await temporaryRoot();
+    const first = await ensureCertificates(root);
+    const second = await ensureCertificates(root, { hostnames: ["127.0.0.1", "::1"] });
+
+    expect(second.issuedLeafBecause).toBeUndefined();
+    expect(second.leafCertificate.serialNumber).toBe(first.leafCertificate.serialNumber);
+  });
+
   it("replaces the endpoint's certificate as it approaches its expiry", async () => {
     const root = await temporaryRoot();
     const first = await ensureCertificates(root);

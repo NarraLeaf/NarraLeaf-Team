@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   audienceHosts,
   authUrl,
+  callbackUrl,
   dataRemoteUrl,
   hostOf,
   identityConfig,
   tokenAudience,
 } from "../src/identity/config.js";
+import { endpointNames } from "../src/tls/authority.js";
 
 /**
  * What a token's audience has to say about one host, and why each entry is
@@ -161,5 +163,80 @@ describe("both ways a token is issued", () => {
     expect(sources[0]).toContain("aud: tokenAudience(config)");
     expect(sources[1]).toContain("mintToken(");
     expect(sources[1]).not.toContain("aud:");
+  });
+});
+/**
+ * Which address this server says it is at, when nobody wrote one down.
+ *
+ * `--auth-origin` used to default to the loopback whatever else was given, so
+ * `up --hostname team.example.com` made a server whose discovery document told
+ * every collaborator to sign in at 127.0.0.1. Nothing said so, and the failure
+ * appeared on their machines rather than on the operator's.
+ */
+describe("the auth origin nobody named", () => {
+  it("is the first host the operator said people would use", () => {
+    const config = identityConfig({ hostnames: ["team.example.com", "192.168.1.10"] });
+
+    expect(config.authOrigin).toBe("team.example.com:41402");
+    expect(authUrl(config)).toBe("https://team.example.com:41402");
+  });
+
+  it("is the loopback when there is no host, which is the whole truth about that server", () => {
+    expect(identityConfig().authOrigin).toBe("127.0.0.1:41402");
+  });
+
+  it("gives way to an origin that was named, which may not be a hostname at all", () => {
+    // A deployment behind something that forwards a different port says so, and
+    // nothing here second-guesses it.
+    const config = identityConfig({
+      hostnames: ["team.example.com"],
+      authOrigin: "team.example.com:8443",
+    });
+
+    expect(config.authOrigin).toBe("team.example.com:8443");
+  });
+
+  it("follows the TLS port either way", () => {
+    expect(identityConfig({ authTlsPort: 9443 }).authOrigin).toBe("127.0.0.1:9443");
+    expect(identityConfig({ hostnames: ["team.example.com"], authTlsPort: 9443 }).authOrigin).toBe(
+      "team.example.com:9443",
+    );
+  });
+
+  it("still names every host in the audience, and names each once", () => {
+    // The origin's host is now one of the hostnames rather than a fourth entry,
+    // and the audience must not gain a duplicate because of it.
+    const config = identityConfig({ hostnames: ["team.example.com", "192.168.1.10"] });
+
+    expect(audienceHosts(config)).toEqual(["team.example.com", "192.168.1.10"]);
+  });
+});
+
+/**
+ * Where loreserver asks, which is not where anybody else is sent.
+ */
+describe("the address loreserver calls back at", () => {
+  it("is the loopback however this server is reached from outside", () => {
+    // loreserver is started by this process on this machine, always. Sending it
+    // out to the public address means it leaves the machine and comes back,
+    // which a router with no NAT loopback never allows - and the symptom is
+    // `Failed to connect to rebac service` on every project create, which names
+    // neither the router nor the setting.
+    for (const hostnames of [[], ["team.example.com"], ["203.0.113.7"]]) {
+      expect(callbackUrl(identityConfig({ hostnames }))).toBe("https://127.0.0.1:41402");
+    }
+  });
+
+  it("follows the TLS port, because that is the listener it is asking", () => {
+    expect(callbackUrl(identityConfig({ authTlsPort: 9443 }))).toBe("https://127.0.0.1:9443");
+  });
+
+  it("is a name the endpoint's certificate carries, or loreserver would refuse it", () => {
+    // endpointNames writes the loopback entries on every issue, so this address
+    // verifies against Team's own authority exactly as the public name does.
+    const names = endpointNames(["team.example.com"]);
+
+    expect(names.ipAddresses).toContain("127.0.0.1");
+    expect(hostOf(identityConfig().authOrigin)).toBe("127.0.0.1");
   });
 });

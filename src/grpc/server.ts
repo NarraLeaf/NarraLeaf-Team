@@ -18,8 +18,10 @@
  *     that does not chain to a trust anchor of its own host. src/tls/ is what
  *     that costs.
  */
+import { X509Certificate } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { createSecureContext, type SecureContext } from "node:tls";
 import {
   createSecureServer,
   createServer,
@@ -65,6 +67,45 @@ export interface GrpcTlsOptions {
   /** The endpoint's certificate, and the authority's after it. */
   readonly cert: string;
   readonly key: string;
+  /**
+   * A second certificate, presented to a client that asks for a name it covers.
+   *
+   * For an operator who already holds a certificate for the name their
+   * collaborators use. Their machines trust its issuer already, so nobody
+   * compares a fingerprint or installs anything — and this cannot simply
+   * replace the pair above, because loreserver reaches this same listener at
+   * `https://127.0.0.1` and verifies it against Team's own authority. No public
+   * certificate names the loopback.
+   *
+   * Which one a connection gets is decided by the server name it asked for.
+   * A connection to an address sends none at all, so the loopback always
+   * reaches the certificate above; a name this one does not cover falls back to
+   * it too, which is what makes `localhost` go on working beside a certificate
+   * issued for a public name.
+   */
+  readonly forNames?: {
+    readonly cert: string;
+    readonly key: string;
+  };
+}
+
+/**
+ * Choose a certificate for one connection, by the name it asked for.
+ *
+ * Answering `undefined` leaves node with the context built from `cert` and
+ * `key`, which is the point: everything that is not one of these names — the
+ * loopback included, which sends no name — keeps Team's own certificate.
+ */
+function chooseCertificate(
+  supplied: NonNullable<GrpcTlsOptions["forNames"]>,
+): (servername: string, callback: (error: Error | null, context?: SecureContext) => void) => void {
+  // Both built once. A secure context per connection would parse a certificate
+  // on every handshake, and `checkHost` is asked of a parsed certificate.
+  const context = createSecureContext({ cert: supplied.cert, key: supplied.key });
+  const certificate = new X509Certificate(supplied.cert);
+  return (servername, callback) => {
+    callback(null, certificate.checkHost(servername) === undefined ? undefined : context);
+  };
 }
 
 /** What a server needs to answer. */
@@ -300,6 +341,9 @@ export class GrpcServer {
         : createSecureServer({
             cert: options.tls.cert,
             key: options.tls.key,
+            ...(options.tls.forNames === undefined
+              ? {}
+              : { SNICallback: chooseCertificate(options.tls.forNames) }),
             // gRPC over TLS is HTTP/2 over TLS, so `h2` comes first and is what
             // every client of the service negotiates. HTTP/1.1 is offered only
             // where there is something to answer with, and a client that

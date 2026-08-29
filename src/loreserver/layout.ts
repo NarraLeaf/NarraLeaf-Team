@@ -129,16 +129,17 @@ export interface LoreserverAuth {
   /** Where loreserver fetches Team's public keys. */
   readonly jwksUrl: string;
   /**
-   * Where a caller signs in, and where loreserver asks who a caller is.
+   * Where loreserver asks Team who a caller is. Rendered as `auth_url`.
    *
-   * One setting, two readers. A client is handed this address and will not use
-   * anything but https, so this is Team's TLS listener. loreserver connects to
-   * the same address over gRPC, forwarding the caller's own `authorization`
-   * header, before it lets anybody near a repository — and it verifies the
-   * certificate, refusing an unknown authority with `tlsv1 alert unknown ca`.
-   * src/up.ts records what was measured about that and what is done about it.
+   * Not the address a client is told to sign in at, though the two were one
+   * value once. loreserver connects here over gRPC, forwarding the caller's own
+   * `authorization` header, before it lets anybody near a repository, and it
+   * verifies the certificate, refusing an unknown authority with `tlsv1 alert
+   * unknown ca`. Because it runs on the same machine as Team — always — this
+   * is the loopback, and `callbackUrl` in src/identity/config.ts says what
+   * happened on the deployment where it was not.
    */
-  readonly authUrl: string;
+  readonly callbackUrl: string;
 }
 
 /**
@@ -186,7 +187,7 @@ function renderAuth(auth: LoreserverAuth): string[] {
     `endpoint = ${tomlString(auth.jwksUrl)}`,
     "",
     "[environment.endpoint]",
-    `auth_url = ${tomlString(auth.authUrl)}`,
+    `auth_url = ${tomlString(auth.callbackUrl)}`,
   ];
 }
 

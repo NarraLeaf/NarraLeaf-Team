@@ -12,6 +12,7 @@ import type { GrpcServer } from "./grpc/server.js";
 import {
   audienceHosts,
   authUrl,
+  callbackUrl,
   dataRemoteUrl,
   hostOf,
   identityConfig,
@@ -50,6 +51,7 @@ import { projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/proto
 import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
 import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
+import { readSuppliedCertificate, type SuppliedCertificate } from "./tls/supplied.js";
 import { trustCommandFor } from "./tls/trust.js";
 import { VERSION } from "./version.js";
 import type { TeamService } from "./team/service.js";
@@ -73,6 +75,15 @@ export interface UpOptions extends LoreserverPorts {
    * tokens that do not.
    */
   readonly overrides?: Partial<IdentityConfig>;
+  /**
+   * A certificate an operator already holds, presented to clients that ask for
+   * a name it covers.
+   *
+   * Team's own is still issued and still served: loreserver reaches this same
+   * listener at the loopback and verifies it against Team's authority, and no
+   * public certificate names 127.0.0.1. src/tls/supplied.ts sets that out.
+   */
+  readonly certificate?: { readonly certPath: string; readonly keyPath: string };
   /**
    * Aborted to bring the command down. Without one, `up` runs until
    * loreserver can no longer be kept alive.
@@ -139,10 +150,10 @@ function loreserverAuth(config: IdentityConfig): LoreserverAuth {
     // what a token carries. A token is accepted when its `aud` array holds it.
     audience: [config.audience],
     jwksUrl: jwksUrl(config.teamPort),
-    // The https origin, because `auth_url` is what a client is told to sign in
-    // at as well as where loreserver asks about a token. src/loreserver/layout.ts
-    // records what that means for loreserver's own calls.
-    authUrl: authUrl(config),
+    // The loopback, not the address clients are given. loreserver is next door,
+    // and src/identity/config.ts says what sending it out of the building and
+    // back cost on the first deployment anybody outside could reach.
+    callbackUrl: callbackUrl(config),
   };
 }
 
@@ -275,6 +286,15 @@ export async function up(
       );
     }
 
+    // Read before anything binds a port. A pair that does not go together is a
+    // handshake that fails on somebody else's machine, reported to them as a
+    // certificate problem that says nothing about a key, so it is worth finding
+    // out here and refusing to start.
+    const supplied: SuppliedCertificate | undefined =
+      options.certificate === undefined
+        ? undefined
+        : await readSuppliedCertificate(options.certificate.certPath, options.certificate.keyPath);
+
     // Everything the version control library reads out of the environment is
     // settled here, before a single thing in this process can ask it for
     // anything — src/lore/environment.ts says what the two variables are and
@@ -397,7 +417,13 @@ export async function up(
       // this process opens.
       anyInterface: true,
       portOption: "--auth-tls-port",
-      tls: { cert: certificates.leafCertPem, key: certificates.leafKeyPem },
+      tls: {
+        cert: certificates.leafCertPem,
+        key: certificates.leafKeyPem,
+        ...(supplied === undefined
+          ? {}
+          : { forNames: { cert: supplied.certPem, key: supplied.keyPem } }),
+      },
       http1: webHandler(() => discoveryDocument(discovery), {
         identity: identityRoutes,
         studio,
@@ -417,6 +443,21 @@ export async function up(
         `reached as ${authUrl(config)}\n`,
     );
     stdout(`its certificate authority is ${certificates.authority.fingerprint256}\n`);
+    if (supplied !== undefined) {
+      // Said before the paragraph about comparing a fingerprint, because for a
+      // client reaching one of these names there is nothing to compare.
+      stdout(
+        `${supplied.certPath} is presented to anyone asking for ` +
+          `${supplied.names.join(", ") || "a name it does not carry"}, ` +
+          `and those machines need trust nothing\n`,
+      );
+      if (supplied.expired) {
+        stderr(
+          `nlteam: ${supplied.certPath} expired on ${supplied.certificate.validTo}. ` +
+            `Clients will refuse it; this server is still serving it.\n`,
+        );
+      }
+    }
     stdout(
       "a machine that has not trusted this server cannot connect: compare\n" +
         "that fingerprint with\n" +
@@ -477,7 +518,7 @@ export async function up(
       );
     } else {
       stdout(`loreserver will demand a token from ${auth.issuer} for ${auth.audience[0]}\n`);
-      stdout(`clients are told to sign in at ${auth.authUrl}\n`);
+      stdout(`clients are told to sign in at ${authUrl(config)}\n`);
       // The remotes a token authorises, spelled out. A client will not send its
       // token to a remote its audience does not name, so an operator whose
       // collaborators connect by a name that is missing here has a Team server that
@@ -488,9 +529,10 @@ export async function up(
           .join(", ")}\n`,
       );
       stdout(
-        `loreserver reaches that endpoint too, and is given ${
-          certificates.authority.layout.caCertPath
-        }\n      as the only authority it trusts while Team runs it\n`,
+        `loreserver asks about callers at ${auth.callbackUrl}, next door rather than\n` +
+          `      round by that address, and is given ${
+            certificates.authority.layout.caCertPath
+          }\n      as the only authority it trusts while Team runs it\n`,
       );
     }
 

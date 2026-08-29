@@ -344,9 +344,19 @@ export function leafReplacementReason(
   // written on every issue, so a certificate that has those but is missing a
   // host name added since would be refused by exactly the client that name was
   // added for.
-  const present = (leaf.subjectAltName ?? "").split(", ");
-  const missing = hostnames.filter(
-    (name) => isIP(name) === 0 && !present.includes(`DNS:${name}`),
+  //
+  // Asked of the certificate rather than read out of its `subjectAltName` text,
+  // for two reasons. Addresses used not to be checked at all — the test was
+  // `isIP(name) === 0`, so a deployment reached by a bare address that changed
+  // went on serving a certificate for the old one, and the only way out was to
+  // delete the file by hand. And the text cannot be compared against anyway:
+  // node writes an IPv6 address there expanded and in upper case, so `::1`
+  // reads back as `IP Address:0:0:0:0:0:0:0:1` and any spelling an operator
+  // typed would look missing, re-issuing the certificate on every start for
+  // ever. `checkHost` and `checkIP` are the match a client makes, which is the
+  // question being asked.
+  const missing = hostnames.filter((name) =>
+    isIP(name) === 0 ? leaf.checkHost(name) === undefined : leaf.checkIP(name) === undefined,
   );
   const first = missing[0];
   return first === undefined ? undefined : `the certificate on disk does not carry ${first}`;
