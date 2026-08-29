@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/NarraLeaf/NarraLeaf-Team/security/advisories/new
+    about: Report privately. Do not open a public issue.
+  - name: NarraLeaf Studio documentation
+    url: https://www.narraleaf.com/docs/studio/team
+    about: Deploying a server, connecting Studio, accounts and access.
+  - name: Question about running a server
+    url: https://github.com/NarraLeaf/NarraLeaf-Team/discussions
+    about: Deployment questions, rather than a defect in Team itself.

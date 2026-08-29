@@ -36,6 +36,28 @@ environment variables that switch those suites on, and for the two scripts in
 `scripts/`, a listener to point a real client at, and the benchmark every
 performance figure in these documents came from.
 
+## Branches and releases
+
+`develop` is the integration branch. Work lands there, and every push runs the
+five checks above, the image build, and the loreserver integration suites.
+
+`main` is what has been released. It moves when a version is cut, and never on
+its own.
+
+A release is a version number and a tag:
+
+1. Raise `version` in `package.json` on `develop`.
+2. Merge `develop` into `main`.
+3. Tag that commit `vX.Y.Z` and push the tag.
+
+The tag is what publishes. It builds the container image, starts it, makes it
+answer its own health check and take a first account, and only then pushes
+`ghcr.io/narraleaf/team:X.Y.Z` and moves `:latest`. A push to `develop`
+publishes `:develop` the same way.
+
+A deployment names the version it means. `:develop` follows the integration
+branch and changes under whoever pulls it.
+
 ## How this is written
 
 **Comments say what the code does and why, for somebody reading this cold.**

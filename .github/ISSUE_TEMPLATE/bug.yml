@@ -1,0 +1,53 @@
+name: Bug report
+description: Something a NarraLeaf Team server does that it should not.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report a vulnerability here. Use the
+        [security advisory form](https://github.com/NarraLeaf/NarraLeaf-Team/security/advisories/new).
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `nlteam --version`, or the image tag.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it is installed
+      options:
+        - Container image
+        - npm, global install
+        - From a checkout
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: Debian 13, Windows 11, macOS 15
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What was expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include the command, its output, and anything the server printed.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true

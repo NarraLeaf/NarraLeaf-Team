@@ -1,0 +1,38 @@
+name: Feature request
+description: Something a NarraLeaf Team server should do and does not.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Some behaviour that reads as a gap is a decision. Read
+        [docs/security.md](https://github.com/NarraLeaf/NarraLeaf-Team/blob/main/docs/security.md)
+        and [docs/architecture.md](https://github.com/NarraLeaf/NarraLeaf-Team/blob/main/docs/architecture.md)
+        first: per-project access, per-project comment limits and the rescue
+        commands are each documented as they are.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What a team cannot do today, and what they do instead.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would solve it
+    validations:
+      required: true
+  - type: dropdown
+    id: plane
+    attributes:
+      label: Which plane it belongs to
+      description: See docs/architecture.md.
+      options:
+        - Content, a project's bytes
+        - Coordination, what is about the work
+        - Management, accounts and settings
+        - Rescue, reachable from the storage root
+        - Not sure
+    validations:
+      required: true
