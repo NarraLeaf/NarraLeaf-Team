@@ -53,26 +53,28 @@ terminal on the server or from any machine that has signed in to it.
   work on Team itself.
 - [Changelog](CHANGELOG.md), and [security policy](SECURITY.md).
 
-## Requirements
-
-The container image carries all of these. They apply to an installation from
-npm.
-
-- **Node.js 24 or newer.** Accounts are stored in Node's built-in `node:sqlite`,
-  which is available without a flag from version 24.
-- **The operating system's `tar`.** Windows has shipped one since Windows 10
-  build 17063. Linux and macOS have always had it.
-- **64-bit Linux, Windows, or Apple silicon.** These are the platforms the
-  version-control server is published for. Any other platform is refused by name.
-
-The version-control server is not installed separately. Outside a container,
-Team downloads the version it pins on first run, into a per-user cache; the
-image carries it already unpacked.
-
 ## Running a server
 
-`compose.yaml` in this repository is a complete deployment. The one value to
-change is `NLTEAM_HOSTNAME`, the name people will reach the server by.
+This takes Docker and nothing else: no checkout, no Node.js, and nothing
+downloaded on first start. Write this `compose.yaml`, changing
+`NLTEAM_HOSTNAME` to the name people will reach the server by:
+
+```yaml
+services:
+  team:
+    image: ghcr.io/narraleaf/team:0.1.0
+    restart: unless-stopped
+    environment:
+      NLTEAM_HOSTNAME: team.example.com
+    ports:
+      - "41402:41402"
+      - "41337:41337/tcp"
+      - "41337:41337/udp"
+    volumes:
+      - team:/var/lib/nlteam
+volumes:
+  team:
+```
 
 ```sh
 docker compose up -d
@@ -91,11 +93,24 @@ and the certificate fingerprint each of them compares once. Send that fingerprin
 over something other than the connection it secures. Everything after that is
 done from Studio.
 
+The same file is `compose.yaml` in this repository, with every option it accepts
+written out beside it.
+
 If the organization already holds a certificate for the name people use, Team
 presents it and nobody compares a fingerprint. See
 [a certificate you already hold](docs/operations.md#a-certificate-you-already-hold).
 
 ## Without a container
+
+An installation outside the image needs three things, and refuses to run without
+them:
+
+- **Node.js 24 or newer.** Accounts are stored in Node's built-in `node:sqlite`,
+  which is available without a flag from version 24.
+- **The operating system's `tar`.** Windows has shipped one since Windows 10
+  build 17063. Linux and macOS have always had it.
+- **64-bit Linux, Windows, or Apple silicon.** These are the platforms the
+  version-control server is published for. Any other platform is refused by name.
 
 The package is not published yet, so `nlteam` is built from a checkout:
 
@@ -104,6 +119,9 @@ git clone https://github.com/NarraLeaf/NarraLeaf-Team.git
 cd NarraLeaf-Team
 npm install && npm run build && npm link
 ```
+
+The version-control server is not installed separately: Team downloads the
+version it pins on first run, into a per-user cache.
 
 One directory holds everything a server owns, and `--root` names it, or
 `NLTEAM_ROOT` does. Every option has a matching environment variable;
