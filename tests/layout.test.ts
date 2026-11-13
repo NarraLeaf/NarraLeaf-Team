@@ -148,9 +148,8 @@ describe("renderConfig, with identity switched on", () => {
     issuer: "narraleaf-team",
     audience: ["loreserver"],
     jwksUrl: "http://127.0.0.1:41400/.well-known/jwks.json",
-    // The loopback, and not the address a client is told to sign in at. These
-    // were one value until a deployment people outside the building could reach
-    // showed what it cost: loreserver had to leave the machine and come back.
+    // Whatever `callbackUrl` answers; renderConfig writes it as given. On a
+    // server with no --hostname that is the loopback.
     callbackUrl: "https://127.0.0.1:41402",
   };
 

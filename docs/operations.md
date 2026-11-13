@@ -107,13 +107,14 @@ others follow it, and the key carries no passphrase. The pair is read before any
 port is bound, and a key that does not belong to its certificate is refused at
 startup.
 
-Team continues to issue and serve its own certificate as well. The version-control
-server asks Team who a caller is at `https://127.0.0.1`, and no certificate from
-a public authority carries the loopback address. Each connection is answered with
-one of the two: a client that asks for a name the supplied certificate covers is
-given that certificate, and everything else, including the loopback, is given
-Team's own. The fingerprint, `nlteam trust`, and clients reaching the server by
-any other name are unaffected.
+Team continues to issue and serve its own certificate as well. Each connection is
+answered with one of the two: a client that asks for a name the supplied
+certificate covers is given that certificate, and everything else, including the
+loopback, is given Team's own. The fingerprint, `nlteam trust`, and clients
+reaching the server by any other name are unaffected. The version-control server
+and Team's own reader reach the endpoint by its public name too, so `up` writes
+`<root>/tls/loreserver-trust.pem`, Team's authority followed by the supplied
+chain, and points both at it.
 
 Renewal is a restart. Replace the files and run `docker compose restart team`.
 
@@ -366,11 +367,20 @@ server has stored, then the environment, then the command line.
 
 ### The version-control server's trust anchor
 
-The version-control server asks Team who a caller is over the loopback, at
-`https://127.0.0.1`, and verifies the certificate it is shown. Team starts it
-with `SSL_CERT_FILE` naming `<root>/tls/ca.crt`, so no trust store on the server
-machine is touched. Only that process is affected, and only while Team is running
-it.
+The version-control server asks Team who a caller is at the address clients sign
+in at, because it hands that same address to every client as where its sign-in
+lives, and a client looks its session up under it. It verifies the certificate it
+is shown. Team starts it with `SSL_CERT_FILE` naming `<root>/tls/ca.crt` (or
+`<root>/tls/loreserver-trust.pem` with a supplied certificate), so no trust store
+on the server machine is touched. Only that process is affected, and only while
+Team is running it.
+
+That address has to be reachable from the server machine itself. Behind a router
+that does not loop a public address back to the machine behind it, it is not,
+and every repository call fails with `Failed to connect to rebac service`. `up`
+checks this before starting the version-control server and prints what to change:
+map the name to `127.0.0.1` in `/etc/hosts`, or under `extra_hosts` in a
+container, as `compose.yaml` does.
 
 A version-control server started this way trusts Team's authority and no other.
 Everything it reaches is on the same machine. A configuration giving it a remote

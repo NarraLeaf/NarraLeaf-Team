@@ -213,30 +213,39 @@ describe("the auth origin nobody named", () => {
 });
 
 /**
- * Where loreserver asks, which is not where anybody else is sent.
+ * Where loreserver asks — which is also where it tells every client to sign in.
  */
 describe("the address loreserver calls back at", () => {
-  it("is the loopback however this server is reached from outside", () => {
-    // loreserver is started by this process on this machine, always. Sending it
-    // out to the public address means it leaves the machine and comes back,
-    // which a router with no NAT loopback never allows - and the symptom is
-    // `Failed to connect to rebac service` on every project create, which names
-    // neither the router nor the setting.
-    for (const hostnames of [[], ["team.example.com"], ["203.0.113.7"]]) {
-      expect(callbackUrl(identityConfig({ hostnames }))).toBe("https://127.0.0.1:41402");
+  it("is the address clients sign in at, however this server is reached", () => {
+    // loreserver hands this value to every client as where its sign-in lives,
+    // and a client looks its session up under it. The loopback here meant that
+    // a client which signed in at the public name was refused every repository
+    // call with `No token stored` (measured 2026-11-13 with --hostname localhost).
+    for (const hostnames of [[], ["team.example.com"], ["203.0.113.7"], ["localhost"]]) {
+      const config = identityConfig({ hostnames });
+      expect(callbackUrl(config)).toBe(authUrl(config));
     }
+    expect(callbackUrl(identityConfig({ hostnames: ["team.example.com"] }))).toBe(
+      "https://team.example.com:41402",
+    );
+  });
+
+  it("is never the loopback once a public name is given", () => {
+    expect(callbackUrl(identityConfig({ hostnames: ["team.example.com"] }))).not.toContain("127.0.0.1");
   });
 
   it("follows the TLS port, because that is the listener it is asking", () => {
     expect(callbackUrl(identityConfig({ authTlsPort: 9443 }))).toBe("https://127.0.0.1:9443");
+    expect(callbackUrl(identityConfig({ hostnames: ["team.example.com"], authTlsPort: 9443 }))).toBe(
+      "https://team.example.com:9443",
+    );
   });
 
   it("is a name the endpoint's certificate carries, or loreserver would refuse it", () => {
-    // endpointNames writes the loopback entries on every issue, so this address
-    // verifies against Team's own authority exactly as the public name does.
-    const names = endpointNames(["team.example.com"]);
+    const names = endpointNames(["team.example.com", "203.0.113.7"]);
 
+    expect(names.dnsNames).toContain("team.example.com");
+    expect(names.ipAddresses).toContain("203.0.113.7");
     expect(names.ipAddresses).toContain("127.0.0.1");
-    expect(hostOf(identityConfig().authOrigin)).toBe("127.0.0.1");
   });
 });

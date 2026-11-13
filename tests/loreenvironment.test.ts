@@ -74,6 +74,32 @@ describe("the environment the version control library is given", () => {
     expect(prepared.withoutAuthority).toBeUndefined();
   });
 
+  it("trusts the bundle up wrote when a certificate was supplied", async () => {
+    // This process reaches its own sign-in endpoint by the public name, which
+    // is answered with the supplied certificate: the authority alone was
+    // measured to fail with `tlsv1 alert unknown ca` on every read.
+    const root = await temporaryRoot();
+    await withAuthority(root);
+    const bundle = join(tlsLayout(root).tlsDir, "loreserver-trust.pem");
+    await writeFile(bundle, "-----BEGIN CERTIFICATE-----\n", "utf8");
+    const env: NodeJS.ProcessEnv = {};
+
+    const prepared = prepareLoreEnvironment(root, env, bundle);
+
+    expect(prepared.trustAnchor).toBe(bundle);
+    expect(env[TRUST_ANCHOR_VARIABLE]).toBe(bundle);
+  });
+
+  it("falls back to the authority when the bundle named is not there", async () => {
+    const root = await temporaryRoot();
+    const caCertPath = await withAuthority(root);
+    const env: NodeJS.ProcessEnv = {};
+
+    const prepared = prepareLoreEnvironment(root, env, join(root, "missing.pem"));
+
+    expect(prepared.trustAnchor).toBe(caCertPath);
+  });
+
   it("leaves an operator's own settings exactly as they were", async () => {
     // Somebody who pointed either of these somewhere has a reason. Team
     // replacing it silently would be the same class of surprise this module

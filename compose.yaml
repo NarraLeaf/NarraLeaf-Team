@@ -35,6 +35,13 @@ services:
       # NLTEAM_TLS_CERT: /etc/nlteam/tls/fullchain.pem
       # NLTEAM_TLS_KEY: /etc/nlteam/tls/privkey.pem
 
+    # The same name as NLTEAM_HOSTNAME, pointed at this container. loreserver
+    # inside connects to the address clients sign in at, and a router that does
+    # not loop a public address back to the machine behind it would leave every
+    # repository call failing. Change it when you change the hostname.
+    extra_hosts:
+      - "team.example.com:127.0.0.1"
+
     ports:
       # Where people sign in and where Studio holds its session.
       - "41402:41402"

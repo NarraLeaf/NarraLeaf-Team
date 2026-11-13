@@ -250,27 +250,35 @@ export function jwksUrl(teamPort: number, host = "127.0.0.1"): string {
 }
 
 /**
- * Where loreserver asks Team who a caller is.
+ * Where loreserver asks Team who a caller is — and, in the same breath, where it
+ * tells every client its sign-in lives. It is {@link authUrl}, and it has to be.
  *
- * The loopback, always, and deliberately not {@link authUrl}. These were one
- * value until it was measured on a server people outside the building could
- * reach, and the two readers of it want different things:
+ * loreserver has one setting for this, `[environment.endpoint] auth_url`, and
+ * two readers of it:
  *
- *   - A **client** needs the address it can reach this server at, which is what
- *     an operator writes with `--auth-origin` or `--hostname`.
- *   - **loreserver** runs on this machine, started and supervised by this
- *     process, and there is no arrangement in which it does not. Sending it out
- *     to the public address means it leaves the machine and comes back, which a
- *     router that does not do NAT loopback never allows — and the symptom is
- *     `INTERNAL: Failed to connect to rebac service` on every project create,
- *     which names neither the router nor this setting.
+ *   - **loreserver itself** connects to it to ask about a caller.
+ *   - **Every client** is handed it when it connects, and looks its stored
+ *     session up under that address. A client that signed in at
+ *     `https://team.example.com:41402` and is then told the sign-in lives at
+ *     `https://127.0.0.1:41402` finds no session and refuses every repository
+ *     call with `connecting to remote: No token stored` — after a sign-in that
+ *     succeeded, which names neither this setting nor the address.
  *
- * So it asks next door. The endpoint's certificate always carries `127.0.0.1`
- * — see `endpointNames` in src/tls/authority.ts, where the loopback entries are
- * written on every issue — so loreserver verifies it against Team's authority
- * exactly as it would the public name. This is the same journey the JWKS fetch
- * above already made, for the same reason.
+ * This used to be the loopback, for loreserver's sake: sending it out to the
+ * public address means it leaves the machine and comes back, which a router
+ * with no NAT loopback never allows (`Failed to connect to rebac service` on
+ * every project create). Measured on 2026-11-13, the loopback cost more than
+ * that: with any `--hostname` but `127.0.0.1` — every real deployment — signing
+ * in worked and nothing after it did. A client has to be told the address it
+ * signed in at, so the public address wins, and the router case is answered on
+ * the machine instead: the public name is made to resolve to this machine for
+ * loreserver (the container image maps it, see compose.yaml), and `up` checks
+ * the address is reachable from here before starting loreserver and says what
+ * to change when it is not (src/loreserver/reach.ts).
+ *
+ * The endpoint's certificate carries every `--hostname`, so loreserver verifies
+ * this address against Team's authority as a client would.
  */
 export function callbackUrl(config: IdentityConfig): string {
-  return `https://127.0.0.1:${config.authTlsPort}`;
+  return authUrl(config);
 }

@@ -131,13 +131,12 @@ export interface LoreserverAuth {
   /**
    * Where loreserver asks Team who a caller is. Rendered as `auth_url`.
    *
-   * Not the address a client is told to sign in at, though the two were one
-   * value once. loreserver connects here over gRPC, forwarding the caller's own
-   * `authorization` header, before it lets anybody near a repository, and it
-   * verifies the certificate, refusing an unknown authority with `tlsv1 alert
-   * unknown ca`. Because it runs on the same machine as Team — always — this
-   * is the loopback, and `callbackUrl` in src/identity/config.ts says what
-   * happened on the deployment where it was not.
+   * The address a client is told to sign in at, because loreserver hands this
+   * value to every client as exactly that. loreserver also connects here over
+   * gRPC, forwarding the caller's own `authorization` header, before it lets
+   * anybody near a repository, and it verifies the certificate, refusing an
+   * unknown authority with `tlsv1 alert unknown ca`. `callbackUrl` in
+   * src/identity/config.ts says why it is no longer the loopback.
    */
   readonly callbackUrl: string;
 }

@@ -35,6 +35,8 @@ import {
 import { waitForHealth, healthCheckUrl } from "./loreserver/health.js";
 import { verifyBinaryDigest, verifyBinaryVersion } from "./loreserver/identify.js";
 import { ensureInstalled } from "./loreserver/install.js";
+import { canReach, unreachableNotice } from "./loreserver/reach.js";
+import { loreserverTrustFile } from "./loreserver/trust.js";
 import {
   instanceLayout,
   writeInstance,
@@ -50,7 +52,7 @@ import { createTeamSocket, type TeamSocket } from "./team/endpoint.js";
 import { projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
 import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
-import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
+import { ensureCertificates } from "./tls/authority.js";
 import { readSuppliedCertificate, type SuppliedCertificate } from "./tls/supplied.js";
 import { trustCommandFor } from "./tls/trust.js";
 import { VERSION } from "./version.js";
@@ -132,14 +134,16 @@ function describeError(error: unknown): string {
  * only for as long as Team is running it.
  *
  * The one thing it costs is that loreserver, while Team supervises it, trusts
- * Team's authority and no other. Everything a Team server-configured loreserver reaches
- * is on this machine — the JWKS over the loopback in plain HTTP, and this
- * endpoint — so there is nothing else for it to verify. A configuration that
+ * Team's authority and no other — plus, where an operator supplied a
+ * certificate, the chain in that file, since loreserver now reaches this
+ * endpoint by its public name and may be shown that certificate. Everything a
+ * Team-configured loreserver reaches is Team — the JWKS over the loopback in
+ * plain HTTP, and this endpoint — so there is nothing else for it to verify. A configuration that
  * gave it a remote store or a telemetry endpoint over https would need the
  * public roots back, and this is the line that would have to change.
  */
-function loreserverTrustAnchor(authority: TeamAuthority): Record<string, string> {
-  return { SSL_CERT_FILE: authority.layout.caCertPath };
+function loreserverTrustAnchor(trustFile: string): Record<string, string> {
+  return { SSL_CERT_FILE: trustFile };
 }
 
 /** What loreserver has to be told when identity is switched on. */
@@ -150,9 +154,10 @@ function loreserverAuth(config: IdentityConfig): LoreserverAuth {
     // what a token carries. A token is accepted when its `aud` array holds it.
     audience: [config.audience],
     jwksUrl: jwksUrl(config.teamPort),
-    // The loopback, not the address clients are given. loreserver is next door,
-    // and src/identity/config.ts says what sending it out of the building and
-    // back cost on the first deployment anybody outside could reach.
+    // The address clients are given, because loreserver hands this same value
+    // to every client as where its sign-in lives. src/identity/config.ts says
+    // why it cannot be the loopback, and src/loreserver/reach.ts covers the
+    // router that will not loop it back.
     callbackUrl: callbackUrl(config),
   };
 }
@@ -301,7 +306,18 @@ export async function up(
     // what each one costs to get wrong. Deliberately not left to the reader's
     // first pass: a decision made inside a loop is a decision that has to win a
     // race, and the one it kept losing looked exactly like a permission error.
-    const lore = prepareLoreEnvironment(options.root);
+    //
+    // Both Lore clients on this machine — loreserver, and this process reading
+    // its own repositories — reach the sign-in endpoint by its public name (see
+    // callbackUrl), which is answered with the supplied certificate where one
+    // covers it. So both trust one file: Team's authority, plus that chain.
+    const trustFile = await loreserverTrustFile(
+      certificates.authority.layout.tlsDir,
+      certificates.authority.layout.caCertPath,
+      certificates.authority.pem,
+      supplied?.certPem,
+    );
+    const lore = prepareLoreEnvironment(options.root, process.env, trustFile);
     if (lore.credentials !== undefined) {
       stdout(`this server signs in to its own repositories through ${lore.credentials}\n`);
     }
@@ -529,11 +545,17 @@ export async function up(
           .join(", ")}\n`,
       );
       stdout(
-        `loreserver asks about callers at ${auth.callbackUrl}, next door rather than\n` +
-          `      round by that address, and is given ${
-            certificates.authority.layout.caCertPath
-          }\n      as the only authority it trusts while Team runs it\n`,
+        `loreserver asks about callers at ${auth.callbackUrl}, the same address, and is given ${
+          certificates.authority.layout.caCertPath
+        }\n      as the only authority it trusts while Team runs it\n`,
       );
+      // Asked before loreserver starts, so a router that will not loop the
+      // public address back is a sentence now rather than a rebac failure on
+      // the first project create. A warning, not a refusal: the name may come
+      // to resolve (a DNS change, a hosts entry) without this process restarting.
+      if (!(await canReach(auth.callbackUrl))) {
+        stderr(unreachableNotice(auth.callbackUrl));
+      }
     }
 
     // Only a failure that ends supervision should cut the health wait short; a
@@ -548,7 +570,7 @@ export async function up(
       // See the note on loreserverTrustAnchor: without this, loreserver cannot
       // reach the https `auth_url` it was configured with, and every repository
       // access fails.
-      ...(auth === undefined ? {} : { env: loreserverTrustAnchor(certificates.authority) }),
+      ...(auth === undefined ? {} : { env: loreserverTrustAnchor(trustFile) }),
       onEvent: (event) => {
         switch (event.kind) {
           case "started":
