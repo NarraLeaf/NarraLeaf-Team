@@ -24,7 +24,7 @@ import { IdentityEndpoint } from "./identity/endpoint.js";
 import { discoveryDocument, type DiscoverySource } from "./identity/discovery.js";
 import { KeyStore } from "./identity/keys.js";
 import { identityLayout } from "./identity/layout.js";
-import { namedTokenLifetimes, persistIdentity } from "./identity/settings.js";
+import { storedRetentionDays, namedTokenLifetimes, persistIdentity } from "./identity/settings.js";
 import { countUsers } from "./identity/users.js";
 import { prepareLoreEnvironment } from "./lore/environment.js";
 import {
@@ -378,6 +378,8 @@ export async function up(
     // snapshotted through the same working copies and tokens the reader uses.
     const authorities = new ProjectAuthorities({
       database,
+      // Read each pass, so an operator's change reaches the next one rather than the next start.
+      retainMs: () => (database === undefined ? undefined : storedRetentionDays(database) * 24 * 60 * 60_000),
       open: async (projectId) => {
         const options = await projects.workingCopyOptions(projectId);
         return options === undefined ? undefined : openProjectFiles(options);

@@ -80,6 +80,8 @@ describe("the settings surface", () => {
       "name",
       "collaboration",
       "repeat publishes",
+      "who makes projects",
+      "edit log kept (days)",
       "sign-in token",
       "repository token",
     ]);

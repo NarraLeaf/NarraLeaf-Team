@@ -17,6 +17,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { integerColumn, optionalTextColumn, type Row } from "../identity/database.js";
 import { eachUser, findUserById, type UserRecord } from "../identity/users.js";
 import { visibleProjectIds } from "../projects/members.js";
+import { isSnapshotMessage, isVersion } from "../authority/versions.js";
 import type { TeamActivity, TeamActivityDay, TeamActivityKind } from "../team/protocol.js";
 
 /** The longest summary kept: a line, not a document. */
@@ -80,6 +81,37 @@ export function accountForAuthor(database: DatabaseSync, author: string | undefi
   return byName.length === 1 ? byName[0] : undefined;
 }
 
+/** How far apart two edits may be and still be one stretch of work. */
+export const EDIT_STRETCH_MS = 30 * 60_000;
+
+/**
+ * Count one edit an account made to a team project's documents.
+ *
+ * Folded into the account's latest `edit` row for the project when that row is less than
+ * {@link EDIT_STRETCH_MS} old - its count goes up and its time moves to now - and a new row
+ * otherwise. A timeline then says "made 42 edits" once rather than forty-two times, and a
+ * contribution graph counts stretches of work, as it counts commits, rather than keystrokes.
+ */
+export function recordEdit(database: DatabaseSync, entry: { accountId: string; projectId: string; at?: number }): void {
+  const at = entry.at ?? Date.now();
+  const latest = database
+    .prepare(
+      `SELECT id FROM activity WHERE account_id = ? AND project_id = ? AND kind = 'edit' AND at >= ?
+        ORDER BY at DESC LIMIT 1`,
+    )
+    .get(entry.accountId, entry.projectId, at - EDIT_STRETCH_MS) as { id: number } | undefined;
+  if (latest !== undefined) {
+    database.prepare("UPDATE activity SET count = count + 1, at = ? WHERE id = ?").run(at, latest.id);
+    return;
+  }
+  database
+    .prepare(
+      `INSERT INTO activity (account_id, actor_label, project_id, kind, ref, summary, private, at, count)
+       VALUES (?, NULL, ?, 'edit', NULL, NULL, 0, ?, 1)`,
+    )
+    .run(entry.accountId, entry.projectId, at);
+}
+
 /** Record commits Team has read, once each. */
 export function recordCommits(
   database: DatabaseSync,
@@ -88,6 +120,9 @@ export function recordCommits(
 ): number {
   let added = 0;
   for (const revision of revisions) {
+    // A version the project authority wrote is under the account the server reads as, whoever did
+    // the work: the work is counted as edits, and a version saved by hand as a `version` row.
+    if (isSnapshotMessage(revision.message) || isVersion(database, projectId, revision.id)) continue;
     const account = accountForAuthor(database, revision.by);
     const result = database
       .prepare(
@@ -131,6 +166,7 @@ function toActivity(database: DatabaseSync, row: Row): TeamActivity {
   const project = optionalTextColumn(row, "project_id");
   const ref = optionalTextColumn(row, "ref");
   const summary = optionalTextColumn(row, "summary");
+  const count = row["count"] === undefined || row["count"] === null ? 1 : Number(row["count"]);
   return {
     id: integerColumn(row, "id"),
     kind: (optionalTextColumn(row, "kind") ?? "comment") as TeamActivityKind,
@@ -140,6 +176,7 @@ function toActivity(database: DatabaseSync, row: Row): TeamActivity {
     ...(account === undefined ? {} : { account: account.username }),
     actor: account?.displayName || account?.username || optionalTextColumn(row, "actor_label") || "?",
     at: integerColumn(row, "at"),
+    ...(count === 1 ? {} : { count }),
   };
 }
 

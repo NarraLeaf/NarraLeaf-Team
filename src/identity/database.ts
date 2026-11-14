@@ -760,6 +760,33 @@ const MIGRATIONS: readonly Migration[] = [
        ) STRICT`,
     ],
   },
+  {
+    version: 19,
+    description: "history versions with who did the work, edit stretches in activity, and per-project version roles",
+    statements: [
+      // Every history version the project authority committed. The commit itself is made under one
+      // account (the one the server reads the repository as), so this is where who saved it and
+      // whose edits it holds are kept. `participants` is a JSON array of account ids.
+      `CREATE TABLE doc_versions (
+         project_id   TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         revision     TEXT    NOT NULL,
+         seq          INTEGER NOT NULL,
+         from_seq     INTEGER NOT NULL,
+         label        TEXT,
+         saved_by     TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         auto         INTEGER NOT NULL,
+         participants TEXT    NOT NULL,
+         at           INTEGER NOT NULL,
+         PRIMARY KEY (project_id, revision)
+       ) STRICT`,
+      "CREATE INDEX doc_versions_by_seq ON doc_versions (project_id, seq)",
+      // How many edits an `edit` row stands for; one for every other kind.
+      "ALTER TABLE activity ADD COLUMN count INTEGER NOT NULL DEFAULT 1",
+      // The least role that may save a version, and restore one: 'editor' or 'owner'.
+      "ALTER TABLE projects ADD COLUMN save_role TEXT NOT NULL DEFAULT 'editor'",
+      "ALTER TABLE projects ADD COLUMN restore_role TEXT NOT NULL DEFAULT 'editor'",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

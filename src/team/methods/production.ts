@@ -26,6 +26,7 @@ import {
 } from "../../collab/webhooks.js";
 import { findUser, isOperator, type UserRecord } from "../../identity/users.js";
 import { findProject } from "../../projects/registry.js";
+import { projectRole } from "../../projects/members.js";
 import {
   flag,
   MethodError,
@@ -306,5 +307,88 @@ export function productionMethods(): TeamMethod[] {
         return { status };
       },
     },
+    {
+      name: TEAM_METHODS.projectsWebhooksList,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        const projectId = ownedProject(context, paramsObject(params));
+        return {
+          webhooks: listWebhooks(context.options.database)
+            .filter((hook) => hook.projectId === projectId)
+            .map((hook) => webhookView(context.options.database, hook)),
+        };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsWebhooksCreate,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const projectId = ownedProject(context, read);
+        const events = read["events"];
+        if (!Array.isArray(events) || !events.every((e) => (TEAM_WEBHOOK_EVENTS as readonly unknown[]).includes(e))) {
+          throw new MethodError("bad-params", `events has to be a list of: ${TEAM_WEBHOOK_EVENTS.join(", ")}`);
+        }
+        let hook;
+        try {
+          hook = createWebhook(context.options.database, context.user, {
+            projectId,
+            url: requiredText(read, "url", 2048),
+            format: read["format"] === undefined ? "json" : oneOf(read, "format", TEAM_WEBHOOK_FORMATS),
+            events: events as TeamWebhookEvent[],
+          });
+        } catch (error) {
+          refused(error);
+        }
+        return { webhook: webhookView(context.options.database, hook), secret: hook.secret };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsWebhooksDelete,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        const hook = ownedWebhook(context, paramsObject(params));
+        deleteWebhook(context.options.database, hook.id);
+        return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsWebhooksTest,
+      capability: "webhooks",
+      handle: async (params: unknown, context: MethodContext) => {
+        const hook = ownedWebhook(context, paramsObject(params));
+        const status = await deliverOne(context.options.database, hook, {
+          type: hook.events[0] ?? "commit",
+          projectId: hook.projectId ?? "-",
+          actor: context.account.username,
+          summary: `test from ${context.account.username}`,
+        });
+        return { status };
+      },
+    },
   ];
+}
+
+/**
+ * The project a call names, where the caller owns it. A server operator counts as owning every
+ * project, as everywhere else.
+ */
+function ownedProject(context: MethodContext, read: Record<string, unknown>): string {
+  const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
+  if (!isOperator(context.user.groups) && projectRole(context.options.database, projectId, context.user) !== "owner") {
+    throw new MethodError("refused", "only this project's owners manage its webhooks");
+  }
+  return projectId;
+}
+
+/** One of a project's webhooks, where the caller owns the project. A server-wide one is the operators'. */
+function ownedWebhook(context: MethodContext, read: Record<string, unknown>) {
+  const hook = findWebhook(context.options.database, requiredText(read, "webhook", ID_LIMIT));
+  if (hook === undefined || hook.projectId === undefined || !projectVisible(context, hook.projectId)) {
+    throw new MethodError("not-found", "there is no webhook of that id");
+  }
+  if (!isOperator(context.user.groups) && projectRole(context.options.database, hook.projectId, context.user) !== "owner") {
+    throw new MethodError("refused", "only this project's owners manage its webhooks");
+  }
+  return hook;
 }

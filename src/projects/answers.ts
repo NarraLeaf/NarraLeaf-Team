@@ -18,6 +18,8 @@
  * Nothing here starts a repository read or waits on one. Whatever the reader has
  * landed so far is what is served.
  */
+import { versionRoles } from "../authority/versions.js";
+import type { TeamVersionRole } from "../team/protocol.js";
 import { audienceHosts, dataRemoteUrl } from "../identity/config.js";
 import { findUserById, isOperator, type UserRecord } from "../identity/users.js";
 import type { TeamService } from "../team/service.js";
@@ -52,6 +54,9 @@ export interface ProjectBody {
    * clone is still running.
    */
   readonly history?: RevisionView;
+  /** The least role that may save a version of it, and restore one. */
+  readonly saveRole: TeamVersionRole;
+  readonly restoreRole: TeamVersionRole;
   /**
    * The role the account asking has in this project, so a client can leave out
    * what that role cannot do. Absent only where nobody in particular asked.
@@ -110,6 +115,7 @@ export function projectBody(
   // Whatever the reader has landed, and nothing is asked of it here. A project
   // it has not reached has no history, which is left out rather than filled in.
   const history = options.readings?.get(project.id)?.history;
+  const roles = versionRoles(database, project.id);
   return {
     id: project.id,
     name: project.name,
@@ -121,6 +127,8 @@ export function projectBody(
     // at is a fact about the deployment, not about the project.
     remote: `${dataRemoteUrl(audienceHosts(config)[0] ?? "127.0.0.1", config.dataPort)}/${project.name}`,
     ...(history === undefined ? {} : { history }),
+    saveRole: roles.save,
+    restoreRole: roles.restore,
     ...(viewer === undefined ? {} : roleField(projectRole(database, project.id, viewer))),
   };
 }

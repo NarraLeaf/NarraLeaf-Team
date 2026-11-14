@@ -101,6 +101,58 @@ export function isPublishLineageRule(value: string): value is PublishLineageRule
   return PUBLISH_LINEAGE_RULES.some((rule) => rule === value.trim());
 }
 
+/** The key that says who may make a project on this server. */
+export const PROJECT_CREATE_KEY = "project.create_by";
+
+/**
+ * Who may make a project: every account (`everyone`, a small team's default), or the operators
+ * alone (`admins`), for a server where projects are set up for people rather than by them.
+ */
+export const PROJECT_CREATORS = ["everyone", "admins"] as const;
+export type ProjectCreators = (typeof PROJECT_CREATORS)[number];
+export const DEFAULT_PROJECT_CREATORS: ProjectCreators = "everyone";
+
+export class InvalidProjectCreatorsError extends Error {
+  constructor(value: string) {
+    super(`${PROJECT_CREATE_KEY} cannot be "${value}". It is one of ${PROJECT_CREATORS.join(" or ")}.`);
+    this.name = "InvalidProjectCreatorsError";
+  }
+}
+
+export function isProjectCreators(value: string): value is ProjectCreators {
+  return PROJECT_CREATORS.some((word) => word === value.trim());
+}
+
+/** The key that says how long a team project's applied edits are kept once a version holds them. */
+export const DOCUMENT_RETENTION_KEY = "documents.retain_days";
+
+/**
+ * Days. Past this, a Studio that has been away starts again from the last saved version, and an
+ * offline edit based on something older comes back as a conflict, because what it collides with
+ * can no longer be checked.
+ */
+export const DEFAULT_DOCUMENT_RETENTION_DAYS = 30;
+export const MINIMUM_DOCUMENT_RETENTION_DAYS = 1;
+export const MAXIMUM_DOCUMENT_RETENTION_DAYS = 3650;
+
+export class InvalidDocumentRetentionError extends Error {
+  constructor(value: string) {
+    super(
+      `${DOCUMENT_RETENTION_KEY} is a whole number of days from ${MINIMUM_DOCUMENT_RETENTION_DAYS} ` +
+        `to ${MAXIMUM_DOCUMENT_RETENTION_DAYS}, not "${value}".`,
+    );
+    this.name = "InvalidDocumentRetentionError";
+  }
+}
+
+/** The days a value names, or undefined for one that is not a whole number in range. */
+export function readRetentionDays(value: string): number | undefined {
+  const text = value.trim().replace(/d$/i, "");
+  if (!/^\d+$/.test(text)) return undefined;
+  const days = Number(text);
+  return days >= MINIMUM_DOCUMENT_RETENTION_DAYS && days <= MAXIMUM_DOCUMENT_RETENTION_DAYS ? days : undefined;
+}
+
 /** The key that says whether this deployment is a collaboration server at all. */
 export const COLLABORATION_KEY = "server.collaboration";
 
@@ -170,6 +222,8 @@ export const SETTING_KEYS = [
   SERVER_NAME_KEY,
   COLLABORATION_KEY,
   PUBLISH_LINEAGE_KEY,
+  PROJECT_CREATE_KEY,
+  DOCUMENT_RETENTION_KEY,
   SIGN_IN_LIFETIME_KEY,
   REPOSITORY_LIFETIME_KEY,
 ] as const;
@@ -212,7 +266,9 @@ export type SettingChange =
   | { readonly key: LifetimeKey; readonly seconds: number }
   | { readonly key: typeof SERVER_NAME_KEY; readonly name: string }
   | { readonly key: typeof PUBLISH_LINEAGE_KEY; readonly rule: PublishLineageRule }
-  | { readonly key: typeof COLLABORATION_KEY; readonly mode: CollaborationMode };
+  | { readonly key: typeof COLLABORATION_KEY; readonly mode: CollaborationMode }
+  | { readonly key: typeof PROJECT_CREATE_KEY; readonly creators: ProjectCreators }
+  | { readonly key: typeof DOCUMENT_RETENTION_KEY; readonly days: number };
 
 /**
  * The one thing about the repository lifetime that is not obvious from its
@@ -432,6 +488,32 @@ export function setCollaboration(database: DatabaseSync, mode: string): Collabor
   const stored = mode.trim() as CollaborationMode;
   writeSetting(database, COLLABORATION_KEY, stored);
   return stored;
+}
+
+/** Who may make a project, as it stands now. An unreadable value is the default. */
+export function storedProjectCreators(database: DatabaseSync): ProjectCreators {
+  const stored = readSetting(database, PROJECT_CREATE_KEY);
+  return stored !== undefined && isProjectCreators(stored) ? (stored.trim() as ProjectCreators) : DEFAULT_PROJECT_CREATORS;
+}
+
+export function setProjectCreators(database: DatabaseSync, value: string): ProjectCreators {
+  if (!isProjectCreators(value)) throw new InvalidProjectCreatorsError(value);
+  const stored = value.trim() as ProjectCreators;
+  writeSetting(database, PROJECT_CREATE_KEY, stored);
+  return stored;
+}
+
+/** How many days applied edits are kept once saved, as it stands now. */
+export function storedRetentionDays(database: DatabaseSync): number {
+  const stored = readSetting(database, DOCUMENT_RETENTION_KEY);
+  return (stored === undefined ? undefined : readRetentionDays(stored)) ?? DEFAULT_DOCUMENT_RETENTION_DAYS;
+}
+
+export function setRetentionDays(database: DatabaseSync, value: string): number {
+  const days = readRetentionDays(value);
+  if (days === undefined) throw new InvalidDocumentRetentionError(value);
+  writeSetting(database, DOCUMENT_RETENTION_KEY, String(days));
+  return days;
 }
 
 /** The two lifetimes as they stand: stored where set, default where not. */

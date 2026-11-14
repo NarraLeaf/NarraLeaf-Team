@@ -13,7 +13,10 @@
  * restoring one are for the roles that open the repository (owner, editor),
  * because those are the roles whose edits reach the repository either way.
  */
-import { mayOpenRepository } from "../../projects/members.js";
+import { mayOpenRepository, projectRole } from "../../projects/members.js";
+import { recordActivity, recordEdit } from "../../collab/activity.js";
+import { emitWebhookEvent } from "../../collab/webhooks.js";
+import { versionRoles } from "../../authority/versions.js";
 import type { DocIntent } from "../../authority/manager.js";
 import { ProjectAuthority } from "../../authority/projectAuthority.js";
 import { isProjectDocumentPath, isTeamFilePath } from "../../../studio-kernel/vendor/kernel.js";
@@ -242,7 +245,14 @@ export function docMethods(): TeamMethod[] {
           ...(derived === undefined ? {} : { derived }),
           ...(basedOn === undefined ? {} : { basedOn }),
         };
-        return authoritiesOf(context).intent(projectId, intent);
+        const authorities = authoritiesOf(context);
+        const before = authorities.head(projectId).seq;
+        const answer = await authorities.intent(projectId, intent);
+        // A resend answers with the effect it already had; only a new one is counted.
+        if (answer.kind === "effect" && answer.effect.seq > before) {
+          recordEdit(context.options.database, { accountId: context.user.id, projectId });
+        }
+        return answer;
       },
     },
     {
@@ -251,12 +261,18 @@ export function docMethods(): TeamMethod[] {
       handle: async (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const projectId = editableProject(context, read);
+        requireVersionRole(context, projectId, "save");
         const label = optionalText(read, "label", LABEL_LIMIT);
+        let saved;
         try {
-          return await authoritiesOf(context).snapshot(projectId, label);
+          saved = await authoritiesOf(context).snapshot(projectId, label, context.user.id);
         } catch (error) {
           throw new MethodError("unavailable", `the version could not be saved: ${messageOf(error)}`);
         }
+        if (saved.revision !== undefined) {
+          announceVersion(context, projectId, saved.revision, label?.trim() || undefined, "saved");
+        }
+        return saved;
       },
     },
     {
@@ -265,18 +281,61 @@ export function docMethods(): TeamMethod[] {
       handle: async (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const projectId = editableProject(context, read);
+        requireVersionRole(context, projectId, "restore");
         const revision = requiredText(read, "revision", ANCHOR_FIELD_LIMIT);
+        let restored;
         try {
-          return await authoritiesOf(context).restore(projectId, revision, {
+          restored = await authoritiesOf(context).restore(projectId, revision, {
             accountId: context.user.id,
             by: context.account.displayName || context.account.username,
           });
         } catch (error) {
           throw new MethodError("unavailable", `that version could not be restored: ${messageOf(error)}`);
         }
+        announceVersion(context, projectId, restored.revision, `Restored ${revision.slice(0, 12)}`, "restored");
+        return restored;
       },
     },
   ];
+}
+
+/** Refuse a member whose role is below what the project's owners set for saving or restoring. */
+function requireVersionRole(context: MethodContext, projectId: string, doing: "save" | "restore"): void {
+  const wanted = versionRoles(context.options.database, projectId)[doing];
+  if (wanted === "owner" && projectRole(context.options.database, projectId, context.user) !== "owner") {
+    throw new MethodError(
+      "refused",
+      doing === "save" ? "only this project's owners save versions of it" : "only this project's owners restore its versions",
+    );
+  }
+}
+
+/** A version saved by hand, or restored, is news: a timeline row and a webhook event. */
+function announceVersion(
+  context: MethodContext,
+  projectId: string,
+  revision: string,
+  label: string | undefined,
+  how: "saved" | "restored",
+): void {
+  const database = context.options.database;
+  recordActivity(database, {
+    accountId: context.user.id,
+    projectId,
+    kind: "version",
+    ref: revision,
+    ...(label === undefined ? {} : { summary: label }),
+  });
+  const actor = context.account.displayName || context.account.username;
+  emitWebhookEvent(database, {
+    type: "version",
+    projectId,
+    actor: context.account.username,
+    ref: revision,
+    summary: how === "restored"
+      ? `${actor} restored an earlier version${label === undefined ? "" : `: ${label}`}`
+      : `${actor} saved a version${label === undefined ? "" : `: ${label}`}`,
+  });
 }
 
 function authoritiesOf(context: MethodContext) {

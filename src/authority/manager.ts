@@ -32,6 +32,7 @@ import {
   type SnapshotMark,
   type StoredEffect,
 } from "./store.js";
+import { recordVersion } from "./versions.js";
 
 export type { LoadedProject } from "./projectFiles.js";
 
@@ -89,7 +90,7 @@ export interface ProjectAuthoritiesOptions {
    * Studio that has been away starts again from the last saved version, and an offline edit based
    * on something older is refused - its collisions can no longer be checked. Default thirty days.
    */
-  readonly retainMs?: number;
+  readonly retainMs?: number | (() => number | undefined);
 }
 
 /** What a Studio asked for. `document`, `op` and `derived` are Studio's. */
@@ -212,6 +213,11 @@ export class ProjectAuthorities {
     this.#options = options;
   }
 
+  #retainMs(): number {
+    const value = typeof this.#options.retainMs === "function" ? this.#options.retainMs() : this.#options.retainMs;
+    return value ?? 30 * 24 * 60 * 60_000;
+  }
+
   #now(): number {
     return this.#options.clock?.() ?? Date.now();
   }
@@ -255,6 +261,46 @@ export class ProjectAuthorities {
     loaded.lastTouch = this.#now();
     // A file held only as a note is as the last saved version has it: that revision is where to read it.
     return { seq: loaded.authority.seq, revision: loaded.base.revision, content: loaded.authority.contentOf(path) };
+  }
+
+  /** How every project held in memory stands, for an operator. */
+  status(): Array<{
+    projectId: string;
+    seq: number;
+    snapshotSeq: number;
+    lastSnapshotAt: number;
+    lastEditAt: number;
+    owedFiles: number;
+    unreadable: number;
+    documents: number;
+  }> {
+    return [...this.#loaded.entries()].map(([projectId, loaded]) => ({
+      projectId,
+      seq: loaded.authority.seq,
+      snapshotSeq: loaded.snapshotSeq,
+      lastSnapshotAt: loaded.lastSnapshot,
+      lastEditAt: loaded.lastEdit,
+      owedFiles: loaded.owedBytes.size,
+      unreadable: loaded.unreadable.length,
+      documents: loaded.authority.paths().length,
+    }));
+  }
+
+  /**
+   * Every file the project holds now that the authority keeps, with its size: documents and whole
+   * files, and the ones held only as a note of their digest. Undefined for no such project.
+   */
+  async currentFiles(projectId: string): Promise<{ seq: number; revision: string | null; files: Array<{ path: string; size: number; note: boolean }> } | undefined> {
+    const loaded = await this.#ensure(projectId);
+    if (loaded === undefined) return undefined;
+    loaded.lastTouch = this.#now();
+    const files: Array<{ path: string; size: number; note: boolean }> = [];
+    for (const path of loaded.authority.paths()) {
+      const content = loaded.authority.contentOf(path);
+      if (content === undefined) continue;
+      files.push("bytes" in content ? { path, size: content.bytes.length, note: false } : { path, size: content.note.size, note: true });
+    }
+    return { seq: loaded.authority.seq, revision: loaded.base.revision, files };
   }
 
   /** Documents the authority could not read when it loaded the project. */
@@ -377,9 +423,13 @@ export class ProjectAuthorities {
     return this.#options.collectBytes?.(projectId, owed.transferId);
   }
 
-  async snapshot(projectId: string, label?: string): Promise<{ revision?: string; seq: number }> {
+  /**
+   * Save what the project holds now as a history version. `savedBy` is the account that asked, for
+   * a version saved by hand; one the server saves on its own names nobody and is marked automatic.
+   */
+  async snapshot(projectId: string, label?: string, savedBy?: string): Promise<{ revision?: string; seq: number }> {
     const previous = this.#snapshotting.get(projectId) ?? Promise.resolve();
-    const run = previous.catch(() => undefined).then(() => this.#snapshotOnce(projectId, label));
+    const run = previous.catch(() => undefined).then(() => this.#snapshotOnce(projectId, label, savedBy));
     this.#snapshotting.set(projectId, run);
     try {
       return await run;
@@ -390,7 +440,7 @@ export class ProjectAuthorities {
     }
   }
 
-  async #snapshotOnce(projectId: string, label?: string): Promise<{ revision?: string; seq: number }> {
+  async #snapshotOnce(projectId: string, label?: string, savedBy?: string): Promise<{ revision?: string; seq: number }> {
     const loaded = await this.#ensure(projectId);
     if (loaded === undefined) {
       throw new Error("no such project");
@@ -422,6 +472,18 @@ export class ProjectAuthorities {
       await this.#options.keepBytes?.drop(projectId, owed.transferId).catch(() => undefined);
     }
     const now = this.#now();
+    if (committed.revision !== undefined) {
+      recordVersion(this.#options.database, {
+        projectId,
+        revision: committed.revision,
+        seq,
+        fromSeq: loaded.snapshotSeq,
+        ...(trimmed === undefined || trimmed === "" ? {} : { label: trimmed }),
+        ...(savedBy === undefined ? {} : { savedBy }),
+        auto: savedBy === undefined,
+        at: now,
+      });
+    }
     const revision = committed.revision ?? snapshotMark(this.#options.database, projectId)?.revision ?? null;
     markSnapshot(this.#options.database, projectId, { seq, revision, at: now });
     loaded.base = { seq, revision, files: loaded.authority.serialize(), notes: loaded.authority.notes() };
@@ -462,7 +524,7 @@ export class ProjectAuthorities {
     loaded.authority.raiseFloor(seq);
     loaded.unreadable = documents.unreadable;
     loaded.lastEdit = this.#now();
-    const saved = await this.snapshot(projectId, `Restored ${revision.slice(0, 12)}`);
+    const saved = await this.snapshot(projectId, `Restored ${revision.slice(0, 12)}`, who.accountId);
     const head = saved.revision ?? snapshotMark(this.#options.database, projectId)?.revision ?? revision;
     this.#options.publish(projectId, { kind: "doc-reset", seq, revision: head, by: who.by });
     return { seq, revision: head };
@@ -484,7 +546,7 @@ export class ProjectAuthorities {
         });
         continue;
       }
-      pruneEffects(this.#options.database, projectId, loaded.snapshotSeq, now - (this.#options.retainMs ?? 30 * 24 * 60 * 60_000));
+      pruneEffects(this.#options.database, projectId, loaded.snapshotSeq, now - this.#retainMs());
       if (!unsaved && now - loaded.lastTouch >= unload && !this.#snapshotting.has(projectId)) {
         this.#loaded.delete(projectId);
       }

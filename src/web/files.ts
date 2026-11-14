@@ -4,7 +4,11 @@
  *     GET /api/team/v1/projects/{project}/tree/{revision}          the file list
  *     GET /api/team/v1/projects/{project}/raw/{revision}/{path…}   one file's bytes
  *
- * `{revision}` is a revision id, or `head` for the newest Team has read.
+ * `{revision}` is a revision id, `head` for the newest Team has read, or `current` for what a team
+ * project holds right now: the documents and whole files the project authority keeps, which are
+ * ahead of the last saved version by whatever was edited since, and the last saved version for
+ * everything it does not keep (an asset's bytes, a file too large to hold). A server without an
+ * authority answers `current` as `head`.
  *
  * **Bytes, never interpretation.** The console parses story, blueprint and
  * project files itself (docs/architecture.md, D2), so this server does not
@@ -30,6 +34,7 @@ import { findProject } from "../projects/registry.js";
 import type { RevisionTree } from "../projects/read.js";
 import type { TeamService } from "../team/service.js";
 import { refuse } from "./studio.js";
+import { isProjectDocumentPath, isWholeFilePath } from "../../studio-kernel/vendor/kernel.js";
 
 const PREFIX = "/api/team/v1/projects/";
 
@@ -104,6 +109,92 @@ export function serveProjectFiles(
   return true;
 }
 
+/** Whether a path is one the project authority keeps, rather than one only a revision has. */
+function heldByAuthority(path: string): boolean {
+  return isWholeFilePath(path) || isProjectDocumentPath(path);
+}
+
+/**
+ * Answer a `current` read from the project authority, or say it did not (no authority, or no such
+ * project there) so the caller reads `head` instead. A file the authority does not keep falls
+ * through to the newest revision, which is the last saved version.
+ */
+async function answerCurrent(
+  service: TeamService,
+  request: IncomingMessage,
+  response: ServerResponse,
+  projectId: string,
+  kind: "tree" | "raw",
+  filePath: string,
+): Promise<boolean> {
+  const authorities = service.authorities;
+  const reader = service.readings;
+  if (authorities === undefined || reader?.revisionFiles === undefined) return false;
+  if (kind === "tree") {
+    const current = await authorities.currentFiles(projectId);
+    if (current === undefined) return false;
+    const unreadable = new Set(authorities.unreadable(projectId).map((entry) => entry.path));
+    const held = new Map(current.files.map((file) => [file.path, file.size]));
+    const fromHead = await reader.revisionFiles(projectId, "head", async (tree) => tree.files).catch(() => undefined);
+    const files: Array<{ path: string; size: number }> = [];
+    for (const file of fromHead ?? []) {
+      if (held.has(file.path)) continue;
+      // A document the authority would keep but does not was deleted since the last save; one it
+      // could not read is still shown as the revision has it.
+      if (heldByAuthority(file.path) && !unreadable.has(file.path)) continue;
+      files.push(file);
+    }
+    for (const [path, size] of held) files.push({ path, size });
+    files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    const text = JSON.stringify({
+      revision: "current",
+      seq: current.seq,
+      ...(current.revision === null ? {} : { base: current.revision }),
+      files: files.slice(0, MAXIMUM_TREE_FILES),
+      total: files.length,
+    });
+    response.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": Buffer.byteLength(text),
+      "cache-control": "private, no-cache",
+      "x-content-type-options": "nosniff",
+    });
+    response.end(request.method === "HEAD" ? undefined : text);
+    return true;
+  }
+  if (filePath === "" || filePath.includes("\0") || !heldByAuthority(filePath)) return false;
+  const current = await authorities.current(projectId, filePath);
+  if (current === undefined) return false;
+  if (current.content === undefined) {
+    if (authorities.unreadable(projectId).some((entry) => entry.path === filePath)) return false;
+    refuse(response, 404, "there is no such file in this project now");
+    return true;
+  }
+  // Held only as a note of its digest: the last saved version has the bytes.
+  if (!("bytes" in current.content)) return false;
+  const bytes = current.content.bytes;
+  if (bytes.length > MAXIMUM_RAW_BYTES) {
+    refuse(response, 413, "that file is larger than this server hands to a browser");
+    return true;
+  }
+  const extension = filePath.split(".").pop()?.toLowerCase() ?? "";
+  const inline = INLINE_TYPES[extension];
+  const name = filePath.split("/").pop() ?? "file";
+  response.writeHead(200, {
+    "content-type": inline ?? "application/octet-stream",
+    "content-length": bytes.length,
+    "cache-control": "private, no-cache",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": FILE_CSP,
+    "cross-origin-resource-policy": "same-origin",
+    "x-team-revision": "current",
+    "x-team-seq": String(current.seq),
+    ...(inline === undefined ? { "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}` } : {}),
+  });
+  response.end(request.method === "HEAD" ? undefined : bytes);
+  return true;
+}
+
 async function answer(
   service: TeamService,
   request: IncomingMessage,
@@ -130,6 +221,11 @@ async function answer(
   if (project === undefined || !maySeeProject(service.database, project.id, user)) {
     refuse(response, 404, "there is no project of that id on this server");
     return;
+  }
+  if (revision === "current") {
+    const answered = await answerCurrent(service, request, response, project.id, asked.kind, filePath);
+    if (answered) return;
+    revision = "head";
   }
   if (revision !== "head" && !/^[A-Za-z0-9]{8,128}$/.test(revision)) {
     refuse(response, 400, "that is not a revision id");

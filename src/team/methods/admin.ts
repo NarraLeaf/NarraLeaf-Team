@@ -66,6 +66,13 @@ import {
   InvalidSettingError,
   isLifetimeKey,
   PUBLISH_LINEAGE_KEY,
+  PROJECT_CREATE_KEY,
+  DOCUMENT_RETENTION_KEY,
+  setProjectCreators,
+  setRetentionDays,
+  storedRetentionDays,
+  InvalidProjectCreatorsError,
+  InvalidDocumentRetentionError,
   SERVER_NAME_KEY,
   isAccent,
   setBrandAccent,
@@ -720,6 +727,10 @@ export function adminMethods(): TeamMethod[] {
           // that "is that a rule" has one answer wherever the question arrives
           // from.
           setPublishLineage(context.options.database, value);
+        } else if (key === PROJECT_CREATE_KEY) {
+          setProjectCreators(context.options.database, value);
+        } else if (key === DOCUMENT_RETENTION_KEY) {
+          setRetentionDays(context.options.database, value);
         } else if (key === COLLABORATION_KEY) {
           // A word out of a closed set as well, checked where it is stored for
           // the same reason. This is the one row on this surface whose value
@@ -756,7 +767,9 @@ export function adminMethods(): TeamMethod[] {
           error instanceof InvalidServerNameError ||
           error instanceof InvalidSettingError ||
           error instanceof InvalidPublishLineageError ||
-          error instanceof InvalidCollaborationModeError
+          error instanceof InvalidCollaborationModeError ||
+          error instanceof InvalidProjectCreatorsError ||
+          error instanceof InvalidDocumentRetentionError
         ) {
           // Every way a value can be the wrong value, answered as the caller's
           // rather than as this server's. One of these missing would reach the
@@ -886,6 +899,54 @@ export function adminMethods(): TeamMethod[] {
         // backwards from now.
         decisions: page.decisions,
         ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
+      };
+    }),
+    administered(TEAM_METHODS.adminDocumentsStatus, (_params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      const authorities = context.options.authorities;
+      const loaded = new Map((authorities?.status() ?? []).map((entry) => [entry.projectId, entry]));
+      // Every project with a log or a saved version, held in memory or not: one that went quiet
+      // and was let go still has its log and its versions.
+      const rows = database
+        .prepare(
+          `SELECT p.id AS id, p.name AS name,
+                  (SELECT COUNT(*) FROM doc_effects e WHERE e.project_id = p.id) AS log_rows,
+                  (SELECT MAX(seq) FROM doc_effects e WHERE e.project_id = p.id) AS log_seq,
+                  s.seq AS snapshot_seq, s.at AS snapshot_at, s.pruned_through AS pruned_through,
+                  (SELECT COUNT(*) FROM doc_versions v WHERE v.project_id = p.id) AS versions
+             FROM projects p LEFT JOIN doc_snapshots s ON s.project_id = p.id
+            ORDER BY p.name`,
+        )
+        .all() as Array<{
+        id: string;
+        name: string;
+        log_rows: number;
+        log_seq: number | null;
+        snapshot_seq: number | null;
+        snapshot_at: number | null;
+        pruned_through: number | null;
+        versions: number;
+      }>;
+      return {
+        held: authorities !== undefined,
+        retainDays: storedRetentionDays(database),
+        projects: rows
+          .filter((row) => loaded.has(row.id) || row.log_rows > 0 || row.snapshot_seq !== null)
+          .map((row) => {
+            const held = loaded.get(row.id);
+            return {
+              project: row.id,
+              name: row.name,
+              loaded: held !== undefined,
+              seq: held?.seq ?? Math.max(row.log_seq ?? 0, row.snapshot_seq ?? 0),
+              savedSeq: held?.snapshotSeq ?? row.snapshot_seq ?? 0,
+              ...(row.snapshot_at === null ? {} : { savedAt: row.snapshot_at }),
+              logRows: row.log_rows,
+              prunedThrough: row.pruned_through ?? 0,
+              versions: row.versions,
+              ...(held === undefined ? {} : { lastEditAt: held.lastEditAt, owedFiles: held.owedFiles, unreadable: held.unreadable, documents: held.documents }),
+            };
+          }),
       };
     }),
     administered(TEAM_METHODS.adminServerStatus, (_params: unknown, context: MethodContext) =>

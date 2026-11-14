@@ -7,7 +7,15 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { accountForAuthor, activityHeatmap, listActivity, recordActivity, recordCommits } from "../src/collab/activity.js";
+import {
+  accountForAuthor,
+  activityHeatmap,
+  EDIT_STRETCH_MS,
+  listActivity,
+  recordActivity,
+  recordCommits,
+  recordEdit,
+} from "../src/collab/activity.js";
 import { listNotifications, markRead, mentionsIn, notify } from "../src/collab/notifications.js";
 import { createTodo, listTodos, TodoRefusal, updateTodo } from "../src/collab/todos.js";
 import { identityConfig } from "../src/identity/config.js";
@@ -56,6 +64,31 @@ async function team() {
 }
 
 describe("activity", () => {
+  it("leaves out the versions a team project's server wrote, which are under the server's own account", async () => {
+    const { database, project } = await team();
+    const added = recordCommits(database, project.id, [
+      { id: "aaaaaaaaaaaa", by: "ada", message: "tidy chapter 3", at: 1 },
+      { id: "bbbbbbbbbbbb", by: "ada", message: "Team snapshot at seq 12", at: 2 },
+      { id: "cccccccccccc", by: "ada", message: "Demo 1\n\nTeam snapshot at seq 40", at: 3 },
+    ]);
+    expect(added).toBe(1);
+  });
+
+  it("folds edits into one row per stretch of work", async () => {
+    const { database, user, project } = await team();
+    const ada = user("ada");
+    recordEdit(database, { accountId: ada.id, projectId: project.id, at: 1_000_000 });
+    recordEdit(database, { accountId: ada.id, projectId: project.id, at: 1_000_000 + EDIT_STRETCH_MS - 1 });
+    recordEdit(database, { accountId: ada.id, projectId: project.id, at: 1_000_000 + 3 * EDIT_STRETCH_MS });
+    const page = listActivity(database, ada, { accountId: ada.id, limit: 10 });
+    expect(page.activity.map((row) => [row.kind, row.count ?? 1])).toEqual([
+      ["edit", 1],
+      ["edit", 2],
+    ]);
+    expect(activityHeatmap(database, ada, { accountId: ada.id, tzOffsetMinutes: 0, days: 365, now: 1_000_000 + 4 * EDIT_STRETCH_MS })
+      .reduce((sum, day) => sum + day.count, 0)).toBe(2);
+  });
+
   it("matches a commit author to an account by address, username or a unique name, and keeps the string", async () => {
     const { database, user } = await team();
     expect(accountForAuthor(database, "Somebody <ada@example.com>")?.username).toBe("ada");

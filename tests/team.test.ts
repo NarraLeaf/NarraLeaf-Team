@@ -19,7 +19,7 @@ import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { DatabaseSync } from "node:sqlite";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { identityConfig, type IdentityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
@@ -59,6 +59,9 @@ import {
 } from "../src/identity/users.js";
 import { ProjectReadings } from "../src/projects/refresh.js";
 import { removeProjectMember, setProjectMember } from "../src/projects/members.js";
+import { versionsOf } from "../src/authority/versions.js";
+import { setWebhookFetch } from "../src/collab/webhooks.js";
+import { setProjectCreators } from "../src/identity/settings.js";
 import { ProjectAuthorities } from "../src/authority/manager.js";
 import {
   approveAuthorization,
@@ -3516,6 +3519,7 @@ const ADMIN_READS = [
   TEAM_METHODS.adminAuditList,
   TEAM_METHODS.adminServerStatus,
   TEAM_METHODS.adminWebhooksList,
+  TEAM_METHODS.adminDocumentsStatus,
 ];
 
 /** Every method of the family that changes something. */
@@ -3826,6 +3830,8 @@ describe("the settings, as an operator reads them", () => {
       "name",
       "collaboration",
       "repeat publishes",
+      "who makes projects",
+      "edit log kept (days)",
       "sign-in token",
       "repository token",
     ]);
@@ -5256,5 +5262,109 @@ describe("a team project's documents, with this server as their authority", () =
     const { ada, project } = await withTwo();
     expect(ada.hello?.capabilities).not.toContain("documents");
     expect((await ada.call(TEAM_METHODS.docHead, { project })).code).toBe("unavailable");
+  });
+
+  it("counts each person's edits as one stretch of work, and keeps who a saved version is down to", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r2"));
+    await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r3"));
+    // A resend lands once and is counted once.
+    await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r3"));
+    await ada.value(TEAM_METHODS.docSnapshot, { project, label: "Demo 1" });
+
+    const rows = team.database
+      .prepare("SELECT kind, account_id, count, summary FROM activity WHERE project_id = ? ORDER BY id")
+      .all(project) as Array<{ kind: string; account_id: string; count: number; summary: string | null }>;
+    const adaId = requireUser(team.database, "ada").id;
+    const bobId = requireUser(team.database, "bob").id;
+    expect(rows).toEqual([
+      { kind: "edit", account_id: adaId, count: 2, summary: null },
+      { kind: "edit", account_id: bobId, count: 1, summary: null },
+      { kind: "version", account_id: adaId, count: 1, summary: "Demo 1" },
+    ]);
+    const version = versionsOf(team.database, project, ["rev-1"]).get("rev-1");
+    expect(version).toMatchObject({ label: "Demo 1", auto: false, savedBy: "ada", seq: 3 });
+    expect([...(version?.participants ?? [])].sort()).toEqual(["ada", "bob"]);
+
+    const page = await ada.value(TEAM_METHODS.activityList, { project });
+    expect((page["activity"] as Array<{ kind: string; count?: number }>).find((row) => row.kind === "edit" && row.count === 2)).toBeDefined();
+  });
+
+  it("marks a version the server saved on its own as automatic, and makes no news of it", async () => {
+    const { ada, project, team } = await withDocuments();
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    const authorities = (team.service as { authorities?: ProjectAuthorities }).authorities!;
+    await authorities.snapshot(project);
+    expect(versionsOf(team.database, project, ["rev-1"]).get("rev-1")).toMatchObject({ auto: true, participants: ["ada"] });
+    expect(team.database.prepare("SELECT COUNT(*) AS n FROM activity WHERE kind = 'version'").get()).toEqual({ n: 0 });
+  });
+
+  it("posts a saved version to a project's webhook, and nothing for an automatic one", async () => {
+    const posted: string[] = [];
+    setWebhookFetch(async (_url, init) => {
+      posted.push(init.body);
+      return { status: 204 };
+    });
+    try {
+      const { ada, project, team } = await withDocuments();
+      await ada.value(TEAM_METHODS.projectsWebhooksCreate, { project, url: "https://hooks.example.com/x", events: ["version", "commit"] });
+      await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+      await (team.service as { authorities?: ProjectAuthorities }).authorities!.snapshot(project);
+      await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r2"));
+      await ada.value(TEAM_METHODS.docSnapshot, { project, label: "Demo 2" });
+      await vi.waitFor(() => expect(posted).toHaveLength(1));
+      expect(JSON.parse(posted[0] ?? "{}")).toMatchObject({ event: "version", actor: "ada", ref: "rev-2" });
+      expect(posted[0]).toContain("Demo 2");
+    } finally {
+      setWebhookFetch(undefined);
+    }
+  });
+
+  it("lets an owner keep saving and restoring to owners, and change the description but not the name", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    expect((await bob.call(TEAM_METHODS.projectsUpdate, { project, saveRole: "owner" })).code).toBe("refused");
+    const updated = await ada.value(TEAM_METHODS.projectsUpdate, { project, description: "a lighthouse", saveRole: "owner", restoreRole: "owner" });
+    expect(updated["project"]).toMatchObject({ description: "a lighthouse", saveRole: "owner", restoreRole: "owner" });
+    expect((await ada.call(TEAM_METHODS.projectsUpdate, { project, name: "beacon" })).code).toBe("bad-params");
+
+    await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect((await bob.call(TEAM_METHODS.docSnapshot, { project })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.docRestore, { project, revision: "rev-1" })).code).toBe("refused");
+    expect(await ada.value(TEAM_METHODS.docSnapshot, { project })).toMatchObject({ revision: "rev-1" });
+  });
+
+  it("gives a project's webhooks to its owners and nobody else", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    expect((await bob.call(TEAM_METHODS.projectsWebhooksCreate, { project, url: "https://hooks.example.com/x", events: ["version"] })).code).toBe("refused");
+    const made = await ada.value(TEAM_METHODS.projectsWebhooksCreate, { project, url: "https://hooks.example.com/x", events: ["version"], format: "discord" });
+    const id = (made["webhook"] as { id: string; project?: string }).id;
+    expect(made["webhook"]).toMatchObject({ project });
+    expect(typeof made["secret"]).toBe("string");
+    expect((await ada.value(TEAM_METHODS.projectsWebhooksList, { project }))["webhooks"]).toHaveLength(1);
+    expect((await bob.call(TEAM_METHODS.projectsWebhooksDelete, { webhook: id })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.projectsWebhooksList, { project })).code).toBe("refused");
+    await ada.value(TEAM_METHODS.projectsWebhooksDelete, { webhook: id });
+    expect((await ada.value(TEAM_METHODS.projectsWebhooksList, { project }))["webhooks"]).toHaveLength(0);
+  });
+
+  it("keeps making projects to the operators when the server says so", async () => {
+    const { bob, team } = await withTwo();
+    setProjectCreators(team.database, "admins");
+    expect((await bob.call(TEAM_METHODS.projectsCreate, { name: "skiff" })).code).toBe("refused");
+  });
+
+  it("tells an operator how each project's log and versions stand", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    await account(team.database, "root", { groups: [ADMIN_ROLE] });
+    const root = await team.connect(team.tokenFor("root"));
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect((await bob.call(TEAM_METHODS.adminDocumentsStatus)).code).toBe("refused");
+    const status = await root.value(TEAM_METHODS.adminDocumentsStatus);
+    expect(status).toMatchObject({ held: true, retainDays: 30 });
+    expect((status["projects"] as unknown[])[0]).toMatchObject({ project, loaded: true, seq: 1, savedSeq: 0, logRows: 1, versions: 0 });
   });
 });

@@ -33,6 +33,9 @@ import { countUsers, eachUser, findUser, type UserRecord } from "../../identity/
 import { NOT_READ_YET } from "../../teamview.js";
 import { memberBody, projectBody, projectMemberBody } from "../../projects/answers.js";
 import { makeOrAdoptProject } from "../../projects/create.js";
+import { setVersionRoles, versionsOf } from "../../authority/versions.js";
+import { storedProjectCreators } from "../../identity/settings.js";
+import { isOperator } from "../../identity/users.js";
 import {
   boundedCount,
   MethodError,
@@ -52,6 +55,7 @@ import {
   TOPIC_PROJECTS,
   type TeamProjectMembersEvent,
   type TeamProjectsEvent,
+  type TeamVersionRole,
 } from "../protocol.js";
 
 /** The most an id may be, which is more than any id this server issues. */
@@ -310,8 +314,14 @@ export function projectMethods(): TeamMethod[] {
           return { revisions: [] };
         }
         const last = page.revisions.at(-1);
+        // A version the project authority wrote is committed under the account the server reads
+        // as; what it knows about who saved it and whose edits it holds goes beside it.
+        const versions = versionsOf(context.options.database, project.id, page.revisions.map((revision) => revision.id));
         return {
-          revisions: page.revisions,
+          revisions: page.revisions.map((revision) => {
+            const version = versions.get(revision.id);
+            return version === undefined ? revision : { ...revision, version };
+          }),
           // Where to carry on from, present only when a page follows this one.
           // The last revision's id rather than the `<updatedAt>:<id>` a thread
           // list pages by: a revision has no updated-at that is always there to
@@ -326,6 +336,9 @@ export function projectMethods(): TeamMethod[] {
       capability: "session",
       handle: async (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
+        if (storedProjectCreators(context.options.database) === "admins" && !isOperator(context.user.groups)) {
+          throw new MethodError("refused", "on this server, projects are made by its operators");
+        }
         const name = requiredText(read, "name", NAME_LIMIT);
         const description = optionalText(read, "description", DESCRIPTION_LIMIT);
         const repositoryId = optionalText(read, "repositoryId", ID_LIMIT);
@@ -483,6 +496,41 @@ export function projectMethods(): TeamMethod[] {
         // own every project with or without a row.
         context.recheck?.(user.id);
         return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsUpdate,
+      capability: "session",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const project = visibleProject(context, requiredText(read, "project", ID_LIMIT));
+        requireOwner(context, project, "change its settings");
+        // The name is not changed here: it is part of the address every clone of the project
+        // reaches its repository at, so renaming it would leave every Studio pointing nowhere.
+        if (read["name"] !== undefined) {
+          throw new MethodError("bad-params", "a project's name is part of its repository's address and is not changed");
+        }
+        const description = optionalText(read, "description", DESCRIPTION_LIMIT);
+        const role = (field: string): TeamVersionRole | undefined => {
+          const value = read[field];
+          if (value === undefined) return undefined;
+          if (value !== "editor" && value !== "owner") {
+            throw new MethodError("bad-params", `${field} is editor or owner`);
+          }
+          return value;
+        };
+        const saveRole = role("saveRole");
+        const restoreRole = role("restoreRole");
+        const database = context.options.database;
+        if (description !== undefined) {
+          database.prepare("UPDATE projects SET description = ? WHERE id = ?").run(description, project.id);
+        }
+        setVersionRoles(database, project.id, {
+          ...(saveRole === undefined ? {} : { save: saveRole }),
+          ...(restoreRole === undefined ? {} : { restore: restoreRole }),
+        });
+        const updated = findProject(database, project.id) ?? project;
+        return { project: projectBody(context.options, updated, context.user) };
       },
     },
     {

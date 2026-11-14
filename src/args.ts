@@ -16,6 +16,11 @@ import {
   isLifetimeKey,
   isPublishLineageRule,
   PUBLISH_LINEAGE_KEY,
+  PROJECT_CREATE_KEY,
+  PROJECT_CREATORS,
+  DOCUMENT_RETENTION_KEY,
+  isProjectCreators,
+  readRetentionDays,
   PUBLISH_LINEAGE_RULES,
   isSettingKey,
   SETTING_KEYS,
@@ -1329,6 +1334,19 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
         target,
         change: { key, rule: value.trim() as "merge" | "refuse" },
       };
+    }
+    if (key === PROJECT_CREATE_KEY) {
+      if (!isProjectCreators(value)) {
+        return error(`${PROJECT_CREATE_KEY} is one of ${PROJECT_CREATORS.join(" or ")}, not ${value}.`);
+      }
+      return { kind: "settings-set", target, change: { key, creators: value.trim() as "everyone" | "admins" } };
+    }
+    if (key === DOCUMENT_RETENTION_KEY) {
+      const days = readRetentionDays(value);
+      if (days === undefined) {
+        return error(`${DOCUMENT_RETENTION_KEY} is a whole number of days from 1 to 3650, not ${value}.`);
+      }
+      return { kind: "settings-set", target, change: { key, days } };
     }
     // A word out of a closed set as well, and read the same way for the same
     // reason. Nothing about what closing a deployment means is settled here:

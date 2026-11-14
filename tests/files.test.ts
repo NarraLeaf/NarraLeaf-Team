@@ -20,6 +20,7 @@ import type { RevisionTree } from "../src/projects/read.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
 import type { TeamService } from "../src/team/service.js";
 import { webHandler } from "../src/web/router.js";
+import { isProjectDocumentPath, isWholeFilePath } from "../studio-kernel/vendor/kernel.js";
 import { useTemporaryRoots } from "./temporary.js";
 
 const temporaryRoot = useTemporaryRoots("nlteam-files-");
@@ -66,7 +67,21 @@ class FakeReadings {
   }
 }
 
-async function serve() {
+/** The two calls the file routes make of the project authorities, holding a story index edited since the last save. */
+const CURRENT_INDEX = '{"scenes":["new"]}';
+function fakeAuthorities() {
+  return {
+    currentFiles: async () => ({ seq: 7, revision: REVISION, files: [{ path: "editor/story/index.json", size: CURRENT_INDEX.length, note: false }] }),
+    current: async (_project: string, path: string) => ({
+      seq: 7,
+      revision: REVISION,
+      content: path === "editor/story/index.json" ? { bytes: Buffer.from(CURRENT_INDEX) } : undefined,
+    }),
+    unreadable: () => [],
+  };
+}
+
+async function serve(options: { authorities?: boolean } = {}) {
   const root = await temporaryRoot();
   const layout = identityLayout(root);
   const database = await openMigratedDatabase(layout.databasePath);
@@ -83,6 +98,7 @@ async function serve() {
     // A class, not an object literal: the real reader is one, and a method lifted
     // off a class loses `this` — which a literal would never show.
     readings: new FakeReadings(),
+    ...(options.authorities === true ? { authorities: fakeAuthorities() as unknown as NonNullable<TeamService["authorities"]> } : {}),
   };
   await createUser(database, hasher, { username: "ada", password: "a password nobody guesses" });
   await createUser(database, hasher, { username: "vic", password: "a password nobody guesses" });
@@ -113,6 +129,42 @@ async function serve() {
     });
   return { project, get, tokenFor };
 }
+
+describe("a team project's files as they are now", () => {
+  it("serves the authority's copy of what it keeps, and the last saved version for the rest", async () => {
+    const team = await serve({ authorities: true });
+    const tree = await team.get(`/api/team/v1/projects/${team.project.id}/tree/current`, team.tokenFor("vic"));
+    expect(tree.status).toBe(200);
+    expect(tree.headers["cache-control"]).toBe("private, no-cache");
+    const body = JSON.parse(tree.body) as { revision: string; seq: number; base: string; files: { path: string; size: number }[] };
+    expect(body).toMatchObject({ revision: "current", seq: 7, base: REVISION });
+    const paths = body.files.map((file) => file.path);
+    // The edited index at its new size; an asset's bytes from the saved version.
+    expect(body.files.find((file) => file.path === "editor/story/index.json")?.size).toBe(CURRENT_INDEX.length);
+    expect(paths).toContain("assets/content/ab/cd/ef01");
+    // A file the authority would keep but does not was deleted since the save.
+    for (const path of Object.keys(FILES)) {
+      if (path === "editor/story/index.json") continue;
+      expect(paths.includes(path)).toBe(!(isWholeFilePath(path) || isProjectDocumentPath(path)));
+    }
+
+    const index = await team.get(`/api/team/v1/projects/${team.project.id}/raw/current/editor/story/index.json`, team.tokenFor("vic"));
+    expect(index.status).toBe(200);
+    expect(index.body).toBe(CURRENT_INDEX);
+    expect(index.headers["x-team-seq"]).toBe("7");
+
+    const asset = await team.get(`/api/team/v1/projects/${team.project.id}/raw/current/assets/content/ab/cd/ef01?as=png`, team.tokenFor("vic"));
+    expect(asset.status).toBe(200);
+    expect(asset.body).toBe("PNGBYTES");
+  });
+
+  it("reads current as head on a server holding no authorities", async () => {
+    const team = await serve();
+    const tree = await team.get(`/api/team/v1/projects/${team.project.id}/tree/current`, team.tokenFor("vic"));
+    expect(tree.status).toBe(200);
+    expect((JSON.parse(tree.body) as { revision: string }).revision).toBe(REVISION);
+  });
+});
 
 describe("a revision's files", () => {
   it("lists the tree to any member, a viewer included, and resolves head", async () => {

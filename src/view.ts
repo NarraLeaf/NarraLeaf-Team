@@ -26,6 +26,10 @@ import {
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
   PUBLISH_LINEAGE_KEY,
+  PROJECT_CREATE_KEY,
+  DOCUMENT_RETENTION_KEY,
+  storedProjectCreators,
+  storedRetentionDays,
   SERVER_NAME_KEY,
   storedCollaboration,
   storedPublishLineage,
@@ -72,6 +76,8 @@ const STORAGE_FILE_LIMIT = 50_000;
 export const SERVER_NAME_SETTING = "name";
 export const COLLABORATION_SETTING = "collaboration";
 export const PUBLISH_LINEAGE_SETTING = "repeat publishes";
+export const PROJECT_CREATE_SETTING = "who makes projects";
+export const DOCUMENT_RETENTION_SETTING = "edit log kept (days)";
 export const SIGN_IN_SETTING = "sign-in token";
 export const REPOSITORY_SETTING = "repository token";
 
@@ -93,6 +99,10 @@ export function settingKeyOf(label: string): SettingKey | undefined {
       return COLLABORATION_KEY;
     case PUBLISH_LINEAGE_SETTING:
       return PUBLISH_LINEAGE_KEY;
+    case PROJECT_CREATE_SETTING:
+      return PROJECT_CREATE_KEY;
+    case DOCUMENT_RETENTION_SETTING:
+      return DOCUMENT_RETENTION_KEY;
     case SIGN_IN_SETTING:
       return SIGN_IN_LIFETIME_KEY;
     case REPOSITORY_SETTING:
@@ -200,6 +210,22 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       // used, not about what it lets anybody do.
       value: storedPublishLineage(database),
       stored: isSettingStored(database, PUBLISH_LINEAGE_KEY),
+      editable: true,
+    },
+    {
+      group: "server",
+      label: PROJECT_CREATE_SETTING,
+      // Every account, or the operators alone.
+      value: storedProjectCreators(database),
+      stored: isSettingStored(database, PROJECT_CREATE_KEY),
+      editable: true,
+    },
+    {
+      group: "server",
+      label: DOCUMENT_RETENTION_SETTING,
+      // How long a team project's applied edits are kept once a saved version holds them.
+      value: String(storedRetentionDays(database)),
+      stored: isSettingStored(database, DOCUMENT_RETENTION_KEY),
       editable: true,
     },
     {

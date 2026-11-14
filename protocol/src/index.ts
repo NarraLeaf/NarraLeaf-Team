@@ -993,7 +993,15 @@ export type TeamActivityKind =
   | "todo-created"
   | "todo-done"
   | "review"
-  | "milestone";
+  | "milestone"
+  /**
+   * Edits to a team project's documents through this server, folded into one row per stretch of
+   * work: an account's edits to one project that follow each other within half an hour. `count`
+   * says how many.
+   */
+  | "edit"
+  /** A history version saved by hand, or an older one restored. Automatic snapshots are not news. */
+  | "version";
 
 /**
  * One thing that happened, for a timeline.
@@ -1015,6 +1023,8 @@ export interface TeamActivity {
   /** What to call whoever did it. */
   readonly actor: string;
   readonly at: number;
+  /** How many edits an `edit` row stands for. */
+  readonly count?: number;
 }
 
 /** One day of a contribution graph, in the caller's time zone. */
@@ -1130,8 +1140,32 @@ export const TEAM_WEBHOOK_EVENTS = [
   "review-requested",
   "review-answered",
   "milestone",
+  /** A history version saved by hand, or restored. Automatic snapshots post nothing. */
+  "version",
 ] as const;
 export type TeamWebhookEvent = (typeof TEAM_WEBHOOK_EVENTS)[number];
+
+/**
+ * What this server knows about a revision it wrote as a team project's history version, carried on
+ * `projects.history` beside the revision. Every such revision is committed under one account (the
+ * one the server reads the repository as), so the commit's own author says nothing about who did
+ * the work: this does.
+ */
+export interface TeamDocVersion {
+  /** The name it was saved under, for a version saved by hand. */
+  readonly label?: string;
+  /** Saved by the server on its own, when the project went quiet or had been edited for a while. */
+  readonly auto: boolean;
+  /** Who saved it or restored it, for one saved by hand. */
+  readonly savedBy?: string;
+  /** Everybody whose edits it holds that the version before it did not, by username. */
+  readonly participants: readonly string[];
+  /** The authority's seq it stands at. */
+  readonly seq: number;
+}
+
+/** Which project role at least may save a version, or restore one. */
+export type TeamVersionRole = "editor" | "owner";
 
 /**
  * How the body is shaped. `json` is this server's own event object, signed; the others are the
@@ -1589,6 +1623,16 @@ export const TEAM_METHODS = {
   projectsMembersSet: "projects.members.set",
   /** Take an account out of a project. Owners only; never the last owner. */
   projectsMembersRemove: "projects.members.remove",
+  /** Change a project's name, description, or who may save and restore its versions. Owners only. */
+  projectsUpdate: "projects.update",
+  /** The webhooks that post one project's events. Its owners. */
+  projectsWebhooksList: "projects.webhooks.list",
+  /** Add one for the project; answers its signing secret, once. Its owners. */
+  projectsWebhooksCreate: "projects.webhooks.create",
+  /** Remove one of the project's. Its owners. */
+  projectsWebhooksDelete: "projects.webhooks.delete",
+  /** Post a test event to one of the project's now. Its owners. */
+  projectsWebhooksTest: "projects.webhooks.test",
   /** Every account, as a name beside a piece of work. */
   membersList: "members.list",
   /** The devices the caller is signed in on through the browser sign-in. */
@@ -1714,6 +1758,8 @@ export const TEAM_METHODS = {
   overlayPut: "overlay.put",
   /** Take one's own record off again. */
   overlayDrop: "overlay.drop",
+  /** The team projects this server holds in memory, and how each one's log and versions stand. Operators. */
+  adminDocumentsStatus: "admin.documents.status",
   /** A page of this server's accounts, newest first. */
   adminUsersList: "admin.users.list",
   /** Make an account, and answer with it. */
