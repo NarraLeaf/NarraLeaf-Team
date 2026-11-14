@@ -444,7 +444,7 @@ Team 读到的 `by`（都是 `bob` 用同一个令牌推上去的）：
 | P0 | ✅ | 裁决写入 architecture/security；三项实测记录在 §10 |
 | P1 | ✅ | 项目角色（migration 12）、成员管理协议、项目事件只发给相关账号；`web_sessions`（migration 13）、Cookie 登录、同源 WebSocket、`/console` 静态服务、`@narraleaf/design-tokens` 与网页外壳；HTTP/2 上非 gRPC 请求改走网页处理器（浏览器协商 h2，否则网页不可达） |
 | P2 | ✅ | OAuth：授权码+PKCE、设备码、刷新令牌轮换与重放检测（migration 14）；令牌带 `grant` 声明，吊销设备立即生效；访问令牌沿用登录令牌时长（会话每次调用都校验过期，1 小时会让 Studio 每小时断线）；Studio「在浏览器中登录」、后台续期、`narraleaf://` 连接链接 |
-| P3 | ✅（部分） | `tree`/`raw` 只读路由；`@narraleaf/project-view` 读故事/角色/资源/蓝图；网页故事、蓝图、资源、历史查看器。**未做**：Studio 改为从该包导入只读类型 |
+| P3 | ✅ | `tree`/`raw` 只读路由；`@narraleaf/project-view` 读故事/角色/资源/蓝图；网页故事、蓝图、资源、历史查看器。「Studio 从包导入」改为 schema 版本握手：Studio 导出 `projectSchemas.json`，Team 拷贝为 `project-view/studio-schemas.json` 并测试读取上限一致（Studio 不需要只读视图模型，会漂移的是版本号） |
 | P4 | ✅ | 动态、贡献图、待办、通知、头像（migration 15）；网页主页、待办看板、通知铃、个人设置。头像由浏览器裁剪重编码，服务器只校验格式与大小（无图像库） |
 | P5 | ✅ | Studio 行级批注与 Team 讨论串双向同步（clientId 幂等）；网页按行写批注；查看者不能写；修复：按 id 读写讨论串时未校验项目可见性 |
 | P6 | ✅ | 网页管理后台：账号、项目成员、品牌（主题色/LOGO）与设置、签名密钥与审计、服务器状态；`admin.brand.set` |

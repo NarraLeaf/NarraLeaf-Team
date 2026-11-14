@@ -187,7 +187,13 @@ a newer Team" rather than a guess. Raising those ceilings when Studio raises its
 schemas is the one change a Studio format bump asks of Team, and it is a change
 to the page, not to the server.
 
-The plan (§4.1) has Studio import its read-only types from this package so the
-two cannot drift. That half is not done: Studio's `shared/` types are richer than
-a viewer needs and carry its own migrations, so for now the package mirrors the
-fields it reads, and its tests pin the shapes.
+The plan (§4.1) had Studio import its read-only types from this package so the
+two cannot drift. That turned out to be the wrong seam: Studio's `shared/` types
+are richer than a viewer needs and carry its own migrations, and Studio has no
+use for view models. What can drift is the schema version, so that is what is
+pinned. Studio writes `src/shared/types/projectSchemas.json` (its own test keeps
+it equal to its schema constants); Team keeps a copy as
+`project-view/studio-schemas.json`, and `tests/projectview.test.ts` fails while
+the readers' ceilings differ from it. Bringing a new copy across is the prompt to
+look at what changed in that document and raise the reader's ceiling with it. It
+is the Team contract's handshake run the other way.

@@ -1,7 +1,12 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
   assetContentPath,
+  BLUEPRINT_DOCUMENT_MAX_SCHEMA,
+  STORY_LIBRARY_MAX_SCHEMA,
+  UI_GRAPHS_MAX_SCHEMA,
   readAssetRegister,
   readCharacters,
   readStoryDocument,
@@ -137,5 +142,20 @@ describe("the blueprint reader", () => {
     ]);
     expect(graph?.edges).toHaveLength(1);
     expect(readBlueprints({ schemaVersion: 2, blueprintDocument: { schemaVersion: 99 } })).toMatchObject({ supported: false });
+  });
+});
+
+describe("the Studio the readers follow", () => {
+  // project-view/studio-schemas.json is a copy of Studio's src/shared/types/projectSchemas.json.
+  // When Studio raises a schema, the copy brought across fails this until the reader for that
+  // document has been looked at and its ceiling raised with it.
+  it("reads up to the schema versions Studio writes, and no further", () => {
+    const studio = JSON.parse(readFileSync(new URL("../project-view/studio-schemas.json", import.meta.url), "utf8")) as Record<string, number>;
+    expect({
+      storyLibrary: STORY_LIBRARY_MAX_SCHEMA,
+      storyDocument: STORY_DOCUMENT_MAX_SCHEMA,
+      uiGraphs: UI_GRAPHS_MAX_SCHEMA,
+      blueprintDocument: BLUEPRINT_DOCUMENT_MAX_SCHEMA,
+    }).toEqual(studio);
   });
 });
