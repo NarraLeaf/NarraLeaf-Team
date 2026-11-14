@@ -478,6 +478,186 @@ const MIGRATIONS: readonly Migration[] = [
        ) STRICT`,
     ],
   },
+  {
+    version: 12,
+    description: "projects have members again, each with a role",
+    statements: [
+      // Version 7 dropped per-project access because one rule was enough for a
+      // server only Studio reached. A web console that a reviewer or a
+      // contractor signs in to is not that server, and docs/architecture.md
+      // (Decided for 0.2) records the reversal.
+      //
+      // `role` is owner, editor, reviewer or viewer. Only the first two reach
+      // the repository: loreserver 0.8.6 was measured to ignore read and write
+      // in a token and answer only "may this caller open it at all", so a role
+      // that may not write is a role that may not open the repository.
+      // src/projects/registry.ts holds the rule.
+      `CREATE TABLE project_members (
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         role       TEXT    NOT NULL,
+         added_by   TEXT,
+         added_at   INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE UNIQUE INDEX project_members_key ON project_members (project_id, user_id)",
+      "CREATE INDEX project_members_by_user ON project_members (user_id)",
+      // Nobody's access changes on upgrade: before this, every account reached
+      // every project as somebody who could write it. The creator is the owner;
+      // everybody else is an editor. Disabled accounts included, so enabling
+      // one again restores what it had.
+      `INSERT INTO project_members (project_id, user_id, role, added_by, added_at)
+         SELECT p.id, u.id,
+                CASE WHEN u.id = p.created_by THEN 'owner' ELSE 'editor' END,
+                NULL, CAST(unixepoch('subsec') * 1000 AS INTEGER)
+           FROM projects p CROSS JOIN users u`,
+    ],
+  },
+  {
+    version: 13,
+    description: "a browser signs in to the web console and holds a session",
+    statements: [
+      // The one place this server keeps a sign-in. Studio and the command line
+      // hold stateless tokens and still do; a browser holds an HttpOnly cookie
+      // instead, because a page's script must never be able to read what signs
+      // it in. src/identity/websessions.ts sets out the rest.
+      //
+      // `id_hash` is the SHA-256 of the cookie, never the cookie: a copy of
+      // this database signs nobody in. `token_epoch` is the account's epoch
+      // when the session began, so revoking an account's tokens ends its
+      // browser sessions with them.
+      `CREATE TABLE web_sessions (
+         id_hash      TEXT    PRIMARY KEY,
+         user_id      TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         token_epoch  INTEGER NOT NULL,
+         created_at   INTEGER NOT NULL,
+         last_seen_at INTEGER NOT NULL,
+         expires_at   INTEGER NOT NULL,
+         user_agent   TEXT
+       ) STRICT`,
+      "CREATE INDEX web_sessions_by_user ON web_sessions (user_id)",
+    ],
+  },
+  {
+    version: 14,
+    description: "Studio signs in through the browser, as an OAuth client of this server",
+    statements: [
+      // One row per signed-in Studio installation: what the "signed in on"
+      // list shows and what signing a device out revokes. Every token issued
+      // under a grant names it (the `grant` claim), and Team refuses a token
+      // whose grant is revoked. The refresh token is stored hashed, rotated on
+      // each use; the one it replaced is kept so that a replayed old one —
+      // which means two parties hold the chain — revokes the grant outright.
+      `CREATE TABLE oauth_grants (
+         id            TEXT    PRIMARY KEY,
+         user_id       TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         client_id     TEXT    NOT NULL,
+         device_name   TEXT    NOT NULL,
+         refresh_hash  TEXT    NOT NULL UNIQUE,
+         previous_hash TEXT,
+         token_epoch   INTEGER NOT NULL,
+         created_at    INTEGER NOT NULL,
+         last_used_at  INTEGER NOT NULL,
+         expires_at    INTEGER NOT NULL,
+         revoked_at    INTEGER
+       ) STRICT`,
+      "CREATE INDEX oauth_grants_by_user ON oauth_grants (user_id)",
+      "CREATE INDEX oauth_grants_by_previous ON oauth_grants (previous_hash)",
+      // An authorization code, between the browser approving and Studio
+      // redeeming it. Single use, minutes long, bound to the PKCE challenge
+      // and the exact redirect it was issued for.
+      `CREATE TABLE oauth_codes (
+         code_hash    TEXT    PRIMARY KEY,
+         user_id      TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         client_id    TEXT    NOT NULL,
+         redirect_uri TEXT    NOT NULL,
+         challenge    TEXT    NOT NULL,
+         device_name  TEXT    NOT NULL,
+         expires_at   INTEGER NOT NULL
+       ) STRICT`,
+      // A device code (RFC 8628), for a Studio that cannot open a browser on
+      // its own machine: it shows a short code, somebody types it into the
+      // console on any device, and Studio's polling then receives the grant.
+      `CREATE TABLE oauth_devices (
+         device_hash TEXT    PRIMARY KEY,
+         user_code   TEXT    NOT NULL UNIQUE,
+         client_id   TEXT    NOT NULL,
+         device_name TEXT    NOT NULL,
+         user_id     TEXT    REFERENCES users(id) ON DELETE CASCADE,
+         decision    TEXT,
+         expires_at  INTEGER NOT NULL,
+         polled_at   INTEGER
+       ) STRICT`,
+    ],
+  },
+  {
+    version: 15,
+    description: "activity, to-dos, notifications, and a face for every account",
+    statements: [
+      // What happened, for a person's timeline and contribution graph and a
+      // project's feed. One row per event; `ref` says which thing (a revision,
+      // a thread, a to-do) and never holds its text. `account_id` is who did it
+      // when Team knows, and NULL for a commit whose author string matches no
+      // account — `actor_label` keeps that string so the row still says who.
+      // `private` rows (a private to-do finished) are shown to their owner only.
+      `CREATE TABLE activity (
+         id          INTEGER PRIMARY KEY,
+         account_id  TEXT REFERENCES users(id) ON DELETE SET NULL,
+         actor_label TEXT,
+         project_id  TEXT REFERENCES projects(id) ON DELETE CASCADE,
+         kind        TEXT    NOT NULL,
+         ref         TEXT,
+         summary     TEXT,
+         private     INTEGER NOT NULL DEFAULT 0,
+         at          INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE INDEX activity_by_account ON activity (account_id, at)",
+      "CREATE INDEX activity_by_project ON activity (project_id, at)",
+      // A revision is one event however many passes see it.
+      "CREATE UNIQUE INDEX activity_commit_once ON activity (project_id, ref) WHERE kind = 'commit'",
+      // A to-do: an owner's, optionally assigned, optionally in a project and
+      // anchored to a line or a node there. `visibility` is enforced by the
+      // server: a private to-do is answered to its owner and nobody else.
+      `CREATE TABLE todos (
+         id          TEXT    PRIMARY KEY,
+         owner_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         assignee_id TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         project_id  TEXT    REFERENCES projects(id) ON DELETE CASCADE,
+         document    TEXT,
+         element     TEXT,
+         revision    TEXT,
+         title       TEXT    NOT NULL,
+         body        TEXT,
+         status      TEXT    NOT NULL,
+         visibility  TEXT    NOT NULL,
+         due_at      INTEGER,
+         created_at  INTEGER NOT NULL,
+         updated_at  INTEGER NOT NULL,
+         done_at     INTEGER
+       ) STRICT`,
+      "CREATE INDEX todos_by_owner ON todos (owner_id, updated_at)",
+      "CREATE INDEX todos_by_assignee ON todos (assignee_id, updated_at)",
+      "CREATE INDEX todos_by_project ON todos (project_id, updated_at)",
+      // Somebody wants one account's attention: a mention, a reply in a thread
+      // they are in, a to-do given to them.
+      `CREATE TABLE notifications (
+         id         INTEGER PRIMARY KEY,
+         account_id TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         kind       TEXT    NOT NULL,
+         project_id TEXT    REFERENCES projects(id) ON DELETE CASCADE,
+         ref        TEXT,
+         actor_id   TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         summary    TEXT,
+         at         INTEGER NOT NULL,
+         read_at    INTEGER
+       ) STRICT`,
+      "CREATE INDEX notifications_by_account ON notifications (account_id, id)",
+      // A face and a line about oneself. `avatar` is the SHA-256 of the image
+      // stored under avatars/ in the storage root, so its address changes when
+      // it does and can be cached for ever.
+      "ALTER TABLE users ADD COLUMN avatar TEXT",
+      "ALTER TABLE users ADD COLUMN bio TEXT",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

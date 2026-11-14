@@ -76,19 +76,55 @@ describe("migrate", () => {
         )
         .run("9a1c0e2e", "ada", "Ada Lovelace", "scrypt$N=16384,r=8,p=1$c2FsdA==$aGFzaA==", 1);
 
-      // Put the file back to the version before the newest migration. That one
-      // adds the table a repeatable write with no row of its own is remembered
-      // in, so undoing it means dropping that table.
+      database
+        .prepare(
+          `INSERT INTO users (id, username, display_name, password_hash, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run("4f7b2d10", "bob", "Bob", "scrypt$N=16384,r=8,p=1$c2FsdA==$aGFzaA==", 2);
+      database
+        .prepare(
+          "INSERT INTO projects (id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run("0123456789abcdef0123456789abcdef", "harbour", "", "9a1c0e2e", 3);
+
+      // Put the file back three versions: OAuth grants, browser sessions and
+      // project members, so undoing them means dropping those tables. The two are replayed together, and the member
+      // backfill below is checked on the way.
       // ⚠ These lines track whichever migration is last: a new one appended to
       // the list is a new thing to undo here, and the failure when it is
       // forgotten is this test rather than a server in the field.
-      database.exec("DROP TABLE client_writes");
-      database.prepare("DELETE FROM schema_version WHERE version = ?").run(SCHEMA_VERSION);
-      expect(schemaVersion(database)).toBe(SCHEMA_VERSION - 1);
+      database.exec("DROP TABLE activity");
+      database.exec("DROP TABLE todos");
+      database.exec("DROP TABLE notifications");
+      database.exec("ALTER TABLE users DROP COLUMN avatar");
+      database.exec("ALTER TABLE users DROP COLUMN bio");
+      database.exec("DROP TABLE oauth_grants");
+      database.exec("DROP TABLE oauth_codes");
+      database.exec("DROP TABLE oauth_devices");
+      database.exec("DROP TABLE web_sessions");
+      database.exec("DROP TABLE project_members");
+      database.prepare("DELETE FROM schema_version WHERE version >= ?").run(SCHEMA_VERSION - 3);
+      expect(schemaVersion(database)).toBe(SCHEMA_VERSION - 4);
 
       expect(migrate(database, path)).toBe(SCHEMA_VERSION);
 
-      // The table is back, which is the newest migration having replayed.
+      // The tables are back, which is the newest two migrations having replayed.
+      expect(tableNames(database)).toContain("web_sessions");
+      expect(tableNames(database)).toContain("oauth_grants");
+      expect(tableNames(database)).toContain("activity");
+      expect(tableNames(database)).toContain("project_members");
+      // And filled so that nobody's access changed: the creator owns the
+      // project, everybody else edits it.
+      expect(
+        database
+          .prepare("SELECT user_id, role FROM project_members ORDER BY user_id")
+          .all()
+          .map((row) => ({ ...row })),
+      ).toEqual([
+        { user_id: "4f7b2d10", role: "editor" },
+        { user_id: "9a1c0e2e", role: "owner" },
+      ]);
       expect(tableNames(database)).toContain("client_writes");
       // Still there, from the migrations before that one, which is what says
       // this replayed the last one alone rather than the whole list.
@@ -101,7 +137,10 @@ describe("migrate", () => {
       expect(tableNames(database)).not.toContain("project_grants");
       // The account is still there. A migration that took the file back to
       // something empty would pass every check about tables and lose a Team server.
-      expect(database.prepare("SELECT username FROM users").all()).toEqual([{ username: "ada" }]);
+      expect(database.prepare("SELECT username FROM users ORDER BY username").all()).toEqual([
+        { username: "ada" },
+        { username: "bob" },
+      ]);
     } finally {
       database.close();
     }

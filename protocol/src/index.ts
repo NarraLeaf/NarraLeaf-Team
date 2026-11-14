@@ -128,6 +128,19 @@ export const TEAM_CAPABILITIES = [
   "admin",
   /** A username and a password may be exchanged for a token, before any session. */
   "password-sign-in",
+  /**
+   * Studio may sign in through the browser instead: this server is an OAuth 2.0
+   * authorization server for the public client `narraleaf-studio` —
+   * authorization code with PKCE to a loopback redirect, refresh tokens, and the
+   * device flow. The discovery document's `oauth` names the endpoints.
+   */
+  "oauth",
+  /** A timeline and a contribution graph per account and per project. */
+  "activity",
+  /** To-dos, private or shown to a project, optionally assigned and anchored. */
+  "todos",
+  /** Mentions, replies and assignments, kept per account until read. */
+  "notifications",
   /** A project's revisions may be read a page at a time. */
   "project-history",
   /**
@@ -343,6 +356,26 @@ export function projectClientsTopic(projectId: string): string {
 /** The live sessions open on one project. */
 export function projectLiveTopic(projectId: string): string {
   return `project:${projectId}/live`;
+}
+
+/** Who belongs to one project, and in which role. */
+export function projectMembersTopic(projectId: string): string {
+  return `project:${projectId}/members`;
+}
+
+/** The to-dos shown to one project's members. */
+export function projectTodosTopic(projectId: string): string {
+  return `project:${projectId}/todos`;
+}
+
+/** One account's own to-dos — those it owns and those given to it. Only that account may hold it. */
+export function accountTodosTopic(accountId: string): string {
+  return `account:${accountId}/todos`;
+}
+
+/** One account's notifications. Only that account may hold it. */
+export function accountNotificationsTopic(accountId: string): string {
+  return `account:${accountId}/notifications`;
 }
 
 /**
@@ -864,12 +897,177 @@ export type TeamThreadEvent =
   | { readonly kind: "comment-created"; readonly thread: string; readonly comment: TeamComment }
   | { readonly kind: "comment-updated"; readonly thread: string; readonly comment: TeamComment };
 
-/** What happened on the projects topic. */
+/**
+ * What happened on the projects topic.
+ *
+ * **Each event goes only to the accounts it is about.** The projects topic is
+ * one name every session may hold, but the list behind it differs by account —
+ * a project somebody has no role in is not on their list — so a project being
+ * made or forgotten is told to its members and to the operators, and to nobody
+ * else. A sequence still moves for everybody, so a session that was not told
+ * sees a gap it may read the list again over, which costs it one call and tells
+ * it nothing it could not already see.
+ */
 export type TeamProjectsEvent =
   | { readonly kind: "project-created"; readonly project: string }
   | { readonly kind: "project-forgotten"; readonly project: string }
   /** This server read a repository again, so what it says about it may have changed. */
-  | { readonly kind: "project-read"; readonly project: string };
+  | { readonly kind: "project-read"; readonly project: string }
+  /**
+   * The receiving account was given a role in a project, had it changed, or was
+   * taken out. Told to that account alone: read the list again, and the
+   * project is on it with its new role, or is not on it any more.
+   */
+  | { readonly kind: "project-access-changed"; readonly project: string };
+
+/* ----------------------------------------------------------- own devices */
+
+/**
+ * One Studio installation an account signed in on through the browser (an OAuth
+ * grant). Revoking it refuses every token it holds, at once, and touches no
+ * other device.
+ */
+export interface TeamAccountDevice {
+  readonly id: string;
+  /** What the installation called itself when it asked, e.g. "the studio iMac". */
+  readonly name: string;
+  /** Which application, e.g. "NarraLeaf Studio". */
+  readonly client: string;
+  readonly signedInAt: number;
+  readonly lastUsedAt: number;
+}
+
+/* ----------------------------------------------------------- activity */
+
+/** What kind of thing happened. */
+export type TeamActivityKind =
+  | "commit"
+  | "thread"
+  | "comment"
+  | "resolve"
+  | "todo-created"
+  | "todo-done";
+
+/**
+ * One thing that happened, for a timeline.
+ *
+ * `account` is who did it when Team knows; a commit's author is the string the
+ * pushing client wrote, matched to an account by username, address or name
+ * where one matches, and otherwise shown as `actor` alone. That match is a
+ * convenience, not proof: loreserver does not check what a client writes there.
+ */
+export interface TeamActivity {
+  readonly id: number;
+  readonly kind: TeamActivityKind;
+  readonly project?: string;
+  /** Which thing: a revision id, a thread id, a to-do id. Never its text. */
+  readonly ref?: string;
+  /** A short line: a commit's message, a thread's opening words, a to-do's title. */
+  readonly summary?: string;
+  readonly account?: string;
+  /** What to call whoever did it. */
+  readonly actor: string;
+  readonly at: number;
+}
+
+/** One day of a contribution graph, in the caller's time zone. */
+export interface TeamActivityDay {
+  /** `YYYY-MM-DD`. */
+  readonly day: string;
+  readonly count: number;
+}
+
+/* -------------------------------------------------------------- to-dos */
+
+export type TeamTodoStatus = "open" | "doing" | "done";
+/** `private`: its owner alone. `project`: every member of its project. */
+export type TeamTodoVisibility = "private" | "project";
+
+export interface TeamTodo {
+  readonly id: string;
+  /** Who made it, by username. */
+  readonly owner: string;
+  readonly assignee?: string;
+  readonly project?: string;
+  /** Where in the project it points, in the same terms a thread's anchor uses. Never parsed. */
+  readonly anchor?: { readonly document: string; readonly element: string; readonly revision?: string };
+  readonly title: string;
+  readonly body?: string;
+  readonly status: TeamTodoStatus;
+  readonly visibility: TeamTodoVisibility;
+  readonly dueAt?: number;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly doneAt?: number;
+}
+
+/** What happened on a to-do topic. */
+export type TeamTodosEvent =
+  | { readonly kind: "todo-set"; readonly todo: TeamTodo }
+  | { readonly kind: "todo-removed"; readonly todo: string };
+
+/* -------------------------------------------------------- notifications */
+
+export type TeamNotificationKind = "mention" | "reply" | "assigned";
+
+export interface TeamNotification {
+  readonly id: number;
+  readonly kind: TeamNotificationKind;
+  readonly project?: string;
+  /** A thread id for a mention or a reply; a to-do id for an assignment. */
+  readonly ref?: string;
+  /** Who caused it, by username. */
+  readonly actor?: string;
+  readonly summary?: string;
+  readonly at: number;
+  readonly readAt?: number;
+}
+
+export type TeamNotificationsEvent =
+  | { readonly kind: "notification"; readonly notification: TeamNotification }
+  | { readonly kind: "notifications-read"; readonly ids: readonly number[] | "all" };
+
+/* -------------------------------------------------------------- profiles */
+
+/** An account as a person sees it: a name, a face and a line. */
+export interface TeamProfile {
+  readonly username: string;
+  readonly displayName: string;
+  readonly bio?: string;
+  /** Where the avatar image is, on this server. Absent for an account with none. */
+  readonly avatarUrl?: string;
+}
+
+/* --------------------------------------------------------- project members */
+
+/**
+ * The roles an account may have in a project, most able first.
+ *
+ * Owners and editors open the repository; reviewers and viewers read the
+ * project through Team and never through loreserver, which does not tell a read
+ * from a write. An owner may also change who belongs, and may take the project
+ * off the list. An operator of the server is the owner of every project.
+ */
+export const TEAM_PROJECT_ROLES = ["owner", "editor", "reviewer", "viewer"] as const;
+
+export type TeamProjectRole = (typeof TEAM_PROJECT_ROLES)[number];
+
+/** One account's place in one project. */
+export interface TeamProjectMember {
+  readonly username: string;
+  readonly displayName: string;
+  /** Where the account's avatar is, absent for one with none. */
+  readonly avatarUrl?: string;
+  readonly role: TeamProjectRole;
+  /** Who gave them the role, by username; absent when nobody did, as on an upgrade. */
+  readonly addedBy?: string;
+  readonly addedAt: number;
+}
+
+/** What happened on a project's members topic. */
+export type TeamProjectMembersEvent =
+  | { readonly kind: "member-set"; readonly member: TeamProjectMember }
+  | { readonly kind: "member-removed"; readonly username: string };
 
 /* ------------------------------------------------------- administration */
 
@@ -1207,12 +1405,12 @@ export type TeamAdminRefusalsEvent =
  * never heard of it does what it does with any event kind it does not know, and
  * an older one is not left holding a frame it has no name for.
  *
- * Only the `admin/*` topics ever carry this, and only for one reason: the
- * account holding the subscription stopped being an operator. A topic is judged
- * when it is taken and a token stays perfectly valid across a demotion, so
- * without this a demoted account would go on being told about the accounts
- * until it happened to reconnect. The session itself stays open and keeps
- * everything else it subscribed to.
+ * Two kinds of topic carry this, each for one reason: an `admin/*` topic when
+ * the account holding it stopped being an operator, and a `project:*` topic
+ * when the account was taken out of that project. A topic is judged when it is
+ * taken and a token stays perfectly valid across either change, so without this
+ * the account would go on being told until it happened to reconnect. The
+ * session itself stays open and keeps everything else it subscribed to.
  */
 export interface TeamSubscriptionWithdrawn {
   readonly kind: "subscription-withdrawn";
@@ -1241,8 +1439,38 @@ export const TEAM_METHODS = {
   projectsCreate: "projects.create",
   /** Take a project off this server's list, leaving its repository untouched. */
   projectsForget: "projects.forget",
+  /** Who belongs to one project, and in which role. Any member may ask. */
+  projectsMembersList: "projects.members.list",
+  /** Give an account a role in a project, or change it. Owners only. */
+  projectsMembersSet: "projects.members.set",
+  /** Take an account out of a project. Owners only; never the last owner. */
+  projectsMembersRemove: "projects.members.remove",
   /** Every account, as a name beside a piece of work. */
   membersList: "members.list",
+  /** The devices the caller is signed in on through the browser sign-in. */
+  accountDevicesList: "account.devices.list",
+  /** Sign one of the caller's own devices out, refusing its tokens at once. */
+  accountDevicesRevoke: "account.devices.revoke",
+  /** An account's profile: name, face, line. */
+  accountProfileGet: "account.profile.get",
+  /** Change the caller's own display name or line. */
+  accountProfileUpdate: "account.profile.update",
+  /** A page of what happened, for one account or one project, newest first. */
+  activityList: "activity.list",
+  /** How much one account did each day, for a contribution graph. */
+  activityHeatmap: "activity.heatmap",
+  /** The caller's to-dos, or one project's. */
+  todosList: "todos.list",
+  /** Make a to-do. */
+  todosCreate: "todos.create",
+  /** Change a to-do: its status, its assignee, its words. */
+  todosUpdate: "todos.update",
+  /** Delete a to-do. Its owner only. */
+  todosDelete: "todos.delete",
+  /** The caller's notifications, newest first. */
+  notificationsList: "notifications.list",
+  /** Mark notifications read. */
+  notificationsRead: "notifications.read",
   /** The threads anchored in one project, newest activity first. */
   threadsList: "threads.list",
   /** One thread and every comment in it. */
@@ -1327,6 +1555,8 @@ export const TEAM_METHODS = {
   adminAuditList: "admin.audit.list",
   /** What this server is and what it can reach, as of the moment it was gathered. */
   adminServerStatus: "admin.server.status",
+  /** Set or clear the team's accent colour. The logo is uploaded over HTTP. */
+  adminBrandSet: "admin.brand.set",
 } as const;
 
 export type TeamMethodName = (typeof TEAM_METHODS)[keyof typeof TEAM_METHODS];
@@ -1355,6 +1585,10 @@ export const CONTRACT = {
     projectOverlay: "project:{project}/overlay",
     projectClients: "project:{project}/clients",
     projectLive: "project:{project}/live",
+    projectMembers: "project:{project}/members",
+    projectTodos: "project:{project}/todos",
+    accountTodos: "account:{account}/todos",
+    accountNotifications: "account:{account}/notifications",
     live: "live:{session}",
     adminUsers: TOPIC_ADMIN_USERS,
     adminSettings: TOPIC_ADMIN_SETTINGS,
