@@ -762,6 +762,11 @@ nlteam settings set server.collaboration closed --root /srv/team
 A lifetime is written as `30m`, `48h`, `7d`, or a bare number of seconds.
 `server.name` takes the name a person reads in Studio. `server.collaboration`
 takes `open` or `closed`; see [Collaboration](#collaboration).
+`project.create_by` takes `everyone` (the default) or `admins`, and says who may
+make a project. `documents.retain_days` (default 30) is how long a team
+project's applied edits are kept once a saved version holds them; a Studio away
+longer starts again from the last version, and its offline edits based on
+anything older come back as conflicts.
 
 `settings list` reports whether each value is the default or was set on this
 server. Both commands take `--server` in place of `--root`, and a value written

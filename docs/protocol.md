@@ -396,6 +396,8 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Only an owner of the project, or an operator, may (anybody else is `refused`), and forgetting a project that is already gone, or one the caller cannot see, answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
 | `projects.members.list` | `session` | Who belongs to one project: `members` (username, display name, role, who gave them it, when), owners first, with `total`, and `role`, the caller's own, which for an operator without a row of their own is `owner`. Any member may ask. A project the caller has no role in is `not-found`. |
 | `projects.members.set` | `session` | Give an account (`username`) a role (`role`: `owner`, `editor`, `reviewer` or `viewer`) in a project, adding it if it is not a member. Only an owner, or an operator, may (anybody else is `refused`). Refused when it would demote the project's only owner of its own. Setting the role somebody already has changes nothing and announces nothing. Announces `member-set` on the project's members topic, and `project-access-changed` on `projects` to that account alone. |
+| `projects.update` | `session` | Owners only. Change a project's `description`, and who may save (`saveRole`) and restore (`restoreRole`) its versions: `editor` (owners and editors, the default) or `owner`. The name is refused: it is part of the repository's address. Answers the project. |
+| `projects.webhooks.list` / `create` / `delete` / `test` | `webhooks` | The project's owners (and operators): the same as `admin.webhooks.*`, held to one `project`. |
 | `projects.members.remove` | `session` | Take an account (`username`) out of a project. Owners and operators only, and never the only owner. Removing somebody who is not a member answers `{}`. Announces `member-removed` on the project's members topic and `project-access-changed` to the account removed, and withdraws, at once, every subscription that account's sessions hold on the project. |
 | `account.devices.list` | `session` | The devices the caller is signed in on through the browser sign-in: id, the name the device gave, the application, when it signed in and was last used. |
 | `account.devices.revoke` | `session` | Sign one of the caller's own devices out (`device`). Every token it holds is refused at once. Another account's device, or one already signed out, answers `{}`. |
@@ -413,6 +415,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `milestones.list` | `milestones` | One project's milestones, newest first. |
 | `milestones.create` | `milestones` | Put a `name` (unique in the project) on a `revision`. Owners and editors. |
 | `milestones.delete` | `milestones` | Whoever named it, or an owner. |
+| `admin.documents.status` | `admin` | Operators. Every team project with a log or a saved version: whether its authority is loaded, its `seq`, the `savedSeq` and `savedAt` of the last version, how many `versions`, `logRows` and `prunedThrough`, and for a loaded one the files still owed to a version and the documents it could not read. Also `retainDays`, the `documents.retain_days` setting. |
 | `admin.webhooks.list` / `create` / `delete` / `test` | `webhooks` | Operators. `create` takes `url` (http or https, no credentials in it), `format` (`json`, `slack`, `discord`, `feishu`), `events` and optionally `project`, and answers the signing `secret` once. `test` posts one event now and answers the status (0 for no answer). |
 | `notifications.list` | `notifications` | The caller's notifications, newest first, with `unread`. Mentions (`@username` in a comment), replies in a thread the caller is in, and to-dos given to them; never about a project they cannot see, never about their own act. |
 | `notifications.read` | `notifications` | Mark `ids`, or `all: true`, read. |
@@ -439,8 +442,8 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `doc.file` | `documents` | One file (`path`) as the project holds it now and the `seq` it stands at, a chunk at a time like `doc.base`. A file held only as a note answers its `digest` and either `stored` with the `revision` to read it from or the `transferId` bringing it. How a Studio puts back a file its offline copy collided on. |
 | `doc.files` | `documents` | The project documents of one saved version (`revision`), listed or a chunk at a time like `doc.base`: for previewing and comparing a version. |
 | `doc.intent` | `documents` | Ask for one edit: `clientId` (idempotency key), `document`, `op`, optional `derived` and, for an edit made offline, `basedOn` (the seq it was written against). Answers `{ kind: "effect", effect }` or `{ kind: "refusal", reason, detail?, conflicts? }`, where `reason` is `rejected`, `nothing-there` or `conflict`. Owners and editors only. |
-| `doc.snapshot` | `documents` | Save the project's current state as a version, with an optional `label`. Answers the `revision`, absent when nothing had changed. Owners and editors only. |
-| `doc.restore` | `documents` | Put one `revision` back as the current state, itself a step in the log and a new version. Owners and editors only. |
+| `doc.snapshot` | `documents` | Save the project's current state as a version, with an optional `label`. Answers the `revision`, absent when nothing had changed. Owners and editors, or owners only where the project's `saveRole` is `owner`. A version saved this way is recorded as the caller's (`version` activity, the `version` webhook event); one the server saves on its own is marked automatic and is not news. |
+| `doc.restore` | `documents` | Put one `revision` back as the current state, itself a step in the log and a new version. Owners and editors, or owners only where the project's `restoreRole` is `owner`. |
 | `overlay.list` | `overlay` | A page of what is attached to one project, newest change first, and what the server last read its head to be. `limit` defaults to 500 and is capped at 2 000, and a page also ends once the records on it total a mebibyte, whichever comes first, since a record's body may be 64 KiB and the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. `total` is how many the project holds in all, whatever this page or a narrowing left out. |
 | `overlay.put` | `overlay` | Attach something, or replace something one attached before. A project holds at most 20 000 records; past that a new one is `refused`, in a sentence naming `overlay.drop` as the way back under. Replacing a record already there is never refused, since it adds none. |
 | `overlay.drop` | `overlay` | Take one's own record off again. |
@@ -638,8 +641,11 @@ made by negotiation rather than by moving this number under a client's feet.
 An operator can have the server post its events to a URL: `commit` (new
 revisions since the last refresh pass, never the first pass's backfill),
 `thread`, `todo-assigned`, `todo-done` (project to-dos only), `review-requested`,
-`review-answered` and `milestone`. A webhook for a project hears only that
-project; one with no project hears all of them.
+`review-answered`, `milestone` and `version` (a history version saved by hand
+or restored; automatic snapshots post nothing, and `commit` is never sent for a
+revision the project authority wrote). A webhook for a project hears only that
+project; one with no project hears all of them. A project's owners manage its
+own webhooks with `projects.webhooks.*`.
 
 Each delivery is one POST with `content-type: application/json`,
 `x-nlteam-event` and `x-nlteam-signature: sha256=<hex>`, the HMAC-SHA256 of the
@@ -648,6 +654,17 @@ body under the webhook's secret. A `json` body is
 are those services' incoming-webhook shapes carrying `[project] summary`.
 Redirects are not followed, a delivery gets five seconds, and a failure is
 recorded on the webhook (`lastStatus`, `lastAt`) and not retried.
+
+`projects.history` carries `version` beside each revision the project authority
+wrote: `label?`, `auto`, `savedBy?`, `participants` (usernames whose edits it
+holds) and `seq`. The commit itself is under the account the server reads as,
+so its author says nothing about who did the work. Edits are counted in the
+activity as `edit` rows, one per account per project per stretch of work (edits
+within half an hour of each other), with `count`.
+
+The console's file routes also take `current` as the revision: the documents
+and whole files the project authority holds now, and the last saved version for
+everything else.
 
 To-dos carry a `kind`: `task`, `asset` (asks for a file for the row it is
 anchored to; the assignee may set `asset` when finishing it), `translation` or
