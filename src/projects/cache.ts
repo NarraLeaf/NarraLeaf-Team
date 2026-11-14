@@ -73,7 +73,7 @@ export function projectCheckoutPath(root: string, projectId: string): string {
  * that looks like a checkout, and every later sync of it fails in the same way
  * for ever with no way out but deleting it by hand.
  */
-function readyMarkerPath(root: string, projectId: string): string {
+export function readyMarkerPath(root: string, projectId: string): string {
   return `${projectCheckoutPath(root, projectId)}.ready`;
 }
 

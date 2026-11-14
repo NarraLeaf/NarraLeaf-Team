@@ -18,12 +18,16 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
+import { findProjectById } from "./registry.js";
+import { openRevisionTree, type RevisionTree } from "./read.js";
+import { knowsCommit, knowsCommitsOf, recordCommits } from "../collab/activity.js";
 import { forLog } from "../identity/audit.js";
 import { audienceHosts, authUrl, dataRemoteUrl, type IdentityConfig } from "../identity/config.js";
 import { KeyStore } from "../identity/keys.js";
 import { identityLayout } from "../identity/layout.js";
 import { mintToken } from "../identity/tokens.js";
-import { findUserById } from "../identity/users.js";
+import { findUserById, isOperator, type UserRecord } from "../identity/users.js";
+import { listProjectMembers, mayOpenRepository } from "./members.js";
 import { listProjects, PROJECT_PERMISSIONS, resourceIdOf } from "./registry.js";
 import {
   readProject,
@@ -71,6 +75,14 @@ export interface ProjectReadingsOptions {
  * The map is only ever added to and replaced in whole entries, so a reader
  * taking a view of it never sees half of a project's reading.
  */
+/** How many revisions a project's first read puts on the timeline. */
+const BACKFILL_REVISIONS = 500;
+/** How many new revisions one pass looks at, for a project already on the timeline. */
+const NEW_REVISIONS_PER_PASS = 100;
+
+/** How long a request for a revision's files waits for a pass to leave the checkout. */
+const REVISION_WAIT_MS = 15_000;
+
 export class ProjectReadings {
   private readonly readings = new Map<string, ProjectReading>();
   /**
@@ -156,6 +168,51 @@ export class ProjectReadings {
         ...(page.before === undefined ? {} : { before: page.before }),
       });
     } finally {
+      this.inside.delete(projectId);
+    }
+  }
+
+  /**
+   * Read files out of one revision, holding the checkout while `use` runs.
+   *
+   * Waits (briefly) for a pass that is inside this project rather than
+   * refusing: a person opening a story should not see "busy" because the
+   * minute's refresh happened to be reading the same checkout. Undefined where
+   * there is no checkout or no such revision.
+   */
+  async revisionFiles<T>(
+    projectId: string,
+    revision: string,
+    use: (tree: RevisionTree) => Promise<T>,
+  ): Promise<T | undefined> {
+    const project = findProjectById(this.options.database, projectId);
+    if (project === undefined) {
+      return undefined;
+    }
+    const deadline = Date.now() + REVISION_WAIT_MS;
+    while (this.inside.has(projectId)) {
+      if (Date.now() > deadline) {
+        return undefined;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    this.inside.add(projectId);
+    let tree: RevisionTree | undefined;
+    try {
+      const { root, config } = this.options;
+      this.keys ??= await KeyStore.open(identityLayout(root).keysDir).catch(() => undefined);
+      const token = this.mint(projectId, project.createdBy);
+      tree = await openRevisionTree({
+        root,
+        projectId,
+        projectName: project.name,
+        remote: dataRemoteUrl(audienceHosts(config)[0] ?? "127.0.0.1", config.dataPort),
+        revision,
+        ...(token === undefined ? {} : { token, authUrl: authUrl(config) }),
+      });
+      return tree === undefined ? undefined : await use(tree);
+    } finally {
+      await tree?.close();
       this.inside.delete(projectId);
     }
   }
@@ -294,6 +351,7 @@ export class ProjectReadings {
         });
         this.readings.set(project.id, reading);
         this.announce(project, reading);
+        await this.recordNewCommits(project.id, reading.history.head);
       } catch (error) {
         // readProject answers rather than raising, so anything reaching here is
         // Team's own doing — minting a token, or something worse. It is put
@@ -321,6 +379,27 @@ export class ProjectReadings {
   }
 
   /**
+   * Put revisions Team has not recorded yet on the timeline.
+   *
+   * Only when the head is one it has not seen, so a quiet project costs one
+   * query a pass. The first time a project is read its history is backfilled,
+   * as far back as {@link BACKFILL_REVISIONS}, so a contribution graph begins
+   * with the work already done rather than on the day Team was upgraded.
+   * Called inside the pass, which already holds this project's checkout.
+   */
+  private async recordNewCommits(projectId: string, head: string | undefined): Promise<void> {
+    const { database, root } = this.options;
+    if (head === undefined || knowsCommit(database, projectId, head)) {
+      return;
+    }
+    const limit = knowsCommitsOf(database, projectId) ? NEW_REVISIONS_PER_PASS : BACKFILL_REVISIONS;
+    const page = await readRevisionPage({ root, projectId, limit, limitBytes: 4 * 1024 * 1024 }).catch(() => undefined);
+    if (page !== undefined) {
+      recordCommits(database, projectId, page.revisions);
+    }
+  }
+
+  /**
    * A token for reading one project, or undefined if none can be made.
    *
    * Minted for the account that owns the project and named for that project
@@ -336,7 +415,7 @@ export class ProjectReadings {
       return undefined;
     }
     try {
-      const owner = findUserById(this.options.database, ownerId);
+      const owner = readerAccount(this.options.database, projectId, ownerId);
       if (owner === undefined) {
         return undefined;
       }
@@ -350,4 +429,35 @@ export class ProjectReadings {
       return undefined;
     }
   }
+}
+
+/**
+ * The account Team reads a project as.
+ *
+ * The creator while they may still open the repository; otherwise any owner or
+ * editor who is not disabled; otherwise an operator. Reading as somebody the
+ * repository would refuse is a read that fails for a reason nobody can see,
+ * and a project whose creator was moved to reviewer is still a project Team
+ * has to read.
+ */
+function readerAccount(database: DatabaseSync, projectId: string, creatorId: string): UserRecord | undefined {
+  const usable = (user: UserRecord | undefined): user is UserRecord =>
+    user !== undefined && user.disabledAt === undefined && mayOpenRepository(database, projectId, user);
+  const creator = findUserById(database, creatorId);
+  if (usable(creator)) {
+    return creator;
+  }
+  for (const member of listProjectMembers(database, projectId)) {
+    const user = findUserById(database, member.userId);
+    if (usable(user)) {
+      return user;
+    }
+  }
+  for (const row of database.prepare("SELECT user_id FROM user_groups WHERE group_name = 'admin'").all()) {
+    const user = findUserById(database, String((row as { user_id: unknown }).user_id));
+    if (usable(user) && isOperator(user.groups)) {
+      return user;
+    }
+  }
+  return undefined;
 }

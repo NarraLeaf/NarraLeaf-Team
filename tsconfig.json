@@ -15,7 +15,8 @@
     // published to a registry, this mapping gives way to an ordinary dependency.
     "baseUrl": ".",
     "paths": {
-      "@narraleaf/team-protocol": ["./protocol/src/index.ts"]
+      "@narraleaf/team-protocol": ["./protocol/src/index.ts"],
+      "@narraleaf/project-view": ["./project-view/src/index.ts"]
     },
 
     "strict": true,
@@ -41,5 +42,5 @@
   // `scripts` holds one TypeScript file - the socket endpoint a real client is driven
   // at - and it is checked here rather than left out. The rest of that directory is
   // JavaScript, which this configuration does not look at either way.
-  "include": ["src", "tests", "scripts", "protocol/src", "vitest.config.ts"]
+  "include": ["src", "tests", "scripts", "protocol/src", "project-view/src", "vitest.config.ts"]
 }

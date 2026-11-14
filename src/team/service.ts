@@ -11,6 +11,7 @@
  * Nothing here is per-request. Who is calling arrives separately, freshly
  * identified for each call - see src/team/methods.ts.
  */
+import type { RevisionTree } from "../projects/read.js";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { IdentityConfig } from "../identity/config.js";
@@ -59,6 +60,16 @@ export interface RepositoryReadings {
    * forget anyway.
    */
   readonly forget?: (projectId: string) => void;
+  /**
+   * Read files out of one revision of a project, holding Team's checkout while
+   * `use` runs. Undefined from the call where there is no checkout yet or no
+   * such revision. Optional: a build without it serves no file routes.
+   */
+  readonly revisionFiles?: <T>(
+    projectId: string,
+    revision: string,
+    use: (tree: RevisionTree) => Promise<T>,
+  ) => Promise<T | undefined>;
 }
 
 /** Everything an answer needs that is not in the request. */
@@ -160,7 +171,7 @@ export interface TeamService {
  * discovery document cannot come to say something this server does not do.
  */
 export function serviceCapabilities(options: TeamService): TeamCapability[] {
-  const capabilities: TeamCapability[] = ["password-sign-in"];
+  const capabilities: TeamCapability[] = ["password-sign-in", "oauth"];
   if (options.readings?.revisions !== undefined) {
     capabilities.push("project-history");
   }
