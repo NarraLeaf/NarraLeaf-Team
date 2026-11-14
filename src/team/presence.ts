@@ -55,6 +55,7 @@ export interface InstanceAnnouncement {
   readonly agent: string;
   readonly project?: string;
   readonly revision?: string;
+  readonly editing?: string;
 }
 
 interface InstanceEntry {
@@ -261,6 +262,17 @@ export class TeamPresence {
       agent: said.agent,
       ...(said.project === undefined ? {} : { project: said.project }),
       ...(said.revision === undefined ? {} : { revision: said.revision }),
+      ...(said.editing === undefined || said.project === undefined
+        ? {}
+        : {
+            editing: said.editing,
+            // Since it started on THIS document: saying so again while still on it
+            // keeps the time, so "for ten minutes" stays true across re-announcements.
+            editingSince:
+              previous?.instance.editing === said.editing && previous.instance.project === said.project
+                ? (previous.instance.editingSince ?? Date.now())
+                : Date.now(),
+          }),
       // Kept from the first announcement on this connection, so that changing
       // project does not read as somebody having just arrived.
       since: previous?.connection === connection ? previous.instance.since : Date.now(),

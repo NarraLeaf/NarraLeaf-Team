@@ -416,7 +416,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `threads.resolve` | `comments` | Mark a thread resolved, or open it again. Idempotent: resolving a thread that is already in the asked-for state changes nothing and announces nothing. |
 | `comments.edit` | `comments` | Change the wording of one's own comment. |
 | `comments.delete` | `comments` | Withdraw one's own comment, keeping the shape of the conversation. |
-| `clients.announce` | `clients` | Say which installation this is, and what it has open. Announcing an id one already holds is ordinary, it is how a reconnect keeps its place, and an id held by another account is a `conflict`. |
+| `clients.announce` | `clients` | Say which installation this is, and what it has open. Announcing an id one already holds is ordinary, it is how a reconnect keeps its place, and an id held by another account is a `conflict`. With a project, `editing` may name the document being edited in anchor terms (`story:<id>`, `ui:<id>`); the instance then carries `editing` and `editingSince` (kept while the same document is announced again), so another client opening that document can say who is in it. A hint, never a lock: nothing is refused because of it. |
 | `clients.withdraw` | `clients` | Take one window's presence back. |
 | `clients.list` | `clients` | Which installations are connected, optionally on one project. |
 | `live.list` | `live` | The live sessions open on one project. |

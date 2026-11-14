@@ -597,6 +597,15 @@ export interface TeamClientInstance {
   readonly project?: string;
   /** What that project stands at on that machine, as the client reported it. */
   readonly revision?: string;
+  /**
+   * The document this instance is editing, in anchor terms (`story:<id>`,
+   * `ui:<id>`), and since when. A hint for somebody about to open the same one —
+   * "Ada has been in this chapter for ten minutes" — and never a lock: nothing
+   * is refused because of it. Absent while nothing is being edited; only with a
+   * project.
+   */
+  readonly editing?: string;
+  readonly editingSince?: number;
   /** When this instance announced itself on its current link session. */
   readonly since: number;
 }

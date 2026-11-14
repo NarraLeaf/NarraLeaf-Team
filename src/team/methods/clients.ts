@@ -55,6 +55,8 @@ export function clientMethods(): TeamMethod[] {
         // Bounded as an anchor field is, and for the same reason: it is a
         // revision as the client writes one, and this server never reads it.
         const revision = optionalText(read, "revision", ANCHOR_FIELD_LIMIT);
+        // A document in anchor terms, as unread as one: a hint for others, not a lock.
+        const editing = optionalText(read, "editing", ANCHOR_FIELD_LIMIT);
         try {
           return {
             client: context.presence.announce(context.connection.id, context.account.username, {
@@ -63,6 +65,7 @@ export function clientMethods(): TeamMethod[] {
               agent: requiredText(read, "agent", INSTANCE_FIELD_LIMIT),
               ...(project === undefined ? {} : { project }),
               ...(revision === undefined ? {} : { revision }),
+              ...(editing === undefined ? {} : { editing }),
             }),
           };
         } catch (error) {

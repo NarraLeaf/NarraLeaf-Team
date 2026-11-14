@@ -112,3 +112,28 @@ describe("what a room leaves behind it", () => {
     expect(retired).toEqual([liveTopic(opened.session.id)]);
   });
 });
+
+describe("what somebody is editing", () => {
+  it("keeps the time they started on a document while they stay on it, and starts again on another", () => {
+    const presence = new TeamPresence(() => undefined);
+    const first = presence.announce("c", "ada", { ...announcing("w"), project: "p1", editing: "story:a" });
+    expect(first.editing).toBe("story:a");
+    const since = first.editingSince as number;
+
+    const again = presence.announce("c", "ada", { ...announcing("w"), project: "p1", editing: "story:a", revision: "r2" });
+    expect(again.editingSince).toBe(since);
+
+    const moved = presence.announce("c", "ada", { ...announcing("w"), project: "p1", editing: "story:b" });
+    expect(moved.editing).toBe("story:b");
+    expect(moved.editingSince).toBeGreaterThanOrEqual(since);
+
+    const idle = presence.announce("c", "ada", { ...announcing("w"), project: "p1" });
+    expect(idle.editing).toBeUndefined();
+    expect(idle.editingSince).toBeUndefined();
+  });
+
+  it("is said only of a project", () => {
+    const presence = new TeamPresence(() => undefined);
+    expect(presence.announce("c", "ada", { ...announcing("w"), editing: "story:a" }).editing).toBeUndefined();
+  });
+});
