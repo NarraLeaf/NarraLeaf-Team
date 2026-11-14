@@ -723,6 +723,43 @@ const MIGRATIONS: readonly Migration[] = [
        ) STRICT`,
     ],
   },
+  {
+    version: 18,
+    description: "the project authority's log of applied edits, and where its snapshots stand",
+    statements: [
+      // Every edit the project authority applied, in the order it applied
+      // them. `seq` is the authority's own number for the project; `document`
+      // and `op` are Studio's, stored as JSON this server hands to Studio's
+      // kernel and never reads itself. The log is what a restarted server
+      // replays on top of the last snapshot, and what a Studio that missed
+      // something catches up from. `client_id` makes a resent intent land once.
+      `CREATE TABLE doc_effects (
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         seq        INTEGER NOT NULL,
+         client_id  TEXT    NOT NULL,
+         account_id TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         by_label   TEXT    NOT NULL,
+         document   TEXT    NOT NULL,
+         op         TEXT    NOT NULL,
+         derived    TEXT,
+         touched    TEXT,
+         at         INTEGER NOT NULL,
+         PRIMARY KEY (project_id, seq)
+       ) STRICT`,
+      "CREATE UNIQUE INDEX doc_effects_once ON doc_effects (project_id, client_id)",
+      // Which revision holds everything up to which seq. A server opening a
+      // project reads that revision and replays the log after it.
+      // `pruned_through`: the log has been cleared up to here (only ever up to a saved version), so
+      // an offline edit based on anything older cannot be checked for collisions and is refused.
+      `CREATE TABLE doc_snapshots (
+         project_id     TEXT    PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+         seq            INTEGER NOT NULL,
+         revision       TEXT,
+         at             INTEGER NOT NULL,
+         pruned_through INTEGER NOT NULL DEFAULT 0
+       ) STRICT`,
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

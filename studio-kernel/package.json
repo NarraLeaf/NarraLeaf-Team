@@ -1,0 +1,11 @@
+{
+  "name": "@narraleaf/studio-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NarraLeaf Studio's pure document appliers, bundled from a Studio checkout, so the Team server applies edits with the code Studio does",
+  "license": "MPL-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./vendor/kernel.js"
+  }
+}
