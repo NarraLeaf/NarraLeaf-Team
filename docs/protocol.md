@@ -307,7 +307,8 @@ with it, and a capability is never announced by a server that cannot answer it.
 | `admin` | This server's own state, its accounts, settings, keys, decisions and health, may be read and changed over the socket, by an operator. |
 | `password-sign-in` | A username and a password may be exchanged for a token, before any session. This names the sign-in route above. |
 | `project-history` | A project's revisions may be read a page at a time, through `projects.history`. Present only where the server has a reader that can page one, a build without one answers an empty page, which is not the same as a project with no revisions. |
-| `blobs` | A live session's files may be put down on this server and collected from it, over `/api/team/v1/blobs/{project}/{transfer}`. The one capability that is about bytes rather than about a call: the socket carries sixteen kilobytes a message, and a file is not a message. Present only where the build has somewhere to put one. |
+| `blobs` | A live session's files may be put down on this server and collected from it, over `/api/team/v1/blobs/{project}/{transfer}`. The one capability that is about bytes rather than about a call: the socket carries sixteen kilobytes a message, and a file is not a message. Present only where the build has somewhere to put one. A team project's asset files travel the same way. |
+| `documents` | This server is the authority over team projects' documents: edits are `doc.intent` calls, applied here with Studio's kernel and published on `project:{project}/doc`; history versions are snapshots this server commits. Present only where the server holds the project authorities. |
 
 A client decides what a server can do from `capabilities` or from `hello.methods`,
 never by probing for a `404`.
@@ -432,6 +433,14 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `live.leave` | `live` | Leave one. The last one out closes it. |
 | `live.close` | `live` | Close one outright, which only its opener may do. |
 | `live.say` | `live` | Say something to everybody in one. Kept by nobody. |
+| `doc.head` | `documents` | Where a project's documents stand: the last applied `seq`, the last saved version (`snapshot`: `seq`, `revision`, `at`), the kernel version, `prunedThrough` (the log is cleared up to here), documents that could not be read, and `mayEdit` for the caller. Loads the project's authority. |
+| `doc.effects` | `documents` | The applied edits after `after`, oldest first, a page at a time (500 by default, 5 000 at most, a mebibyte at most). A page whose first `seq` is past `after + 1` means the log was cleared: start again from `doc.base`. |
+| `doc.base` | `documents` | The files of the last saved version and the `seq` they stand at - what a Studio that does not know where it stands starts from. Without `path`, the list of files; with `path` and `offset`, one chunk of one file as base64 (512 KiB). |
+| `doc.file` | `documents` | One file (`path`) as the project holds it now and the `seq` it stands at, a chunk at a time like `doc.base`. A file held only as a note answers its `digest` and either `stored` with the `revision` to read it from or the `transferId` bringing it. How a Studio puts back a file its offline copy collided on. |
+| `doc.files` | `documents` | The project documents of one saved version (`revision`), listed or a chunk at a time like `doc.base`: for previewing and comparing a version. |
+| `doc.intent` | `documents` | Ask for one edit: `clientId` (idempotency key), `document`, `op`, optional `derived` and, for an edit made offline, `basedOn` (the seq it was written against). Answers `{ kind: "effect", effect }` or `{ kind: "refusal", reason, detail?, conflicts? }`, where `reason` is `rejected`, `nothing-there` or `conflict`. Owners and editors only. |
+| `doc.snapshot` | `documents` | Save the project's current state as a version, with an optional `label`. Answers the `revision`, absent when nothing had changed. Owners and editors only. |
+| `doc.restore` | `documents` | Put one `revision` back as the current state, itself a step in the log and a new version. Owners and editors only. |
 | `overlay.list` | `overlay` | A page of what is attached to one project, newest change first, and what the server last read its head to be. `limit` defaults to 500 and is capped at 2 000, and a page also ends once the records on it total a mebibyte, whichever comes first, since a record's body may be 64 KiB and the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. `total` is how many the project holds in all, whatever this page or a narrowing left out. |
 | `overlay.put` | `overlay` | Attach something, or replace something one attached before. A project holds at most 20 000 records; past that a new one is `refused`, in a sentence naming `overlay.drop` as the way back under. Replacing a record already there is never refused, since it adds none. |
 | `overlay.drop` | `overlay` | Take one's own record off again. |
@@ -544,6 +553,7 @@ server never publishes on is refused rather than left waiting.
 | `account:{account}/todos` | One of the account's own to-dos changed. Held by that account only; anybody else's is "not found". |
 | `account:{account}/notifications` | A notification arrived, or some were read. Held by that account only. |
 | `live:{session}` | Something was said inside one live session. Kept by nobody. |
+| `project:{project}/doc` | A team project's documents moved: `doc-effect` (an applied edit, with its `seq`), `doc-snapshot` (a version was saved: everything up to `seq` is in `revision`) or `doc-reset` (a version was restored: bring the documents to `revision` and carry on from `seq`). A gap in `seq` is read back with `doc.effects`. |
 | `admin/users` | An account was made, disabled, enabled, given or denied administration, or had its tokens refused. Operators only. |
 | `admin/settings` | A setting of this server changed. Operators only. |
 | `admin/keys` | This server rotated its signing keys or retired one; the event carries the whole list either way, so a client that replaces what it holds does not have to tell the two apart. Operators only. |
@@ -597,6 +607,7 @@ it by being refused.
 | `suggestion` | 65 536 | What a suggestion carries. |
 | `overlayBody` | 65 536 | One overlay record. |
 | `livePayload` | 16 384 | One thing said in a live session. |
+| `docIntent` | 98 304 | One edit to a team project, as JSON: its document address, operation and derived entries. |
 | `instanceField` | 256 | Each field describing a client installation. |
 | `pageBytes` | 1 048 576 | The rows on one page of any list this server answers with, weighed as the whole of what a client wrote into each, a comment's body and the suggestion beside it, an overlay record's body and its anchor. A page ends at this or at its count, whichever comes first, and its first row goes on it whatever it weighs. |
 | `answerBytes` | 2 097 152 | The largest answer a server composes, derived from the limits above: a page of rows, the one row a page admits beyond its budget, and the fields around them that are not weighed. It is what a client sizes its reader from, a reader smaller than this refuses an answer the server it is talking to built. One answer stands outside that working-out: a page of a project's history is weighed like every other page, but the one row a page admits beyond its budget is a commit message read out of a repository, so one revision pushed with a very long message is one answer past this figure. |

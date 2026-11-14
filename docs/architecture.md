@@ -21,12 +21,41 @@ listener, and one rule about who is trusted on it.
 
 ## The content plane
 
-The bytes of the work itself. Team does not carry them.
+The work itself, and for a team project Team is now where it lives.
 
-Version control is the version-control server's, spoken as `lore://`, and a
-Studio installation clones and pushes against it directly. Team's part on this
-plane is to answer, when asked, whether a given token may touch a given
-repository. It moves no project bytes and decides access to them.
+**A team project's current state is held by Team** (the `documents`
+capability). Every Studio that opens the project sends its edits to Team as
+intents; Team applies each one with Studio's own appliers (the kernel in
+`studio-kernel/`, bundled from Studio), writes it to a log in its database
+before it counts, and publishes it on the project's `doc` topic for every Studio
+to apply. There is no room and no host, and nothing ends when the last person
+closes the project. See src/authority/.
+
+**The history is still the repository's.** Team commits the project's state to
+its own loreserver as ordinary revisions - a snapshot when the project goes
+quiet, or when somebody saves a version by hand - so every version is one any
+Studio or the console can open, and a restore reads one back. Team writes these
+through a checked-out working copy of its own under the cache, never through the
+store loreserver serves. Asset files reach Team through the blob store and go
+into the snapshot beside their records; once one has arrived it is copied under
+`<root>/authority/owed/` until a snapshot holds it, because the blob store is
+emptied whenever the server starts.
+
+**Every file of the project travels, not only the documents.** A document the
+kernel has operations for travels as those operations. Every other file Studio
+keeps in the project (the project file, story animations, the save schema,
+presets, anything a later Studio adds) travels whole as a `put-file`, stamped
+with the seq its author stood at; one somebody wrote after that is refused as a
+conflict rather than overwritten. Team holds those files beside its documents
+(small ones in memory, larger ones as a note of their digest) and commits them in
+the same snapshot. Offline, Studio sends every file it changed whole on
+reconnecting (stories alone replay row by row), and the same check applies: a
+file reached by any edit after the author's seq collides. So editing a team
+project is editing a personal one, with the server keeping everybody in step.
+
+A project on a server without `documents`, or a personal project, is versioned
+the old way: a Studio clones and pushes against loreserver directly, and Team's
+part is to answer whether a given token may touch a given repository.
 
 ## The coordination plane
 
@@ -99,14 +128,27 @@ indexes on them and compares them for equality, and never reads inside them. A
 new kind of thing to point at is a new string, and the server needs no change to
 carry it.
 
+**Team never models a Studio document, but it runs the code that does.** A team
+project's documents are JSON Team hands to Studio's kernel; what an operation
+means, which documents it reaches and how a file is parsed are the kernel's.
+A Studio and a server on different kernels (`KERNEL_VERSION`) must not edit the
+same project.
+
+**Nothing an author was told happened is lost.** An applied edit is in the log
+before it is published, and a project is reopened from its last snapshot plus
+the log after it. The log is cleared only up to a saved version and only once it
+is older than the retention (thirty days by default); an offline edit based on
+something older is handed back as a conflict rather than landed unchecked.
+
 **A store the version-control server is serving is never opened.** Its lock is
 exclusive and blocking, and a second open waits without failing and without
 logging. Team reads every project as a client of its own version-control server,
 against a bare clone under the cache.
 
-**A room holds nothing.** A live session is addressing and fan-out. It stores no
-content, replays nothing, and ends with the process that held it. Anything worth
-keeping has gone to the repository or to an attachment before the room closes.
+**A room holds nothing.** A live session (the older `live` capability, kept for
+projects on servers without `documents` and for presence and chat) is addressing
+and fan-out. It stores no content, replays nothing, and ends with the process
+that held it. A team project's documents do not travel through rooms.
 
 **Delivery is weak.** A subscriber that sees a sequence number other than the one
 it last saw reads the collection again. Events are never queued and never
