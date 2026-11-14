@@ -658,6 +658,16 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE users ADD COLUMN bio TEXT",
     ],
   },
+  {
+    version: 16,
+    description: "the revision that finished a to-do",
+    statements: [
+      // Which revision finished a to-do, when it was finished by one: Studio
+      // ticks to-dos off as it commits and says which commit did it. Opaque,
+      // like an anchor's revision; cleared when the to-do is opened again.
+      "ALTER TABLE todos ADD COLUMN done_revision TEXT",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

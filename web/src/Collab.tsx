@@ -239,6 +239,14 @@ export function Todos({
         <div className="muted small">
           {todo.visibility === "private" ? t("visibilityPrivate") : t("visibilityProject")}
           {todo.assignee !== undefined ? ` · → ${todo.assignee}` : ""}
+          {todo.doneRevision !== undefined && todo.project !== undefined ? (
+            <>
+              {" · "}
+              <a href={`/console/p/${encodeURIComponent(todo.project)}/history?rev=${encodeURIComponent(todo.doneRevision)}`}>
+                {t("doneIn", { rev: todo.doneRevision.slice(0, 8) })}
+              </a>
+            </>
+          ) : null}
         </div>
       </div>
       {project !== undefined && todo.owner === account.username && members !== undefined && todo.visibility === "project" ? (

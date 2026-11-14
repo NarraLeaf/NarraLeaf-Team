@@ -999,6 +999,8 @@ export interface TeamTodo {
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly doneAt?: number;
+  /** The revision that finished it, where it was ticked off in a commit. Never parsed. */
+  readonly doneRevision?: string;
 }
 
 /** What happened on a to-do topic. */

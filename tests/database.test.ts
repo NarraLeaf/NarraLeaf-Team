@@ -94,6 +94,7 @@ describe("migrate", () => {
       // ⚠ These lines track whichever migration is last: a new one appended to
       // the list is a new thing to undo here, and the failure when it is
       // forgotten is this test rather than a server in the field.
+      database.exec("ALTER TABLE todos DROP COLUMN done_revision");
       database.exec("DROP TABLE activity");
       database.exec("DROP TABLE todos");
       database.exec("DROP TABLE notifications");
@@ -104,12 +105,13 @@ describe("migrate", () => {
       database.exec("DROP TABLE oauth_devices");
       database.exec("DROP TABLE web_sessions");
       database.exec("DROP TABLE project_members");
-      database.prepare("DELETE FROM schema_version WHERE version >= ?").run(SCHEMA_VERSION - 3);
-      expect(schemaVersion(database)).toBe(SCHEMA_VERSION - 4);
+      // Back to before project roles (migration 12), whatever came after.
+      database.prepare("DELETE FROM schema_version WHERE version >= ?").run(12);
+      expect(schemaVersion(database)).toBe(11);
 
       expect(migrate(database, path)).toBe(SCHEMA_VERSION);
 
-      // The tables are back, which is the newest two migrations having replayed.
+      // The tables are back, which is migrations 12 onwards having replayed.
       expect(tableNames(database)).toContain("web_sessions");
       expect(tableNames(database)).toContain("oauth_grants");
       expect(tableNames(database)).toContain("activity");

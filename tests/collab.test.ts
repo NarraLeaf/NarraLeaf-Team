@@ -115,6 +115,22 @@ describe("to-dos", () => {
     expect(() => updateTodo(database, user("nora"), todo.id, { status: "open" })).toThrow(TodoRefusal);
   });
 
+  it("keeps the revision that finished a to-do while it stays done, and lets the assignee name it", async () => {
+    const { database, user, project } = await team();
+    const todo = createTodo(database, user("ada"), { title: "draw the harbour", projectId: project.id, visibility: "project", assigneeId: user("bob").id });
+    expect(() => updateTodo(database, user("bob"), todo.id, { doneRevision: "r9" })).toThrow(TodoRefusal);
+    expect(() => updateTodo(database, user("bob"), todo.id, { status: "doing", doneRevision: "r9" })).toThrow(TodoRefusal);
+
+    const done = updateTodo(database, user("bob"), todo.id, { status: "done", doneRevision: "r9" });
+    expect(done.doneRevision).toBe("r9");
+    expect(updateTodo(database, user("ada"), todo.id, { title: "draw the harbour at night" }).doneRevision).toBe("r9");
+    expect(updateTodo(database, user("bob"), todo.id, { status: "open" }).doneRevision).toBeUndefined();
+
+    const mine = createTodo(database, user("ada"), { title: "a note" });
+    expect(() => updateTodo(database, user("ada"), mine.id, { status: "done", doneRevision: "r9" })).toThrow(TodoRefusal);
+    expect(() => createTodo(database, user("ada"), { title: "x", doneRevision: "r9" })).toThrow(TodoRefusal);
+  });
+
   it("refuses to give a project to-do to somebody outside the project", async () => {
     const { database, user, project } = await team();
     expect(() =>

@@ -35,6 +35,8 @@ export interface TodoRecord {
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly doneAt: number | undefined;
+  /** The revision that finished it, where one did. */
+  readonly doneRevision: string | undefined;
 }
 
 /** Why a to-do could not be written, in the caller's terms. */
@@ -67,6 +69,7 @@ function toRecord(row: Row): TodoRecord {
     createdAt: integerColumn(row, "created_at"),
     updatedAt: integerColumn(row, "updated_at"),
     doneAt: optionalIntegerColumn(row, "done_at"),
+    doneRevision: optionalTextColumn(row, "done_revision"),
   };
 }
 
@@ -113,6 +116,7 @@ export function todoView(database: DatabaseSync, todo: TodoRecord): TeamTodo {
     createdAt: todo.createdAt,
     updatedAt: todo.updatedAt,
     ...(todo.doneAt === undefined ? {} : { doneAt: todo.doneAt }),
+    ...(todo.doneRevision === undefined ? {} : { doneRevision: todo.doneRevision }),
   };
 }
 
@@ -125,6 +129,8 @@ export interface TodoInput {
   readonly status?: TeamTodoStatus;
   readonly dueAt?: number | null;
   readonly anchor?: { document: string; element: string; revision?: string } | null;
+  /** The revision that finishes it. Only with `status: "done"`, and only on a project's to-do. */
+  readonly doneRevision?: string;
 }
 
 /** Check that a to-do's shape holds together, for the caller making it so. */
@@ -158,6 +164,9 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
   const assigneeId = input.assigneeId ?? undefined;
   const visibility = input.visibility ?? "private";
   const anchor = input.anchor ?? undefined;
+  if (input.doneRevision !== undefined) {
+    throw new TodoRefusal("bad-params", "a to-do is finished by a revision after it is made, with todos.update");
+  }
   checkShape(database, actor, { projectId, assigneeId, visibility, anchored: anchor !== undefined });
   const status = input.status ?? "open";
   const id = randomUUID();
@@ -200,7 +209,8 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
   const owns =
     current.ownerId === actor.id ||
     (current.visibility === "project" && current.projectId !== undefined && projectRole(database, current.projectId, actor) === "owner");
-  const onlyStatus = Object.keys(input).every((key) => key === "status");
+  // Finishing it in a commit is still only moving its status, so an assignee may say which.
+  const onlyStatus = Object.keys(input).every((key) => key === "status" || key === "doneRevision");
   if (!owns && !(current.assigneeId === actor.id && onlyStatus)) {
     throw new TodoRefusal("refused", "only its owner may change this to-do; its assignee may change its status");
   }
@@ -218,10 +228,15 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
   checkShape(database, actor, { ...next, anchored: next.anchor !== undefined });
   const status = input.status ?? current.status;
   const doneAt = status === "done" ? (current.doneAt ?? now) : null;
+  if (input.doneRevision !== undefined && (input.status !== "done" || next.projectId === undefined)) {
+    throw new TodoRefusal("bad-params", "doneRevision goes with status done, on a project's to-do");
+  }
+  // Kept while it stays done; a to-do opened again was not finished by anything.
+  const doneRevision = status === "done" ? (input.doneRevision ?? current.doneRevision) : undefined;
   database
     .prepare(
       `UPDATE todos SET assignee_id = ?, project_id = ?, document = ?, element = ?, revision = ?, title = ?, body = ?,
-                        status = ?, visibility = ?, due_at = ?, updated_at = ?, done_at = ? WHERE id = ?`,
+                        status = ?, visibility = ?, due_at = ?, updated_at = ?, done_at = ?, done_revision = ? WHERE id = ?`,
     )
     .run(
       next.assigneeId ?? null,
@@ -236,6 +251,7 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
       input.dueAt === undefined ? (current.dueAt ?? null) : input.dueAt,
       now,
       doneAt,
+      doneRevision ?? null,
       id,
     );
   return findTodo(database, id) as TodoRecord;

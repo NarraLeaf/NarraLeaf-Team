@@ -123,6 +123,7 @@ function todoInput(context: MethodContext, read: Record<string, unknown>): TodoI
     }
     input.dueAt = due as number | null;
   }
+  if (read["doneRevision"] !== undefined) input.doneRevision = requiredText(read, "doneRevision", ANCHOR_FIELD_LIMIT);
   if (read["anchor"] !== undefined) {
     if (read["anchor"] === null) {
       input.anchor = null;
