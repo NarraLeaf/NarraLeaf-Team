@@ -6,6 +6,7 @@
  * an operator (or, for a project's members, its owner), so this page is a
  * view onto rules it does not itself enforce.
  */
+import { DocumentsPanel } from "./Versions";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import type {
@@ -22,14 +23,15 @@ import { t, type Phrase } from "./i18n";
 import { Webhooks } from "./Production";
 import type { ConnectionState, TeamConnection } from "./socket";
 
-type Section = "accounts" | "projects" | "brand" | "security" | "webhooks" | "server";
-const SECTIONS: readonly Section[] = ["accounts", "projects", "brand", "security", "webhooks", "server"];
+type Section = "accounts" | "projects" | "documents" | "brand" | "security" | "webhooks" | "server";
+const SECTIONS: readonly Section[] = ["accounts", "projects", "documents", "brand", "security", "webhooks", "server"];
 const SECTION_PHRASE: Record<Section, Phrase> = {
   accounts: "adminAccounts",
   projects: "adminProjects",
   brand: "adminBrand",
   security: "adminSecurity",
   webhooks: "adminWebhooks",
+  documents: "docsTitle",
   server: "adminServer",
 };
 const ROLES: readonly TeamProjectRole[] = ["owner", "editor", "reviewer", "viewer"];
@@ -74,6 +76,7 @@ export function Admin({ connection, state }: { connection: TeamConnection; state
       {open && section === "brand" ? <Brand connection={connection} /> : null}
       {open && section === "security" ? <Security connection={connection} /> : null}
       {open && section === "webhooks" ? <Webhooks connection={connection} /> : null}
+      {open && section === "documents" ? <DocumentsPanel connection={connection} /> : null}
       {open && section === "server" ? <Server connection={connection} /> : null}
     </section>
   );

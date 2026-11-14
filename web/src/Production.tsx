@@ -13,6 +13,7 @@ import {
   projectReviewsTopic,
   TEAM_WEBHOOK_EVENTS,
   TEAM_WEBHOOK_FORMATS,
+  type TeamDocVersion,
   type TeamMilestone,
   type TeamProjectRole,
   type TeamReview,
@@ -45,9 +46,28 @@ interface Member {
   readonly displayName: string;
 }
 
-interface Revision {
+export interface Revision {
   readonly id: string;
   readonly message?: string;
+  readonly by?: string;
+  readonly at?: number;
+  /** What the server knows about a revision it wrote as a history version. */
+  readonly version?: TeamDocVersion;
+}
+
+/** The line every server-written version ends with; a version saved by hand has its name above it. */
+const SNAPSHOT_TRAILER = /(?:^|\n\n)Team snapshot at seq \d+\s*$/;
+
+/** What to call a revision: a version's name, or the first line of a commit's message. */
+export function revisionTitle(revision: Revision): string {
+  if (revision.version?.label !== undefined) return revision.version.label;
+  return (revision.message ?? "").replace(SNAPSHOT_TRAILER, "").trim().split("\n")[0] ?? "";
+}
+
+/** Whether the server saved this version on its own: in a list of versions, folded away by default. */
+export function isAutoVersion(revision: Revision): boolean {
+  if (revision.version !== undefined) return revision.version.auto;
+  return SNAPSHOT_TRAILER.test(revision.message ?? "") && revisionTitle(revision) === "";
 }
 
 /* --------------------------------------------------------------- reviews */
@@ -67,6 +87,7 @@ export function Reviews(props: {
   const [error, setError] = useState<string | undefined>(undefined);
   const [draft, setDraft] = useState({ reviewer: "", toRevision: "", fromRevision: "", title: "", note: "" });
   const [verdicts, setVerdicts] = useState<Record<string, string>>({});
+  const [showAuto, setShowAuto] = useState(false);
 
   const load = useCallback(() => {
     connection
@@ -112,7 +133,11 @@ export function Reviews(props: {
       .call("reviews.update", { review: review.id, status, ...(verdicts[review.id] ? { verdictNote: verdicts[review.id] } : {}) })
       .catch((caught: unknown) => setError(errorText(caught)));
 
-  const label = (revision: Revision) => `${revision.id.slice(0, 8)} ${revision.message?.split("\n")[0]?.slice(0, 50) ?? ""}`;
+  const label = (revision: Revision) =>
+    `${revision.id.slice(0, 8)} ${(revisionTitle(revision) || (isAutoVersion(revision) ? t("versionAuto") : "")).slice(0, 50)}`;
+  // Automatic snapshots come every few minutes; the versions somebody named are what a review is about.
+  const picked = new Set([draft.toRevision, draft.fromRevision]);
+  const choices = revisions.filter((revision) => showAuto || !isAutoVersion(revision) || picked.has(revision.id));
   const canAsk = role !== undefined && role !== "viewer";
   const ready = draft.reviewer !== "" && draft.toRevision !== "" && draft.title.trim() !== "";
 
@@ -141,7 +166,7 @@ export function Reviews(props: {
               {t("reviewFrom")}
               <select value={draft.fromRevision} onChange={(event) => setDraft({ ...draft, fromRevision: event.target.value })}>
                 <option value="">{t("reviewFromStart")}</option>
-                {revisions.map((revision) => (
+                {choices.map((revision) => (
                   <option key={revision.id} value={revision.id}>
                     {label(revision)}
                   </option>
@@ -152,7 +177,7 @@ export function Reviews(props: {
               {t("reviewTo")}
               <select value={draft.toRevision} onChange={(event) => setDraft({ ...draft, toRevision: event.target.value })}>
                 <option value="">—</option>
-                {revisions.map((revision) => (
+                {choices.map((revision) => (
                   <option key={revision.id} value={revision.id}>
                     {label(revision)}
                   </option>
@@ -160,6 +185,9 @@ export function Reviews(props: {
               </select>
             </label>
           </div>
+          <label className="small">
+            <input type="checkbox" checked={showAuto} onChange={(event) => setShowAuto(event.target.checked)} /> {t("showAuto")}
+          </label>
           <textarea value={draft.note} placeholder={t("reviewNote")} rows={2} onChange={(event) => setDraft({ ...draft, note: event.target.value })} />
           <button className="primary" type="submit" disabled={!ready}>
             {t("reviewSend")}
@@ -314,42 +342,51 @@ const EVENT_PHRASE: Record<TeamWebhookEvent, Phrase> = {
   "review-requested": "whReviewRequested",
   "review-answered": "whReviewAnswered",
   milestone: "whMilestone",
+  version: "whVersion",
 };
 
-export function Webhooks({ connection }: { connection: TeamConnection }) {
+/**
+ * The webhooks list and form. Without `projectId`, every webhook on the server, for an operator;
+ * with one, that project's, for its owners (`projects.webhooks.*`).
+ */
+export function Webhooks({ connection, projectId }: { connection: TeamConnection; projectId?: string }) {
+  const scoped = projectId !== undefined;
+  const method = (name: "list" | "create" | "delete" | "test") => (scoped ? `projects.webhooks.${name}` : `admin.webhooks.${name}`);
+  const scope = scoped ? { project: projectId } : {};
   const [hooks, setHooks] = useState<readonly TeamWebhook[] | undefined>(undefined);
   const [projects, setProjects] = useState<readonly { id: string; name: string }[]>([]);
   const [url, setUrl] = useState("");
   const [format, setFormat] = useState<TeamWebhookFormat>("json");
   const [project, setProject] = useState("");
-  const [events, setEvents] = useState<readonly TeamWebhookEvent[]>(["commit", "review-requested", "todo-assigned"]);
+  const [events, setEvents] = useState<readonly TeamWebhookEvent[]>(["version", "review-requested", "todo-assigned"]);
   const [secret, setSecret] = useState<string | undefined>(undefined);
   const [result, setResult] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | undefined>(undefined);
 
   const load = useCallback(() => {
     connection
-      .call<{ webhooks: TeamWebhook[] }>("admin.webhooks.list")
+      .call<{ webhooks: TeamWebhook[] }>(method("list"), scope)
       .then((answer) => setHooks(answer.webhooks))
       .catch((caught: unknown) => setError(errorText(caught)));
-  }, [connection]);
+  }, [connection, projectId]);
   useEffect(() => {
     load();
+    if (scoped) return;
     connection
       .call<{ projects: { id: string; name: string }[] }>("projects.list")
       .then((answer) => setProjects(answer.projects))
       .catch(() => undefined);
-  }, [load, connection]);
+  }, [load, connection, scoped]);
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
     setError(undefined);
     try {
-      const answer = await connection.call<{ secret: string }>("admin.webhooks.create", {
+      const answer = await connection.call<{ secret: string }>(method("create"), {
         url: url.trim(),
         format,
         events,
-        ...(project === "" ? {} : { project }),
+        ...(scoped ? scope : project === "" ? {} : { project }),
       });
       setSecret(answer.secret);
       setUrl("");
@@ -364,7 +401,7 @@ export function Webhooks({ connection }: { connection: TeamConnection }) {
 
   return (
     <div className="admin-section">
-      <p className="muted">{t("whLead")}</p>
+      <p className="muted">{scoped ? t("projectWebhooksLead") : t("whLead")}</p>
       {error !== undefined ? <p className="error">{error}</p> : null}
       {secret !== undefined ? (
         <p className="notice">
@@ -384,7 +421,7 @@ export function Webhooks({ connection }: { connection: TeamConnection }) {
               ))}
             </select>
           </label>
-          <label>
+          {scoped ? null : <label>
             {t("projects")}
             <select value={project} onChange={(event) => setProject(event.target.value)}>
               <option value="">{t("whAllProjects")}</option>
@@ -394,7 +431,7 @@ export function Webhooks({ connection }: { connection: TeamConnection }) {
                 </option>
               ))}
             </select>
-          </label>
+          </label>}
         </div>
         <div className="webhook-events">
           {TEAM_WEBHOOK_EVENTS.map((name) => (
@@ -428,7 +465,7 @@ export function Webhooks({ connection }: { connection: TeamConnection }) {
                   className="ghost small"
                   onClick={() =>
                     void connection
-                      .call<{ status: number }>("admin.webhooks.test", { webhook: hook.id })
+                      .call<{ status: number }>(method("test"), { webhook: hook.id })
                       .then((answer) => {
                         setResult({ ...result, [hook.id]: answer.status });
                         load();
@@ -440,7 +477,7 @@ export function Webhooks({ connection }: { connection: TeamConnection }) {
                 </button>
                 <button
                   className="ghost small"
-                  onClick={() => void connection.call("admin.webhooks.delete", { webhook: hook.id }).then(load).catch((caught: unknown) => setError(errorText(caught)))}
+                  onClick={() => void connection.call(method("delete"), { webhook: hook.id }).then(load).catch((caught: unknown) => setError(errorText(caught)))}
                 >
                   {t("remove")}
                 </button>

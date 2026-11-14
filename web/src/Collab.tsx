@@ -101,6 +101,8 @@ const ACTIVITY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
   "todo-done": "aTodoDone",
   review: "aReview",
   milestone: "aMilestone",
+  edit: "aEdit",
+  version: "aVersion",
 };
 
 export function Timeline({
@@ -148,7 +150,7 @@ export function Timeline({
             <span className="dot" aria-hidden="true" />
             <div className="timeline-main">
               <div>
-                <strong>{row.actor}</strong> {t(ACTIVITY_PHRASE[row.kind])}
+                <strong>{row.actor}</strong> {t(ACTIVITY_PHRASE[row.kind], { count: String(row.count ?? 1) })}
                 {row.project !== undefined && projectNames?.get(row.project) !== undefined ? (
                   <span className="muted"> · {projectNames.get(row.project)}</span>
                 ) : null}

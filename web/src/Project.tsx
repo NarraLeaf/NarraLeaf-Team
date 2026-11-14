@@ -27,18 +27,21 @@ import {
   type StoryRow,
   type Unsupported,
 } from "@narraleaf/project-view";
-import type { TeamProjectRole } from "@narraleaf/team-protocol";
+import { projectDocTopic, type TeamProjectRole, type TeamVersionRole } from "@narraleaf/team-protocol";
 
 import { fetchJson, fetchTree, rawUrl, type Tree } from "./files";
 import { Face, Timeline, Todos } from "./Collab";
 import { LineComments, storyLineAnchor, useStoryThreads } from "./Comments";
 import type { ConsoleAccount } from "./api";
 import { t, type Phrase } from "./i18n";
-import { MilestoneTags, Reviews, useMilestones } from "./Production";
+import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, type Revision } from "./Production";
+import { CompareWithNow, OnlineNow, ProjectSettings } from "./Versions";
 import type { TeamConnection, ConnectionState } from "./socket";
 
-export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history";
+export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "settings";
 const TABS: readonly ProjectTab[] = ["overview", "story", "blueprints", "assets", "todos", "reviews", "history"];
+/** Shown to the project's owners only. */
+const OWNER_TABS: readonly ProjectTab[] = [...TABS, "settings"];
 const TAB_PHRASE: Record<ProjectTab, Phrase> = {
   overview: "tabOverview",
   story: "tabStory",
@@ -47,6 +50,7 @@ const TAB_PHRASE: Record<ProjectTab, Phrase> = {
   todos: "tabTodos",
   reviews: "tabReviews",
   history: "tabHistory",
+  settings: "tabSettings",
 };
 
 interface ProjectSummary {
@@ -55,6 +59,8 @@ interface ProjectSummary {
   readonly description: string;
   readonly role?: TeamProjectRole;
   readonly history?: { readonly revisions?: number; readonly lastAt?: number; readonly lastBy?: string; readonly lastMessage?: string };
+  readonly saveRole?: TeamVersionRole;
+  readonly restoreRole?: TeamVersionRole;
 }
 
 interface Member {
@@ -109,13 +115,46 @@ export function ProjectPage(props: {
       .catch((caught: unknown) => setError(errorText(caught)));
   }, [open, connection, projectId]);
 
+  // The newest view is what the server holds right now (`current`), not the last saved version;
+  // a revision picked from the history is read as it was.
+  const reading = revision === "head" ? "current" : revision;
+  const [tick, setTick] = useState(0);
+  // The address may name the project by name; its topics are by id.
+  const projectKey = project?.id;
+  useEffect(() => {
+    if (!open || revision !== "head" || projectKey === undefined) return undefined;
+    // Somebody edited, saved or restored: read again, at most every second and a half.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const off = connection.subscribe(projectDocTopic(projectKey), () => {
+      if (timer !== undefined) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        setTick((n) => n + 1);
+      }, 1500);
+    });
+    return () => {
+      off();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [open, connection, projectKey, revision]);
+
   useEffect(() => {
     setTree(undefined);
     setTreeError(undefined);
-    fetchTree(projectId, revision)
-      .then(setTree)
-      .catch((caught: unknown) => setTreeError(errorText(caught)));
-  }, [projectId, revision]);
+  }, [projectId, reading]);
+  useEffect(() => {
+    let alive = true;
+    fetchTree(projectId, reading)
+      .then((next) => {
+        if (alive) setTree(next);
+      })
+      .catch((caught: unknown) => {
+        if (alive) setTreeError(errorText(caught));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [projectId, reading, tick]);
 
   if (error !== undefined) {
     return <Notice tone="error">{t("loadFailed", { reason: error })}</Notice>;
@@ -138,9 +177,11 @@ export function ProjectPage(props: {
             {t("backToHead")}
           </button>
         </div>
+      ) : tree?.revision === "current" && (tab === "story" || tab === "blueprints" || tab === "assets") ? (
+        <p className="muted small live-note">{t("liveNote")}</p>
       ) : null}
       <nav className="tabs" role="tablist">
-        {TABS.map((key) => (
+        {(project?.role === "owner" ? OWNER_TABS : TABS).map((key) => (
           <button
             key={key}
             role="tab"
@@ -152,7 +193,9 @@ export function ProjectPage(props: {
           </button>
         ))}
       </nav>
-      {tab === "history" ? (
+      {tab === "settings" && project !== undefined && project.role === "owner" ? (
+        <ProjectSettings connection={connection} project={project} changed={(next) => setProject({ ...project, ...next })} />
+      ) : tab === "history" ? (
         <History
           connection={connection}
           open={open}
@@ -239,6 +282,7 @@ function Overview(props: { connection: TeamConnection; open: boolean; projectId:
           <div className="muted small">{t("lastChangeBy", { who: history.lastBy ?? "?", when: when(history.lastAt) })}</div>
         </div>
       ) : null}
+      <OnlineNow connection={connection} open={open} projectId={projectId} />
       <h2>{t("timeline")}</h2>
       <Timeline connection={connection} open={open} project={projectId} />
       <h2>{t("members")}</h2>
@@ -291,7 +335,12 @@ function Story({
       .then((json) => {
         const read = readStoryLibrary(json);
         setLibrary(read);
-        if (read.supported) setStoryId(read.defaultStoryId ?? read.stories[0]?.id);
+        // A refresh keeps the story being read, unless it is gone.
+        if (read.supported) {
+          setStoryId((current) =>
+            current !== undefined && read.stories.some((story) => story.id === current) ? current : (read.defaultStoryId ?? read.stories[0]?.id),
+          );
+        }
       })
       .catch((caught: unknown) => setError(errorText(caught)));
     if (has(CHARACTER_STORE_PATH)) {
@@ -302,17 +351,21 @@ function Story({
   }, [projectId, tree, has]);
 
   const entry = library?.supported ? library.stories.find((story) => story.id === storyId) : undefined;
+  const documentPath = entry?.documentPath;
   useEffect(() => {
-    if (entry === undefined) return;
     setDocument(undefined);
-    fetchJson(projectId, tree.revision, entry.documentPath)
+  }, [documentPath]);
+  useEffect(() => {
+    if (documentPath === undefined) return;
+    fetchJson(projectId, tree.revision, documentPath)
       .then((json) => {
         const read = readStoryDocument(json);
         setDocument(read);
-        if (read.supported) setSceneId(read.order[0]);
+        // A refresh keeps the scene being read, unless it is gone.
+        if (read.supported) setSceneId((current) => (current !== undefined && read.order.includes(current) ? current : read.order[0]));
       })
       .catch((caught: unknown) => setError(errorText(caught)));
-  }, [projectId, tree, entry]);
+  }, [projectId, tree, documentPath]);
 
   if (error !== undefined) return <Notice tone="error">{t("loadFailed", { reason: error })}</Notice>;
   if (library === undefined) return <p className="muted">{t("loading")}</p>;
@@ -338,7 +391,7 @@ function Story({
       connection={connection}
       open={open}
       projectId={projectId}
-      revision={tree.revision}
+      revision={tree.revision === "current" ? (tree.base ?? "") : tree.revision}
       canWrite={canWrite}
       selected={selected}
       setSelected={setSelected}
@@ -741,13 +794,6 @@ function Assets({ projectId, tree }: { projectId: string; tree: Tree }) {
 
 /* -------------------------------------------------------------- history */
 
-interface Revision {
-  readonly id: string;
-  readonly at?: number;
-  readonly by?: string;
-  readonly message?: string;
-}
-
 function History(props: {
   connection: TeamConnection;
   open: boolean;
@@ -760,6 +806,8 @@ function History(props: {
   const milestones = useMilestones(connection, open, projectId);
   const [revisions, setRevisions] = useState<readonly Revision[] | undefined>(undefined);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
+  const [showAuto, setShowAuto] = useState(false);
+  const [comparing, setComparing] = useState<string | undefined>(undefined);
   const load = useCallback(
     (after?: string) => {
       connection
@@ -777,31 +825,61 @@ function History(props: {
   }, [open, load]);
   if (revisions === undefined) return <p className="muted">{t("loading")}</p>;
   if (revisions.length === 0) return <Notice>{t("noHistory")}</Notice>;
+  // Automatic snapshots come every few minutes of editing; folded away unless asked for.
+  const shown = revisions.filter((revision) => showAuto || !isAutoVersion(revision));
+  const hidden = revisions.length - shown.length;
   return (
     <>
+      <label className="small history-toggle">
+        <input type="checkbox" checked={showAuto} onChange={(event) => setShowAuto(event.target.checked)} /> {t("showAuto")}
+        {!showAuto && hidden > 0 ? <span className="muted"> ({hidden})</span> : null}
+      </label>
+      {comparing !== undefined ? <CompareWithNow projectId={projectId} revision={comparing} close={() => setComparing(undefined)} /> : null}
       <ol className="history">
-        {revisions.map((revision) => (
-          <li key={revision.id} className="history-row">
-            <div className="history-main">
-              <div>{revision.message || <span className="muted">—</span>}</div>
-              <div className="muted small">
-                {revision.by ?? "?"} · {when(revision.at)} · <code>{revision.id.slice(0, 12)}</code>{" "}
-                <MilestoneTags
-                  connection={connection}
-                  projectId={projectId}
-                  revision={revision.id}
-                  milestones={milestones}
-                  canName={role === "owner" || role === "editor"}
-                  me={me}
-                  role={role}
-                />
+        {shown.map((revision) => {
+          const version = revision.version;
+          const title = revisionTitle(revision);
+          // A version's commit is under the account the server reads as: who saved it and whose
+          // edits it holds say who did the work.
+          const who = version === undefined
+            ? (revision.by ?? "?")
+            : [
+                version.savedBy !== undefined ? t("versionSavedBy", { who: version.savedBy }) : undefined,
+                version.participants.length > 0 ? t("versionWith", { names: version.participants.join("、") }) : undefined,
+              ]
+                .filter((part) => part !== undefined)
+                .join(" · ") || "—";
+          return (
+            <li key={revision.id} className="history-row">
+              <div className="history-main">
+                <div>
+                  {isAutoVersion(revision) ? <span className="badge">{t("versionAuto")}</span> : null}{" "}
+                  {title || (isAutoVersion(revision) ? null : <span className="muted">—</span>)}
+                </div>
+                <div className="muted small">
+                  {who} · {when(revision.at)} · <code>{revision.id.slice(0, 12)}</code>{" "}
+                  <MilestoneTags
+                    connection={connection}
+                    projectId={projectId}
+                    revision={revision.id}
+                    milestones={milestones}
+                    canName={role === "owner" || role === "editor"}
+                    me={me}
+                    role={role}
+                  />
+                </div>
               </div>
-            </div>
-            <button className="ghost" onClick={() => pick(revision.id)}>
-              {t("viewThisRevision")}
-            </button>
-          </li>
-        ))}
+              <div className="history-actions">
+                <button className="ghost" onClick={() => pick(revision.id)}>
+                  {t("viewThisRevision")}
+                </button>
+                <button className="ghost" onClick={() => setComparing(revision.id)}>
+                  {t("compareWithNow")}
+                </button>
+              </div>
+            </li>
+          );
+        })}
       </ol>
       {cursor !== undefined ? (
         <button className="ghost" onClick={() => load(cursor)}>

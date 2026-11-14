@@ -134,7 +134,7 @@ export function LineComments(props: {
     try {
       await connection.call("threads.create", {
         project: projectId,
-        anchor: { document: storyDocumentAnchor(storyId), element: storyLineAnchor(sceneId, blockId), revision },
+        anchor: { document: storyDocumentAnchor(storyId), element: storyLineAnchor(sceneId, blockId), ...(revision === "" ? {} : { revision }) },
         body: text,
         clientId: crypto.randomUUID(),
       });

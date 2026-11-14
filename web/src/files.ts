@@ -8,7 +8,11 @@ export interface TreeFile {
 }
 
 export interface Tree {
+  /** A revision id, or `current` for what a team project holds right now. */
   readonly revision: string;
+  /** For `current`: the authority's seq, and the last saved version beneath it. */
+  readonly seq?: number;
+  readonly base?: string;
   readonly files: readonly TreeFile[];
   readonly total: number;
 }
