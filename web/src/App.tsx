@@ -228,7 +228,7 @@ function Shell({
           <BrandMark logo={brand.logo} />
           <span>{serverName}</span>
         </div>
-        <ConnectionBadge state={state} />
+        <ConnectionBadge state={state} connection={connection} />
         <div className="spacer" />
         <Bell connection={connection} state={state} />
         <div className="who">
@@ -290,17 +290,71 @@ function RailLink({ active, onClick, label }: { active: boolean; onClick: () => 
   );
 }
 
-function ConnectionBadge({ state }: { state: ConnectionState }) {
+/** How often the header times a round trip to the server. */
+const PING_EVERY_MS = 5_000;
+/** How many round trips the shown figure is the middle of, so one slow answer does not jump it. */
+const PING_SAMPLES = 5;
+
+/**
+ * The round trip to the server, in milliseconds, kept up to date while the socket is open: the
+ * middle of the last few `server.ping` calls, timed on the same socket every other call takes.
+ * Not asked while the tab is hidden; undefined while there is no connection or no answer yet.
+ */
+function useLatency(connection: TeamConnection, open: boolean): { median: number; last: number } | undefined {
+  const [latency, setLatency] = useState<{ median: number; last: number } | undefined>(undefined);
+  useEffect(() => {
+    if (!open) {
+      setLatency(undefined);
+      return undefined;
+    }
+    let alive = true;
+    const samples: number[] = [];
+    const once = async () => {
+      if (document.visibilityState === "hidden") return;
+      const started = performance.now();
+      try {
+        await connection.call("server.ping", { sent: Date.now() });
+      } catch {
+        return;
+      }
+      const last = performance.now() - started;
+      samples.push(last);
+      if (samples.length > PING_SAMPLES) samples.shift();
+      const sorted = [...samples].sort((a, b) => a - b);
+      if (alive) setLatency({ median: Math.round(sorted[Math.floor(sorted.length / 2)] ?? last), last: Math.round(last) });
+    };
+    void once();
+    const timer = setInterval(() => void once(), PING_EVERY_MS);
+    const onShow = () => {
+      if (document.visibilityState === "visible") void once();
+    };
+    document.addEventListener("visibilitychange", onShow);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onShow);
+    };
+  }, [connection, open]);
+  return latency;
+}
+
+function ConnectionBadge({ state, connection }: { state: ConnectionState; connection: TeamConnection }) {
+  const latency = useLatency(connection, state.kind === "open");
   const [phrase, tone] =
     state.kind === "open"
-      ? (["connected", "ok"] as const)
+      ? (["connected", latency === undefined || latency.median < 150 ? "ok" : latency.median < 400 ? "wait" : "bad"] as const)
       : state.kind === "connecting"
         ? (["connecting", "wait"] as const)
         : (["reconnecting", "bad"] as const);
   return (
-    <span className={`status status-${tone}`} role="status">
+    <span
+      className={`status status-${tone}`}
+      role="status"
+      title={latency === undefined ? undefined : t("latencyTitle", { median: String(latency.median), last: String(latency.last) })}
+    >
       <span className="dot" aria-hidden="true" />
       {t(phrase)}
+      {state.kind === "open" && latency !== undefined ? <span className="latency">{t("latency", { ms: String(latency.median) })}</span> : null}
     </span>
   );
 }

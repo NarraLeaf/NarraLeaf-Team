@@ -5368,3 +5368,15 @@ describe("a team project's documents, with this server as their authority", () =
     expect((status["projects"] as unknown[])[0]).toMatchObject({ project, loaded: true, seq: 1, savedSeq: 0, logRows: 1, versions: 0 });
   });
 });
+
+describe("how far away the server is", () => {
+  it("answers server.ping at once with its clock, echoing what the caller sent", async () => {
+    const { ada } = await withTwo();
+    const before = Date.now();
+    const answer = await ada.value(TEAM_METHODS.serverPing, { sent: 1234 });
+    expect(answer["sent"]).toBe(1234);
+    expect(answer["at"] as number).toBeGreaterThanOrEqual(before);
+    expect(Object.keys(await ada.value(TEAM_METHODS.serverPing))).toEqual(["at"]);
+    expect((await ada.call(TEAM_METHODS.serverPing, { sent: "soon" })).code).toBe("bad-params");
+  });
+});

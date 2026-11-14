@@ -1699,6 +1699,11 @@ export const TEAM_METHODS = {
   clientsWithdraw: "clients.withdraw",
   /** Which installations are connected, optionally only those on one project. */
   clientsList: "clients.list",
+  /**
+   * Answer at once with this server's clock, echoing `sent` when given: what a client times to
+   * show how far away the server is. Touches nothing, so it is cheap enough to ask every few seconds.
+   */
+  serverPing: "server.ping",
   /** The live sessions open on one project. */
   liveList: "live.list",
   /** Open one, and be its first member. */

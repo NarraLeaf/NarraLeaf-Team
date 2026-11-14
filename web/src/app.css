@@ -1395,3 +1395,6 @@ button.small {
 .compare-after { color: var(--nl-fg); margin-top: 2px; }
 .project-settings form { display: flex; flex-direction: column; gap: 8px; }
 .project-settings textarea { width: 100%; }
+
+/* The round trip to the server, beside the connection state. */
+.status .latency { margin-left: 6px; font-variant-numeric: tabular-nums; color: var(--nl-fg-muted); }

@@ -130,6 +130,16 @@ async function serve(options: { authorities?: boolean } = {}) {
   return { project, get, tokenFor };
 }
 
+describe("the plain HTTP ping", () => {
+  it("answers 204 to anybody, uncached, with the server's clock", async () => {
+    const team = await serve();
+    const reply = await team.get("/api/team/v1/ping");
+    expect(reply.status).toBe(204);
+    expect(reply.headers["cache-control"]).toBe("no-store");
+    expect(Number(reply.headers["x-team-time"])).toBeGreaterThan(0);
+  });
+});
+
 describe("a team project's files as they are now", () => {
   it("serves the authority's copy of what it keeps, and the last saved version for the rest", async () => {
     const team = await serve({ authorities: true });

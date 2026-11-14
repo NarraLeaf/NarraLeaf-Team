@@ -254,6 +254,8 @@ const zh = {
   docsRetain: "修改日志保留 {days} 天，可在服务器设置的「edit log kept (days)」里修改。",
   docsNone: "还没有团队项目在服务器上编辑过。",
   docsNotHeld: "这台服务器没有托管团队项目。",
+  latency: "{ms} ms",
+  latencyTitle: "到服务器的往返延迟：最近 5 次的中位数 {median} ms，最近一次 {last} ms",
 };
 
 const en: typeof zh = {
@@ -508,6 +510,8 @@ const en: typeof zh = {
   docsRetain: "The edit log is kept {days} days; change it in the server settings (edit log kept (days)).",
   docsNone: "No team project has been edited on this server yet.",
   docsNotHeld: "This server does not hold team projects.",
+  latency: "{ms} ms",
+  latencyTitle: "Round trip to the server: median of the last 5 is {median} ms, the last was {last} ms",
 };
 
 export type Phrase = keyof typeof zh;

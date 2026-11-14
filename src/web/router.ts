@@ -94,6 +94,18 @@ export function webHandler(
       return;
     }
 
+    // How far away this server is, over plain HTTP: nothing to read, nobody to ask who you are,
+    // and never cached, so the time to an answer is the round trip and nothing else. A page on a
+    // socket times `server.ping` instead.
+    if (path === "/api/team/v1/ping") {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        response.writeHead(405, { allow: "GET, HEAD" }).end();
+        return;
+      }
+      response.writeHead(204, { "cache-control": "no-store", "x-team-time": String(Date.now()) }).end();
+      return;
+    }
+
     if (
       options.identity !== undefined &&
       serveIdentityRoutes(options.identity, request, response, path)
