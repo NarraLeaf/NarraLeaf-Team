@@ -30,7 +30,6 @@
  * sentence about this server's insides, and the client's side of the protocol is
  * a code it can act on plus a line in the operator's log.
  */
-import { describeRefusal, identifyToken } from "../identity/bearer.js";
 import { isOperator, type UserRecord } from "../identity/users.js";
 import { judgeCollaboration } from "./collaboration.js";
 import type { TeamService } from "./service.js";
@@ -47,7 +46,9 @@ import {
   type TeamErrorCode,
   type TeamServerFrame,
 } from "./protocol.js";
-import { isAdminTopic, judgeTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
+import { findProjectById } from "../projects/registry.js";
+import { maySeeProject } from "../projects/members.js";
+import { isAdminTopic, judgeTopic, projectOfTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
 import { CLOSE, type WebSocketConnection } from "./websocket.js";
 
 /**
@@ -87,8 +88,13 @@ export interface SessionOptions {
    * room full of people who are not there is worse than no room.
    */
   readonly presence: TeamPresence;
-  /** The token this session was opened with, kept so the caller can be identified again. */
-  readonly token: string;
+  /**
+   * Who the credential this session was opened with signs in now: a bearer
+   * token for Studio and the command line, a console cookie for a browser.
+   * Asked on every call and on the revalidation timer; a refusal ends the
+   * session, with `detail` as the sentence.
+   */
+  readonly identify: () => SessionIdentity;
   /** Who it was when it opened, so the hello frame does not repeat the work. */
   readonly user: UserRecord;
   readonly serverName: string;
@@ -148,8 +154,14 @@ function closeCodeFor(code: TeamErrorCode): number {
   }
 }
 
+/** What asking a session's credential again answers. */
+export type SessionIdentity =
+  | { readonly kind: "identified"; readonly user: UserRecord }
+  | { readonly kind: "refused"; readonly detail: string };
+
 export class TeamSession implements HubSession {
   readonly id: string;
+  readonly userId: string;
 
   private readonly options: SessionOptions;
   private readonly topics = new Set<string>();
@@ -160,6 +172,7 @@ export class TeamSession implements HubSession {
   constructor(options: SessionOptions) {
     this.options = options;
     this.id = options.connection.id;
+    this.userId = options.user.id;
 
     options.hub.add(this);
 
@@ -199,6 +212,19 @@ export class TeamSession implements HubSession {
 
   end(message: string): void {
     this.bye("unavailable", message);
+  }
+
+  /**
+   * Ask again, now, what this session may still hold.
+   *
+   * Called when this account's place somewhere changed — it was taken out of a
+   * project — so that what it subscribed to is taken back at once rather than
+   * at the next call or revalidation. Identifying is the whole of it.
+   */
+  recheck(): void {
+    if (!this.over) {
+      this.identify();
+    }
   }
 
   /* ------------------------------------------------------- what arrives */
@@ -299,11 +325,14 @@ export class TeamSession implements HubSession {
       options: this.options.service,
       user,
       account: accountOf(user),
-      publish: (topic, payload) => {
-        this.options.hub.publish(topic, payload);
+      publish: (topic, payload, audience) => {
+        this.options.hub.publish(topic, payload, audience);
       },
       connection: { id: this.id },
       presence: this.options.presence,
+      recheck: (userId) => {
+        this.options.hub.recheck(userId);
+      },
     };
 
     this.inFlight += 1;
@@ -423,21 +452,53 @@ export class TeamSession implements HubSession {
       return;
     }
     for (const topic of [...this.topics]) {
-      if (!isAdminTopic(topic)) {
+      if (isAdminTopic(topic)) {
+        this.withdraw(topic, "this account is no longer an operator of this server");
+      }
+    }
+  }
+
+  /**
+   * Take back every project subscription from somebody taken out of that
+   * project, for the same reason and in the same way as {@link withdrawManagement}.
+   *
+   * Only for a project that is still there. One that was forgotten has already
+   * said so on its own topic, and a withdrawal after that would tell the client
+   * nothing it had not just been told.
+   */
+  private withdrawProjects(user: UserRecord): void {
+    if (isOperator(user.groups)) {
+      return;
+    }
+    const database = this.options.service.database;
+    const judged = new Map<string, boolean>();
+    for (const topic of [...this.topics]) {
+      const projectId = projectOfTopic(topic);
+      if (projectId === undefined) {
         continue;
       }
-      this.topics.delete(topic);
-      this.send({
-        t: "event",
-        topic,
-        seq: this.options.hub.sequenceOf(topic),
-        payload: {
-          kind: "subscription-withdrawn",
-          topic,
-          why: "this account is no longer an operator of this server",
-        },
-      });
+      let lost = judged.get(projectId);
+      if (lost === undefined) {
+        lost =
+          findProjectById(database, projectId) !== undefined &&
+          !maySeeProject(database, projectId, user);
+        judged.set(projectId, lost);
+      }
+      if (lost) {
+        this.withdraw(topic, "this account no longer has a role in that project");
+      }
     }
+  }
+
+  /** Drop one topic and tell this session alone, without moving its sequence. */
+  private withdraw(topic: string, why: string): void {
+    this.topics.delete(topic);
+    this.send({
+      t: "event",
+      topic,
+      seq: this.options.hub.sequenceOf(topic),
+      payload: { kind: "subscription-withdrawn", topic, why },
+    });
   }
 
   /**
@@ -454,17 +515,13 @@ export class TeamSession implements HubSession {
    * longer be told.
    */
   private identify(): UserRecord | undefined {
-    const identified = identifyToken(
-      this.options.service.database,
-      this.options.service.keys,
-      this.options.service.config,
-      this.options.token,
-    );
+    const identified = this.options.identify();
     if (identified.kind === "refused") {
-      this.bye("unauthenticated", describeRefusal(identified.reason));
+      this.bye("unauthenticated", identified.detail);
       return undefined;
     }
     this.withdrawManagement(identified.user);
+    this.withdrawProjects(identified.user);
     return identified.user;
   }
 

@@ -3,7 +3,7 @@
  *
  * A project is one loreserver repository. Team keeps the row that says who made
  * it; loreserver keeps the contents and asks Team, on every access, whether the
- * caller is an account of this server, which every project of it answers yes to.
+ * caller may open it, which ./members.ts answers from the caller's role.
  *
  * The two systems agree on an identifier and nothing else. loreserver's
  * repository id is sixteen bytes; it appears in a permission question as a
@@ -21,14 +21,15 @@ import {
   textColumn,
   type Row,
 } from "../identity/database.js";
+import { seedProjectMembers } from "./members.js";
 
 /**
- * What every account may do with every project on this server.
+ * What a token says an account may do with a project it may open.
  *
- * There is one answer because there is one rule: an account of this server
- * reaches every project on it. The claim is filled in because loreserver's
- * data plane reads it, and because the audit line is more use with it than
- * without; the repository authorizer never looks at the verbs.
+ * Always both: loreserver 0.8.6 never looks at the verbs (measured, see
+ * ./members.ts), so whether somebody may write is decided by whether they may
+ * open the repository at all. The claim is filled in because loreserver's data
+ * plane reads it, and because the audit line is more use with it than without.
  */
 export const PROJECT_PERMISSIONS: readonly string[] = ["read", "write"];
 
@@ -185,9 +186,9 @@ export interface NewProject {
 /**
  * Record a project.
  *
- * `created_by` is who made it, and that is the whole of what it is: it is
- * shown, and it is not consulted when somebody asks to open the repository.
- * Every account of this server reaches every project on it.
+ * `created_by` is who made it. They become its owner, and every other account
+ * an editor (./members.ts says why); from then on the members table, not this
+ * column, answers who may open the repository.
  */
 export function createProject(database: DatabaseSync, input: NewProject): ProjectRecord {
   if (!PROJECT_NAME_PATTERN.test(input.name)) {
@@ -221,6 +222,7 @@ export function createProject(database: DatabaseSync, input: NewProject): Projec
     throw error;
   }
 
+  seedProjectMembers(database, input.id, input.createdBy);
   return requireProject(database, input.id);
 }
 

@@ -58,6 +58,15 @@ import {
   setAdmin,
 } from "../src/identity/users.js";
 import { ProjectReadings } from "../src/projects/refresh.js";
+import { removeProjectMember, setProjectMember } from "../src/projects/members.js";
+import {
+  approveAuthorization,
+  checkAuthorizeRequest,
+  grantIsLive,
+  redeemCode,
+  type AuthorizeRequest,
+} from "../src/identity/oauth.js";
+import { createHash } from "node:crypto";
 import {
   createProject,
   forgetProject,
@@ -443,13 +452,17 @@ describe("opening a session", () => {
     // No history here, because this harness has read no repositories. Announced
     // from what the build serves rather than written down beside it.
     expect([...(client.hello?.capabilities ?? [])].sort()).toEqual([
+      "activity",
       "admin",
       "clients",
       "comments",
       "live",
+      "notifications",
+      "oauth",
       "overlay",
       "password-sign-in",
       "session",
+      "todos",
     ]);
   });
 });
@@ -1110,6 +1123,252 @@ describe("making a project over the socket", () => {
     const answer = await maker.call(TEAM_METHODS.projectsCreate, { name: "driftwood" });
     expect(answer.code).toBe("unavailable");
     expect(listProjects(team.database)).toEqual([]);
+  });
+});
+
+describe("what a project's members see over the socket", () => {
+  it("lists and opens only the projects the caller has a role in", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const nora = await account(team.database, "nora");
+    const rita = await account(team.database, "rita");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    removeProjectMember(team.database, project.id, nora);
+    setProjectMember(team.database, { projectId: project.id, userId: rita, role: "reviewer" });
+
+    const outsider = await team.connect(team.tokenFor("nora"));
+    const listed = await outsider.value(TEAM_METHODS.projectsList);
+    expect(listed["projects"]).toEqual([]);
+    expect(listed["total"]).toBe(0);
+    // Not there, rather than refused: "you may not" would say it exists.
+    expect((await outsider.call(TEAM_METHODS.projectsGet, { project: project.id })).code).toBe("not-found");
+    expect((await outsider.call(TEAM_METHODS.threadsList, { project: project.id })).code).toBe("not-found");
+    expect((await outsider.send("subscribe", { topic: `project:${project.id}/threads` })).code).toBe("not-found");
+
+    // A reviewer cannot open the repository, and sees the project here.
+    const reviewer = await team.connect(team.tokenFor("rita"));
+    const seen = (await reviewer.value(TEAM_METHODS.projectsList))["projects"] as { id: string }[];
+    expect(seen.map((row) => row.id)).toEqual([project.id]);
+  });
+
+  it("lets only an owner take a project off the list", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    await account(team.database, "bob");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+
+    const editor = await team.connect(team.tokenFor("bob"));
+    expect((await editor.call(TEAM_METHODS.projectsForget, { project: project.id })).code).toBe("refused");
+    expect(listProjects(team.database)).toHaveLength(1);
+
+    const owner = await team.connect(team.tokenFor("ada"));
+    expect(await owner.value(TEAM_METHODS.projectsForget, { project: project.id })).toEqual({});
+    expect(listProjects(team.database)).toEqual([]);
+  });
+});
+
+describe("changing who belongs to a project over the socket", () => {
+  async function lighthouse() {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const bob = await account(team.database, "bob");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    return { team, ada, bob, project };
+  }
+
+  it("lists the members and the caller's own role to any member", async () => {
+    const { team, project } = await lighthouse();
+    const editor = await team.connect(team.tokenFor("bob"));
+
+    const listed = await editor.value(TEAM_METHODS.projectsMembersList, { project: project.id });
+    const members = listed["members"] as { username: string; role: string }[];
+    expect(members.map((member) => [member.username, member.role])).toEqual([
+      ["ada", "owner"],
+      ["bob", "editor"],
+    ]);
+    expect(listed["role"]).toBe("editor");
+    expect(listed["total"]).toBe(2);
+
+    // The project rows carry the caller's role too, so a client can leave out
+    // what that role cannot do.
+    const rows = (await editor.value(TEAM_METHODS.projectsList))["projects"] as { role?: string }[];
+    expect(rows[0]?.role).toBe("editor");
+  });
+
+  it("lets an owner change a role, and refuses everybody else", async () => {
+    const { team, project } = await lighthouse();
+    await account(team.database, "rita");
+
+    const editor = await team.connect(team.tokenFor("bob"));
+    const refused = await editor.call(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "rita",
+      role: "viewer",
+    });
+    expect(refused.code).toBe("refused");
+
+    const owner = await team.connect(team.tokenFor("ada"));
+    const set = await owner.value(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "rita",
+      role: "reviewer",
+    });
+    expect(set["member"]).toMatchObject({ username: "rita", role: "reviewer", addedBy: "ada" });
+
+    expect(
+      (await owner.call(TEAM_METHODS.projectsMembersSet, { project: project.id, username: "rita", role: "admin" }))
+        .code,
+    ).toBe("bad-params");
+    expect(
+      (await owner.call(TEAM_METHODS.projectsMembersSet, { project: project.id, username: "nobody", role: "viewer" }))
+        .code,
+    ).toBe("not-found");
+  });
+
+  it("never leaves a project without an owner of its own", async () => {
+    const { team, project } = await lighthouse();
+    const owner = await team.connect(team.tokenFor("ada"));
+
+    const demoted = await owner.call(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "ada",
+      role: "editor",
+    });
+    expect(demoted.code).toBe("refused");
+    expect((await owner.call(TEAM_METHODS.projectsMembersRemove, { project: project.id, username: "ada" })).code).toBe(
+      "refused",
+    );
+
+    // With a second owner, the first may step down.
+    await owner.value(TEAM_METHODS.projectsMembersSet, { project: project.id, username: "bob", role: "owner" });
+    const stepped = await owner.value(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "ada",
+      role: "editor",
+    });
+    expect(stepped["member"]).toMatchObject({ username: "ada", role: "editor" });
+  });
+
+  it("takes a removed member's project away at once, and tells only those it concerns", async () => {
+    const { team, project } = await lighthouse();
+    await account(team.database, "nora");
+    removeProjectMember(team.database, project.id, (findUser(team.database, "nora") as { id: string }).id);
+
+    const removed = await team.connect(team.tokenFor("bob"));
+    await removed.send("subscribe", { topic: TOPIC_PROJECTS });
+    await removed.send("subscribe", { topic: `project:${project.id}/threads` });
+    const outsider = await team.connect(team.tokenFor("nora"));
+    await outsider.send("subscribe", { topic: TOPIC_PROJECTS });
+    const owner = await team.connect(team.tokenFor("ada"));
+    await owner.send("subscribe", { topic: `project:${project.id}/members` });
+
+    expect(await owner.value(TEAM_METHODS.projectsMembersRemove, { project: project.id, username: "bob" })).toEqual(
+      {},
+    );
+    // Removing somebody who is not a member is the state asked for.
+    expect(await owner.value(TEAM_METHODS.projectsMembersRemove, { project: project.id, username: "bob" })).toEqual(
+      {},
+    );
+
+    await owner.until(() => owner.events.length > 0);
+    expect(owner.events[0]?.payload).toEqual({ kind: "member-removed", username: "bob" });
+
+    await removed.until(() => removed.events.length >= 2);
+    const payloads = removed.events.map((event) => event.payload as { kind: string; topic?: string });
+    expect(payloads).toContainEqual({ kind: "project-access-changed", project: project.id });
+    expect(payloads).toContainEqual(
+      expect.objectContaining({ kind: "subscription-withdrawn", topic: `project:${project.id}/threads` }),
+    );
+    expect((await removed.value(TEAM_METHODS.projectsList))["projects"]).toEqual([]);
+
+    // The project being made and forgotten is told to its members, not to nora.
+    await owner.value(TEAM_METHODS.projectsForget, { project: project.id });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(outsider.events).toEqual([]);
+  });
+});
+
+describe("a thread outlives nobody's membership", () => {
+  it("refuses a thread, by id, to an account taken out of its project, and writing to a viewer", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const bob = await account(team.database, "bob");
+    const vic = await account(team.database, "vic");
+    const project = createProject(team.database, { id: newProjectId(), name: "lighthouse", description: "", createdBy: ada });
+    setProjectMember(team.database, { projectId: project.id, userId: vic, role: "viewer" });
+
+    const author = await team.connect(team.tokenFor("ada"));
+    const opened = await author.value(TEAM_METHODS.threadsCreate, {
+      project: project.id,
+      anchor: { document: "story:main", element: "scene/row" },
+      body: "first",
+    });
+    const threadId = (opened["thread"] as { id: string }).id;
+
+    const viewer = await team.connect(team.tokenFor("vic"));
+    expect((await viewer.call(TEAM_METHODS.threadsGet, { thread: threadId })).code).toBeUndefined();
+    expect((await viewer.call(TEAM_METHODS.threadsReply, { thread: threadId, body: "hi" })).code).toBe("refused");
+
+    removeProjectMember(team.database, project.id, bob);
+    const outsider = await team.connect(team.tokenFor("bob"));
+    expect((await outsider.call(TEAM_METHODS.threadsGet, { thread: threadId })).code).toBe("not-found");
+    expect((await outsider.call(TEAM_METHODS.threadsReply, { thread: threadId, body: "still here" })).code).toBe("not-found");
+    expect((await outsider.call(TEAM_METHODS.threadsResolve, { thread: threadId })).code).toBe("not-found");
+  });
+});
+
+describe("the caller's own devices", () => {
+  it("lists the devices signed in through the browser, and signs one out", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    await account(team.database, "bob");
+    const verifier = "v".repeat(43);
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const grantFor = (username: string): string => {
+      const request = checkAuthorizeRequest(
+        new URLSearchParams({
+          client_id: "narraleaf-studio",
+          redirect_uri: "http://127.0.0.1:5000/cb",
+          response_type: "code",
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          device_name: `${username}'s laptop`,
+        }),
+      ) as AuthorizeRequest;
+      const code = new URL(approveAuthorization(team.database, requireUser(team.database, username), request)).searchParams.get("code") ?? "";
+      const issued = redeemCode(team.database, { code, clientId: "narraleaf-studio", redirectUri: "http://127.0.0.1:5000/cb", verifier });
+      if ("error" in issued) throw new Error(issued.description);
+      return issued.grantId;
+    };
+    const mine = grantFor("ada");
+    const theirs = grantFor("bob");
+
+    const ada = await team.connect(team.tokenFor("ada"));
+    const listed = (await ada.value(TEAM_METHODS.accountDevicesList))["devices"] as { id: string; name: string; client: string }[];
+    expect(listed.map((device) => [device.name, device.client])).toEqual([["ada's laptop", "NarraLeaf Studio"]]);
+
+    // Somebody else's device is not the caller's to sign out.
+    await ada.value(TEAM_METHODS.accountDevicesRevoke, { device: theirs });
+    expect(grantIsLive(team.database, theirs, requireUser(team.database, "bob").id)).toBe(true);
+
+    await ada.value(TEAM_METHODS.accountDevicesRevoke, { device: mine });
+    expect(grantIsLive(team.database, mine, requireUser(team.database, "ada").id)).toBe(false);
+    expect((await ada.value(TEAM_METHODS.accountDevicesList))["devices"]).toEqual([]);
   });
 });
 
@@ -3265,6 +3524,7 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminSettingsSet,
   TEAM_METHODS.adminKeysRotate,
   TEAM_METHODS.adminKeysRetire,
+  TEAM_METHODS.adminBrandSet,
 ];
 
 /** Both halves, which is what the gate has to cover. */

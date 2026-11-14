@@ -23,6 +23,7 @@ import { findUserById, isOperator, type UserRecord } from "../identity/users.js"
 import type { TeamService } from "../team/service.js";
 import type { RevisionView } from "../teamview.js";
 import type { ProjectRecord } from "./registry.js";
+import { projectRole, type ProjectMember, type ProjectRole } from "./members.js";
 
 /** One project, as a Studio installation reads it. */
 export interface ProjectBody {
@@ -51,6 +52,11 @@ export interface ProjectBody {
    * clone is still running.
    */
   readonly history?: RevisionView;
+  /**
+   * The role the account asking has in this project, so a client can leave out
+   * what that role cannot do. Absent only where nobody in particular asked.
+   */
+  readonly role?: ProjectRole;
 }
 
 /**
@@ -62,8 +68,8 @@ export interface ProjectBody {
  * and anything else the management plane keeps.
  *
  * `operator` is that label, and it is a label. It says this account may
- * administer this server. It is not a permission over any project: every
- * account of this server reaches every project on it.
+ * administer this server, which makes it the owner of every project; what any
+ * other account may do in a project is its role there — see {@link ProjectMember}.
  */
 export interface MemberBody {
   readonly username: string;
@@ -90,9 +96,15 @@ export interface MemberBody {
   readonly disabled: boolean;
   readonly serviceAccount: boolean;
   readonly createdAt: number;
+  /** Where the account's avatar is, absent for one with none. */
+  readonly avatarUrl?: string;
 }
 
-export function projectBody(options: TeamService, project: ProjectRecord): ProjectBody {
+export function projectBody(
+  options: TeamService,
+  project: ProjectRecord,
+  viewer?: UserRecord,
+): ProjectBody {
   const { database, config } = options;
   const maker = findUserById(database, project.createdBy);
   // Whatever the reader has landed, and nothing is asked of it here. A project
@@ -109,10 +121,48 @@ export function projectBody(options: TeamService, project: ProjectRecord): Proje
     // at is a fact about the deployment, not about the project.
     remote: `${dataRemoteUrl(audienceHosts(config)[0] ?? "127.0.0.1", config.dataPort)}/${project.name}`,
     ...(history === undefined ? {} : { history }),
+    ...(viewer === undefined ? {} : roleField(projectRole(database, project.id, viewer))),
+  };
+}
+
+function roleField(role: ProjectRole | undefined): { role?: ProjectRole } {
+  return role === undefined ? {} : { role };
+}
+
+/** One account's place in one project, as the protocol carries it. */
+export interface ProjectMemberBody {
+  readonly username: string;
+  readonly displayName: string;
+  readonly avatarUrl?: string;
+  readonly role: ProjectRole;
+  readonly addedBy?: string;
+  readonly addedAt: number;
+}
+
+/**
+ * A member row as the protocol carries it, or undefined for a row whose account
+ * no longer exists — which the foreign key prevents, and which is left out
+ * rather than sent nameless if it ever happens.
+ */
+export function projectMemberBody(options: TeamService, member: ProjectMember): ProjectMemberBody | undefined {
+  const user = findUserById(options.database, member.userId);
+  if (user === undefined) {
+    return undefined;
+  }
+  const adder = member.addedBy === undefined ? undefined : findUserById(options.database, member.addedBy);
+  const avatar = avatarUrl(user);
+  return {
+    username: user.username,
+    displayName: user.displayName,
+    ...(avatar === undefined ? {} : { avatarUrl: avatar }),
+    role: member.role,
+    ...(adder === undefined ? {} : { addedBy: adder.username }),
+    addedAt: member.addedAt,
   };
 }
 
 export function memberBody(user: UserRecord): MemberBody {
+  const avatar = avatarUrl(user);
   return {
     username: user.username,
     displayName: user.displayName,
@@ -123,5 +173,22 @@ export function memberBody(user: UserRecord): MemberBody {
     disabled: user.disabledAt !== undefined,
     serviceAccount: user.isServiceAccount,
     createdAt: user.createdAt,
+    ...(avatar === undefined ? {} : { avatarUrl: avatar }),
+  };
+}
+
+/** Where an account's avatar is served: content-addressed, so it can be cached for ever. */
+export function avatarUrl(user: UserRecord): string | undefined {
+  return user.avatar === undefined ? undefined : `/api/team/v1/avatars/${encodeURIComponent(user.username)}/${user.avatar}`;
+}
+
+/** An account's profile: a name, a face and a line. */
+export function profileBody(user: UserRecord): { username: string; displayName: string; bio?: string; avatarUrl?: string } {
+  const avatar = avatarUrl(user);
+  return {
+    username: user.username,
+    displayName: user.displayName,
+    ...(user.bio === undefined ? {} : { bio: user.bio }),
+    ...(avatar === undefined ? {} : { avatarUrl: avatar }),
   };
 }

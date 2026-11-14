@@ -15,6 +15,8 @@
  * capability is for.
  */
 import type { UserRecord } from "../identity/users.js";
+import { maySeeProject } from "../projects/members.js";
+import { findProjectById } from "../projects/registry.js";
 import { collaborationOpen, withoutCoordination } from "./collaboration.js";
 import { serviceCapabilities, type TeamService } from "./service.js";
 import type { TeamPresence } from "./presence.js";
@@ -53,8 +55,10 @@ export interface MethodContext {
    * Handed to the handler rather than reached for, so that a method cannot
    * publish to a server other than its own and so that a test can watch what a
    * handler announces without a socket.
+   *
+   * `audience` narrows who is told to those account ids - see TeamHub.publish.
    */
-  readonly publish: (topic: string, payload: unknown) => void;
+  readonly publish: (topic: string, payload: unknown, audience?: ReadonlySet<string>) => void;
   /**
    * The link session this call arrived on, by id.
    *
@@ -65,6 +69,11 @@ export interface MethodContext {
   readonly connection: { readonly id: string };
   /** Who is connected and which live sessions are open. See src/team/presence.ts. */
   readonly presence: TeamPresence;
+  /**
+   * Have every session of one account ask again what it may still hold, for a
+   * change that took something away from it — see TeamHub.recheck.
+   */
+  readonly recheck?: (userId: string) => void;
 }
 
 /**
@@ -315,4 +324,17 @@ export function flag(params: Record<string, unknown>, name: string, fallback: bo
     throw new MethodError("bad-params", `${name} has to be true or false`);
   }
   return value;
+}
+
+/**
+ * Whether the caller may see a project: it exists, and they have a role in it
+ * (or administer this server). A project they have no role in is answered as
+ * one that is not there — saying "you may not" would say it exists, and the
+ * list a caller sees is already only the projects they belong to.
+ */
+export function projectVisible(context: MethodContext, projectId: string): boolean {
+  return (
+    findProjectById(context.options.database, projectId) !== undefined &&
+    maySeeProject(context.options.database, projectId, context.user)
+  );
 }

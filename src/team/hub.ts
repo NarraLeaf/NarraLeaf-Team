@@ -29,12 +29,16 @@
 /** What the hub needs of a session, so that a test can be one in three lines. */
 export interface HubSession {
   readonly id: string;
+  /** The account this session is signed in as, by id, for an event told to some accounts only. */
+  readonly userId: string;
   /** Whether this session asked for that topic. */
   wants: (topic: string) => boolean;
   /** Hand one event over. Must not throw: a bad socket is one session's problem. */
   deliver: (topic: string, seq: number, payload: unknown) => void;
   /** End it, saying why. */
   end: (message: string) => void;
+  /** Ask again what it may still hold, because its account's place changed. */
+  recheck?: () => void;
 }
 
 export class TeamHub {
@@ -87,15 +91,39 @@ export class TeamHub {
    * The sequence moves whether or not anybody is listening, so a client that
    * subscribes, disconnects for a minute and comes back is told a number that
    * differs from the one it had - which is exactly the signal it needs.
+   *
+   * `audience`, when given, is the account ids the event is for; a session
+   * signed in as anybody else is not told, though the sequence moves for it as
+   * for everybody. That is how one topic every session may hold — the projects
+   * list — carries events about projects only their members can see: the
+   * session left out reads a gap, reads the list, and finds nothing new on it.
    */
-  publish(topic: string, payload: unknown): void {
+  publish(topic: string, payload: unknown, audience?: ReadonlySet<string>): void {
     const seq = this.sequenceOf(topic) + 1;
     this.sequences.set(topic, seq);
     for (const session of this.sessions) {
       if (!session.wants(topic)) {
         continue;
       }
+      if (audience !== undefined && !audience.has(session.userId)) {
+        continue;
+      }
       session.deliver(topic, seq, payload);
+    }
+  }
+
+  /**
+   * Have every session of one account ask again what it may still hold.
+   *
+   * For a change that takes something away from an account without touching its
+   * token — being taken out of a project — so that its subscriptions there are
+   * withdrawn now rather than at its next call.
+   */
+  recheck(userId: string): void {
+    for (const session of [...this.sessions]) {
+      if (session.userId === userId) {
+        session.recheck?.();
+      }
     }
   }
 

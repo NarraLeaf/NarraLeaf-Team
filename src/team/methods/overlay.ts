@@ -44,7 +44,6 @@ import {
   type OverlayWritten,
 } from "../../overlay/store.js";
 import { findUserById } from "../../identity/users.js";
-import { findProjectById } from "../../projects/registry.js";
 import {
   boundedCount,
   MethodError,
@@ -53,6 +52,7 @@ import {
   requiredText,
   type MethodContext,
   type TeamMethod,
+  projectVisible,
 } from "../methods.js";
 import {
   ANCHOR_FIELD_LIMIT,
@@ -234,7 +234,7 @@ export function overlayMethods(): TeamMethod[] {
 
 function requireProject(context: MethodContext, params: Record<string, unknown>): string {
   const id = requiredText(params, "project", ID_LIMIT);
-  if (findProjectById(context.options.database, id) === undefined) {
+  if (!projectVisible(context, id)) {
     throw new MethodError("not-found", "there is no project of that id on this server");
   }
   return id;

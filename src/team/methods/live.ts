@@ -23,7 +23,6 @@
  * protocol is made of and the version number goes with it** - it is not
  * something to smuggle in by making this durable.
  */
-import { findProjectById } from "../../projects/registry.js";
 import {
   callingInstance,
   MethodError,
@@ -32,6 +31,7 @@ import {
   requiredText,
   type MethodContext,
   type TeamMethod,
+  projectVisible,
 } from "../methods.js";
 import {
   LiveJoinNeedsAskingError,
@@ -54,7 +54,7 @@ const ID_LIMIT = 128;
 /** The project named by a call, checked, because a room hangs off a real one. */
 function project(context: MethodContext, params: Record<string, unknown>): string {
   const id = requiredText(params, "project", ID_LIMIT);
-  if (findProjectById(context.options.database, id) === undefined) {
+  if (!projectVisible(context, id)) {
     throw new MethodError("not-found", "there is no project of that id on this server");
   }
   return id;

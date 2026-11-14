@@ -58,6 +58,7 @@ import { trustCommandFor } from "./tls/trust.js";
 import { VERSION } from "./version.js";
 import type { TeamService } from "./team/service.js";
 import { webHandler } from "./web/router.js";
+import { consoleRoot } from "./web/console.js";
 
 export interface UpOptions extends LoreserverPorts {
   /** The storage root; everything Team writes goes underneath it. */
@@ -267,11 +268,11 @@ export async function up(
       // reason `refused` above is - the socket and the reader are made further
       // down. It is what `projects.forget` does on the other path, in the same
       // order, so that a project going one way is a project going the other.
-      forgotten: (projectId: string) => {
+      forgotten: (projectId: string, audience: ReadonlySet<string>) => {
         readings?.forget(projectId);
         const gone = { kind: "project-forgotten", project: projectId } as const;
-        team?.hub.publish(TOPIC_PROJECTS, gone);
-        team?.hub.publish(projectTopic(projectId), gone);
+        team?.hub.publish(TOPIC_PROJECTS, gone, audience);
+        team?.hub.publish(projectTopic(projectId), gone, audience);
       },
       onError: (error: Error) => stderr(`nlteam: authorization service: ${error.message}\n`),
     };
@@ -444,6 +445,7 @@ export async function up(
         identity: identityRoutes,
         studio,
         blobs: { store: blobStore, presence: socket.presence, service: studio },
+        console: { service: studio, root: consoleRoot() },
       }),
       upgrade: (request, socket, head) => {
         if (team?.handleUpgrade(request, socket, head) === true) {

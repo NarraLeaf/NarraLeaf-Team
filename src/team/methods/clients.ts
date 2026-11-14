@@ -17,7 +17,6 @@
  *
  * **Nothing announced here is stored.** See src/team/presence.ts for why.
  */
-import { findProjectById } from "../../projects/registry.js";
 import { InstanceTakenError, TooManyInstancesError } from "../presence.js";
 import {
   MethodError,
@@ -26,6 +25,7 @@ import {
   requiredText,
   type MethodContext,
   type TeamMethod,
+  projectVisible,
 } from "../methods.js";
 import {
   ANCHOR_FIELD_LIMIT,
@@ -49,7 +49,7 @@ export function clientMethods(): TeamMethod[] {
         // built on: an instance parked on a project id nobody has would be a
         // presence nothing could ever see, which reads to its owner as being
         // invisible rather than as having typed something wrong.
-        if (project !== undefined && findProjectById(context.options.database, project) === undefined) {
+        if (project !== undefined && !projectVisible(context, project)) {
           throw new MethodError("not-found", "there is no project of that id on this server");
         }
         // Bounded as an anchor field is, and for the same reason: it is a
