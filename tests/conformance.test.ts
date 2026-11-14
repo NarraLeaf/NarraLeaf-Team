@@ -111,6 +111,8 @@ describe("the protocol contract", () => {
         database,
         readings: { get: () => undefined, revisions: async () => undefined },
         blobs: true,
+        // And the project authorities, which are what `documents` says.
+        authorities: {},
       } as unknown as TeamService;
       expect(serverCapabilities(methodTable(teamMethods()), everything).sort()).toEqual(
         [...contract.capabilities].sort(),

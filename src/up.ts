@@ -49,7 +49,12 @@ import { ProjectReadings } from "./projects/refresh.js";
 import { startAuthorizationService } from "./projects/service.js";
 import { TeamBlobStore } from "./team/blobs.js";
 import { createTeamSocket, type TeamSocket } from "./team/endpoint.js";
-import { projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
+import { ProjectAuthorities } from "./authority/manager.js";
+import { openProjectFiles } from "./authority/project.js";
+import { OwedBytesStore } from "./authority/owedBytes.js";
+import { loadProjectFiles } from "./authority/projectFiles.js";
+import { commitSnapshot } from "./projects/workingCopy.js";
+import { projectDocTopic, projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
 import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
 import { ensureCertificates } from "./tls/authority.js";
@@ -185,6 +190,7 @@ export async function up(
   let authorizationTls: GrpcServer | undefined;
   let database: DatabaseSync | undefined;
   let readings: ProjectReadings | undefined;
+  let projectAuthorities: ProjectAuthorities | undefined;
   /**
    * The sessions, once there are any.
    *
@@ -367,6 +373,57 @@ export async function up(
     stdout(`live session files wait under ${identity.root}
 `);
 
+    // The project authorities: where team projects' documents live while
+    // people edit them, and what commits their history versions. Opened and
+    // snapshotted through the same working copies and tokens the reader uses.
+    const authorities = new ProjectAuthorities({
+      database,
+      open: async (projectId) => {
+        const options = await projects.workingCopyOptions(projectId);
+        return options === undefined ? undefined : openProjectFiles(options);
+      },
+      openAt: (projectId, revision) =>
+        projects.revisionFiles(projectId, revision, async (tree) => ({
+          ...(await loadProjectFiles(
+            tree.files.map((file) => file.path),
+            async (path) => tree.read(path),
+          )),
+          revision: tree.revision,
+        })),
+      commit: async (projectId, files, message, blobs, keep) => {
+        const options = await projects.workingCopyOptions(projectId);
+        if (options === undefined) {
+          throw new Error("no such project");
+        }
+        return commitSnapshot({ ...options, removeMissing: true }, files, message, blobs, keep);
+      },
+      // Arrived bytes wait here for the next version, because the blob store is emptied on start.
+      keepBytes: new OwedBytesStore(options.root),
+      // An asset's file, once its author's Studio has finished putting it down here.
+      collectBytes: async (projectId, transferId) => {
+        const described = blobStore.describe(projectId, transferId);
+        if (described === undefined || !described.complete) {
+          return undefined;
+        }
+        const chunks: Buffer[] = [];
+        for await (const chunk of blobStore.read(projectId, transferId, 0)) {
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks);
+      },
+      publish: (projectId, event) => {
+        team?.hub.publish(projectDocTopic(projectId), event);
+      },
+      log: (line) => {
+        stdout(`${line}\n`);
+      },
+    });
+    authorities.start();
+    blobStore.onComplete((project, transfer) => {
+      void authorities.bytesArrived(project, transfer);
+    });
+    projectAuthorities = authorities;
+
     const studio: TeamService = {
       database,
       keys,
@@ -388,6 +445,7 @@ export async function up(
       // writes, for the same reason.
       fingerprint: certificates.authority.fingerprint256,
       readings: projects,
+      authorities,
       log: (line) => {
         stdout(`${line}\n`);
       },
@@ -625,6 +683,9 @@ export async function up(
       whenAborted(options.signal).then(() => undefined),
     ]);
 
+    // While loreserver is still there to take it: whatever was edited since
+    // the last version is saved as one more. The log holds it either way.
+    await projectAuthorities?.stop().catch(() => undefined);
     await supervisor.stop();
 
     if (failure !== undefined) {
@@ -656,6 +717,9 @@ export async function up(
     // Before the database closes, and with a sentence. A session that simply
     // stopped answering is one whose client reconnects into a machine that is
     // going down, and then does it again a second later.
+    // On the way out of a failure as well: stops the snapshot timer, and
+    // tries once more for anything unsaved (the log has it regardless).
+    await projectAuthorities?.stop().catch(() => undefined);
     team?.hub.closeAll("this server is shutting down");
     // It holds a sweep timer and parked readers, each of which is a response
     // waiting for a byte that is not going to come now.

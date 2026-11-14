@@ -59,6 +59,7 @@ import {
 } from "../src/identity/users.js";
 import { ProjectReadings } from "../src/projects/refresh.js";
 import { removeProjectMember, setProjectMember } from "../src/projects/members.js";
+import { ProjectAuthorities } from "../src/authority/manager.js";
 import {
   approveAuthorization,
   checkAuthorizeRequest,
@@ -87,6 +88,7 @@ import {
   TEAM_SOCKET_PATH,
   liveTopic,
   projectClientsTopic,
+  projectDocTopic,
   projectLiveTopic,
   projectOverlayTopic,
   projectThreadsTopic,
@@ -5118,5 +5120,141 @@ describe("a management subscription and the operator who took it", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(ada.events).toEqual([]);
+  });
+});
+
+describe("a team project's documents, with this server as their authority", () => {
+  const STORY = "00000000-0000-4000-8000-000000000001";
+  const SCENE = "00000000-0000-4000-8000-000000000102";
+  const STAMP = "2026-11-14T00:00:00.000Z";
+
+  function storyDocument(): object {
+    return {
+      schemaVersion: 31,
+      id: STORY,
+      name: "Story",
+      entrySceneId: SCENE,
+      chapters: [{ id: "c1", name: "Chapter 1", sceneIds: [SCENE], meta: { createdAt: STAMP, updatedAt: STAMP } }],
+      scenes: {
+        [SCENE]: {
+          id: SCENE,
+          name: "Scene 1",
+          runtimeName: "scene_1",
+          description: "",
+          rootBlockIds: [],
+          blocks: {},
+          meta: { createdAt: STAMP, updatedAt: STAMP },
+        },
+      },
+      meta: { createdAt: STAMP, updatedAt: STAMP },
+    };
+  }
+
+  async function withDocuments() {
+    const commits: string[] = [];
+    let authorities: ProjectAuthorities | undefined;
+    const two = await withTwo();
+    authorities = new ProjectAuthorities({
+      database: two.team.database,
+      open: async () => ({
+        files: new Map<string, unknown>([[`editor/story/stories/${STORY}/storydoc.json`, storyDocument()]]),
+        unreadable: [],
+      }),
+      openAt: async () => undefined,
+      commit: async (_project, _files, message) => {
+        commits.push(message);
+        return { revision: `rev-${commits.length}` };
+      },
+      publish: (projectId, event) => {
+        two.team.socket.hub.publish(projectDocTopic(projectId), event);
+      },
+    });
+    (two.team.service as { authorities?: ProjectAuthorities }).authorities = authorities;
+    return { ...two, commits };
+  }
+
+  const insertRow = (project: string, id: string) => ({
+    project,
+    clientId: `client-${id}`,
+    document: { doc: "story", storyId: STORY },
+    op: {
+      op: "insert-block",
+      sceneId: SCENE,
+      block: {
+        id,
+        kind: "nodeAction",
+        parentId: null,
+        childrenIds: [],
+        payload: { action: "narration", text: { textId: `t-${id}`, role: "narration", value: id } },
+      },
+      target: { parentId: null },
+    },
+  });
+
+  it("applies an edit and publishes it to everybody following the project, the asker included", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    for (const client of [ada, bob]) {
+      expect((await client.send("subscribe", { topic: projectDocTopic(project) })).code).toBeUndefined();
+    }
+
+    const head = await ada.value(TEAM_METHODS.docHead, { project });
+    expect(head).toMatchObject({ seq: 0, mayEdit: true });
+
+    const answer = await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect(answer).toMatchObject({ kind: "effect", effect: { seq: 1, by: "bob" } });
+
+    for (const client of [ada, bob]) {
+      await client.until(() => client.events.some((event) => event.topic === projectDocTopic(project)));
+      expect(client.events.find((event) => event.topic === projectDocTopic(project))?.payload).toMatchObject({
+        kind: "doc-effect",
+        effect: { seq: 1 },
+      });
+    }
+
+    const page = await ada.value(TEAM_METHODS.docEffects, { project, after: 0 });
+    expect((page["effects"] as { seq: number }[]).map((effect) => effect.seq)).toEqual([1]);
+  });
+
+  it("lets a reviewer follow the project and refuses their edits", async () => {
+    const { bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "reviewer" });
+    expect(await bob.value(TEAM_METHODS.docHead, { project })).toMatchObject({ mayEdit: false });
+    const refused = await bob.call(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect(refused.code).toBe("refused");
+  });
+
+  it("saves a version on request, with the label an author gave it", async () => {
+    const { ada, project, commits } = await withDocuments();
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    const saved = await ada.value(TEAM_METHODS.docSnapshot, { project, label: "Demo 1" });
+    expect(saved).toEqual({ revision: "rev-1", seq: 1 });
+    expect(commits[0]).toMatch(/^Demo 1\n/);
+  });
+
+  it("takes a whole file and hands back what the project holds now", async () => {
+    const { ada, project } = await withDocuments();
+    const answer = await ada.value(TEAM_METHODS.docIntent, {
+      project,
+      clientId: "file-1",
+      document: { doc: "file", path: "editor/save-schema.json" },
+      op: { op: "put-file", content: { encoding: "utf8", data: "{\"slots\":3}" } },
+      basedOn: 0,
+    });
+    expect(answer).toMatchObject({ kind: "effect", effect: { seq: 1 } });
+    const now = await ada.value(TEAM_METHODS.docFile, { project, path: "editor/save-schema.json" });
+    expect(now).toMatchObject({ seq: 1, size: 11, offset: 0 });
+    expect(Buffer.from(now["chunk"] as string, "base64").toString("utf8")).toBe("{\"slots\":3}");
+    expect(await ada.value(TEAM_METHODS.docFile, { project, path: "editor/transform-presets.json" })).toEqual({
+      seq: 1,
+      path: "editor/transform-presets.json",
+      absent: true,
+    });
+  });
+
+  it("hides the capability from a server holding no authorities", async () => {
+    const { ada, project } = await withTwo();
+    expect(ada.hello?.capabilities).not.toContain("documents");
+    expect((await ada.call(TEAM_METHODS.docHead, { project })).code).toBe("unavailable");
   });
 });

@@ -21,6 +21,7 @@ import type { SignInLimiter } from "../identity/signin.js";
 import type { RevisionPage } from "../projects/read.js";
 import type { ProjectFileView, RevisionView } from "../teamview.js";
 import type { TeamCapability } from "./protocol.js";
+import type { ProjectAuthorities } from "../authority/manager.js";
 
 /**
  * What Team has read out of the repositories, and a way to read one page more.
@@ -141,6 +142,12 @@ export interface TeamService {
    * method table cannot say are worked out.
    */
   readonly blobs?: boolean;
+  /**
+   * The project authorities: where team projects' documents live and are
+   * edited (src/authority/manager.ts). Absent on a server that holds none, and
+   * then every `doc.*` call is refused as unavailable.
+   */
+  readonly authorities?: ProjectAuthorities;
 }
 
 /**

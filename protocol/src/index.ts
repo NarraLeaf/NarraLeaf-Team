@@ -159,6 +159,14 @@ export const TEAM_CAPABILITIES = [
    * not a message.
    */
   "blobs",
+  /**
+   * This server is the authority over a team project's documents: every edit
+   * is an intent sent here, applied here with Studio's own appliers, logged,
+   * and published on the project's `doc` topic; history versions are
+   * snapshots this server commits. Opening a team project means following
+   * that topic - there is no room to open or join.
+   */
+  "documents",
 ] as const;
 
 export type TeamCapability = (typeof TEAM_CAPABILITIES)[number];
@@ -384,6 +392,11 @@ export function projectMilestonesTopic(projectId: string): string {
   return `project:${projectId}/milestones`;
 }
 
+/** One project's applied edits, saved versions and restores. Its members may hold it. */
+export function projectDocTopic(projectId: string): string {
+  return `project:${projectId}/doc`;
+}
+
 /** One account's own to-dos — those it owns and those given to it. Only that account may hold it. */
 export function accountTodosTopic(accountId: string): string {
   return `account:${accountId}/todos`;
@@ -510,6 +523,13 @@ export const LIVE_PAYLOAD_LIMIT = 16 * 1024;
 
 /** The most any single field describing a client instance may be. */
 export const INSTANCE_FIELD_LIMIT = 256;
+
+/**
+ * The most one edit may carry, as JSON: its document address and its
+ * operation. Large enough for a paste of a few hundred rows; a whole document
+ * is never an edit.
+ */
+export const DOC_INTENT_LIMIT = 96 * 1024;
 
 /**
  * The most the rows on one page may weigh, in UTF-8 bytes.
@@ -1663,6 +1683,31 @@ export const TEAM_METHODS = {
   liveAnswerJoin: "live.answerJoin",
   /** Say something to everybody in one. Kept by nobody. */
   liveSay: "live.say",
+  /**
+   * Where a project's documents stand: the last applied seq, the last saved
+   * version, the kernel this server applies with. Loads the authority.
+   */
+  docHead: "doc.head",
+  /** The applied edits after a seq, oldest first, a page at a time. */
+  docEffects: "doc.effects",
+  /**
+   * The files of the last saved version and the seq they stand at: what a Studio that does not
+   * know where it stands starts from, before following the log. A file comes a chunk at a time.
+   */
+  docBase: "doc.base",
+  /** The project documents of one saved version, a file and a chunk at a time: for previewing and comparing. */
+  docFiles: "doc.files",
+  /**
+   * One file as the project holds it right now, with the seq it stands at, a chunk at a time: how a
+   * Studio puts back a file it could not keep in step - one its author's offline copy collided on.
+   */
+  docFile: "doc.file",
+  /** Ask for one edit; answered with the effect every Studio applies, or a refusal. */
+  docIntent: "doc.intent",
+  /** Save what the project holds now as a history version. */
+  docSnapshot: "doc.snapshot",
+  /** Put one revision back as the current state, as a new version. */
+  docRestore: "doc.restore",
   /** What is attached to one project, and what this server last read its head to be. */
   overlayList: "overlay.list",
   /** Attach something, or replace something one attached before. */
@@ -1733,6 +1778,7 @@ export const CONTRACT = {
     projectTodos: "project:{project}/todos",
     projectReviews: "project:{project}/reviews",
     projectMilestones: "project:{project}/milestones",
+    projectDoc: "project:{project}/doc",
     accountTodos: "account:{account}/todos",
     accountNotifications: "account:{account}/notifications",
     live: "live:{session}",
@@ -1751,6 +1797,7 @@ export const CONTRACT = {
     suggestion: SUGGESTION_LIMIT,
     overlayBody: OVERLAY_BODY_LIMIT,
     livePayload: LIVE_PAYLOAD_LIMIT,
+    docIntent: DOC_INTENT_LIMIT,
     instanceField: INSTANCE_FIELD_LIMIT,
     pageBytes: PAGE_BYTES_LIMIT,
     answerBytes: ANSWER_BYTES_LIMIT,

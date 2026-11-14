@@ -40,6 +40,7 @@ import { clientMethods } from "./methods/clients.js";
 import { commentMethods } from "./methods/comments.js";
 import { liveMethods } from "./methods/live.js";
 import { overlayMethods } from "./methods/overlay.js";
+import { docMethods } from "./methods/doc.js";
 import { projectMethods } from "./methods/projects.js";
 import { TeamPresence } from "./presence.js";
 import {
@@ -188,6 +189,7 @@ export function teamMethods(): readonly TeamMethod[] {
     ...clientMethods(),
     ...liveMethods(),
     ...overlayMethods(),
+    ...docMethods(),
     ...adminMethods(),
   ];
 }

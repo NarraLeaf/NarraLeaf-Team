@@ -166,6 +166,13 @@ export function serverCapabilities(
   for (const capability of serviceCapabilities(service)) {
     capabilities.add(capability);
   }
+  // The `doc.*` methods are always in the table, so the table alone would
+  // announce `documents` everywhere; it is only true of a server holding the
+  // project authorities, and a Studio that saw it elsewhere would open every
+  // team project into refusals.
+  if (service.authorities === undefined) {
+    capabilities.delete("documents");
+  }
   return [
     ...(collaborationOpen(service.database) ? capabilities : withoutCoordination(capabilities)),
   ];
