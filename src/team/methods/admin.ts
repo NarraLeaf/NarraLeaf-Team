@@ -67,6 +67,9 @@ import {
   isLifetimeKey,
   PUBLISH_LINEAGE_KEY,
   SERVER_NAME_KEY,
+  isAccent,
+  setBrandAccent,
+  storedBrand,
   setCollaboration,
   setPublishLineage,
   setServerName,
@@ -892,5 +895,18 @@ export function adminMethods(): TeamMethod[] {
       // of" instead of implying it is live.
       serverStatus(context.options),
     ),
+    administered(TEAM_METHODS.adminBrandSet, (params: unknown, context: MethodContext) => {
+      // The accent alone: a logo is bytes, and bytes go over HTTP
+      // (PUT /api/console/v1/brand/logo), not in a frame.
+      const read = paramsObject(params);
+      const accent = read["accent"];
+      if (accent !== undefined) {
+        if (accent !== null && (typeof accent !== "string" || !isAccent(accent))) {
+          throw new MethodError("bad-params", "accent has to be a colour written #rrggbb, or null");
+        }
+        setBrandAccent(context.options.database, accent as string | null);
+      }
+      return { brand: storedBrand(context.options.database) };
+    }),
   ];
 }

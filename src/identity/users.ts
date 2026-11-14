@@ -44,6 +44,10 @@ export interface UserRecord {
    */
   readonly tokensInvalidatedAt: number | undefined;
   readonly groups: readonly string[];
+  /** The SHA-256 of the account's avatar image, absent for an account with none. */
+  readonly avatar?: string;
+  /** A line about themselves, absent where they wrote none. */
+  readonly bio?: string;
 }
 
 /** Raised when a username does not fit the rules. */
@@ -234,12 +238,18 @@ function toUser(database: DatabaseSync, row: Row): UserRecord {
     tokenEpoch: integerColumn(row, "token_epoch"),
     tokensInvalidatedAt: optionalIntegerColumn(row, "tokens_invalidated_at"),
     groups: groupsOf(database, id),
+    ...optionalField("avatar", optionalTextColumn(row, "avatar")),
+    ...optionalField("bio", optionalTextColumn(row, "bio")),
   };
+}
+
+function optionalField<K extends string>(key: K, value: string | undefined): { [P in K]?: string } {
+  return (value === undefined || value === "" ? {} : { [key]: value }) as { [P in K]?: string };
 }
 
 const SELECT_USER =
   "SELECT id, username, display_name, email, is_service_account, created_at, " +
-  "disabled_at, token_epoch, tokens_invalidated_at FROM users";
+  "disabled_at, token_epoch, tokens_invalidated_at, avatar, bio FROM users";
 
 /**
  * Every account, in name order, one row at a time.
@@ -478,6 +488,16 @@ export function insertUser(database: DatabaseSync, prepared: PreparedUser): void
     for (const group of prepared.groups) {
       addGroup.run(prepared.id, group);
     }
+    // An editor of every project, so a new account reaches what an account made
+    // before project roles did. Written here rather than through
+    // src/projects/members.ts, which reads this module, and inside the same
+    // statement group so the account and its memberships arrive together.
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO project_members (project_id, user_id, role, added_by, added_at)
+         SELECT id, ?, 'editor', NULL, ? FROM projects`,
+      )
+      .run(prepared.id, prepared.createdAt);
   } catch (error) {
     // SQLite reports the collision as a constraint failure naming the column.
     // Turning it into a sentence here keeps the caller from having to read

@@ -21,7 +21,6 @@
  * same id gives back the row that already exists rather than saying the same
  * thing twice. See src/comments/store.ts.
  */
-import { findProjectById } from "../../projects/registry.js";
 import {
   addComment,
   commentView,
@@ -33,10 +32,14 @@ import {
   listThreads,
   nameResolver,
   setThreadStatus,
+  type ThreadRecord,
   threadComments,
   threadView,
   type CommentRecord,
 } from "../../comments/store.js";
+import { recordActivity } from "../../collab/activity.js";
+import { projectRole } from "../../projects/members.js";
+import { mentionedAccounts, notify } from "../../collab/notifications.js";
 import {
   MethodError,
   boundedCount,
@@ -47,8 +50,10 @@ import {
   requiredText,
   type MethodContext,
   type TeamMethod,
+  projectVisible,
 } from "../methods.js";
 import {
+  accountNotificationsTopic,
   ANCHOR_FIELD_LIMIT,
   COMMENT_BODY_LIMIT,
   PAGE_BYTES_LIMIT,
@@ -93,10 +98,34 @@ const THREAD_STATUSES: readonly TeamThreadStatus[] = ["open", "resolved"];
 /** The project named by these parameters, or a refusal saying it is not here. */
 function projectOf(params: Record<string, unknown>, context: MethodContext): string {
   const id = requiredText(params, "project", ID_LIMIT);
-  if (findProjectById(context.options.database, id) === undefined) {
+  if (!projectVisible(context, id)) {
     throw new MethodError("not-found", "there is no project of that id on this server");
   }
   return id;
+}
+
+/**
+ * A thread the caller may see: it exists and its project is one they have a
+ * role in. Looked up by id, a thread would otherwise outlive its reader's
+ * membership — a member taken out of a project still holding the id could
+ * read and reply as before.
+ */
+function visibleThread(context: MethodContext, threadId: string): ThreadRecord {
+  const thread = findThread(context.options.database, threadId);
+  if (thread === undefined || !projectVisible(context, thread.projectId)) {
+    throw new MethodError("not-found", "there is no thread of that id on this server");
+  }
+  return thread;
+}
+
+/**
+ * Refuse a viewer: they read a project's conversations and do not join them
+ * (docs/refactor-plan.zh.md §4.6). Everybody else with a role may write.
+ */
+function mayComment(context: MethodContext, projectId: string): void {
+  if (projectRole(context.options.database, projectId, context.user) === "viewer") {
+    throw new MethodError("refused", "a viewer of this project reads its conversations and does not write in them");
+  }
 }
 
 /**
@@ -126,6 +155,52 @@ function anchorOf(params: Record<string, unknown>): TeamAnchor {
 /** Say what happened, to everybody watching that project's conversations. */
 function announce(context: MethodContext, projectId: string, event: TeamThreadEvent): void {
   context.publish(projectThreadsTopic(projectId), event);
+}
+
+/**
+ * The rest of a comment being written: the timeline, and whoever it is for.
+ * Everybody it `@`mentions is notified of a mention; everybody else already in
+ * the thread, of a reply. Neither is told of their own comment.
+ */
+function followComment(
+  context: MethodContext,
+  input: { projectId: string; threadId: string; body: string; opened: boolean },
+): void {
+  const database = context.options.database;
+  recordActivity(database, {
+    accountId: context.user.id,
+    projectId: input.projectId,
+    kind: input.opened ? "thread" : "comment",
+    ref: input.threadId,
+    summary: input.body,
+  });
+  const mentioned = new Set(mentionedAccounts(database, input.body).map((user) => user.id));
+  const written = notify(database, mentioned, {
+    kind: "mention",
+    projectId: input.projectId,
+    ref: input.threadId,
+    actorId: context.user.id,
+    summary: input.body,
+  });
+  if (!input.opened) {
+    const participants = (
+      database.prepare("SELECT DISTINCT author_id FROM comments WHERE thread_id = ?").all(input.threadId) as { author_id: string }[]
+    )
+      .map((row) => row.author_id)
+      .filter((id) => !mentioned.has(id));
+    for (const [id, notification] of notify(database, participants, {
+      kind: "reply",
+      projectId: input.projectId,
+      ref: input.threadId,
+      actorId: context.user.id,
+      summary: input.body,
+    })) {
+      written.set(id, notification);
+    }
+  }
+  for (const [accountId, notification] of written) {
+    context.publish(accountNotificationsTopic(accountId), { kind: "notification", notification }, new Set([accountId]));
+  }
 }
 
 /** Announce a changed comment, and answer with it. */
@@ -159,6 +234,7 @@ function ownComment(params: Record<string, unknown>, context: MethodContext): Co
   if (comment === undefined) {
     throw new MethodError("not-found", "there is no comment of that id on this server");
   }
+  visibleThread(context, comment.threadId);
   if (comment.authorId !== context.user.id) {
     throw new MethodError("refused", "a comment is edited by whoever wrote it");
   }
@@ -208,10 +284,7 @@ export function commentMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const threadId = requiredText(read, "thread", ID_LIMIT);
-        const thread = findThread(context.options.database, threadId);
-        if (thread === undefined) {
-          throw new MethodError("not-found", "there is no thread of that id on this server");
-        }
+        const thread = visibleThread(context, threadId);
         const after = optionalText(read, "after", ID_LIMIT);
         // Paged, the way the threads above are paged and with the same numbers.
         //
@@ -249,6 +322,7 @@ export function commentMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const projectId = projectOf(read, context);
+        mayComment(context, projectId);
         const kind = oneOf(read, "kind", THREAD_KINDS, "comment");
         const suggestion = optionalText(read, "suggestion", SUGGESTION_LIMIT);
         if (kind === "suggestion" && suggestion === undefined) {
@@ -271,6 +345,7 @@ export function commentMethods(): TeamMethod[] {
         // thread that did not change.
         if (!created.repeated) {
           announce(context, projectId, { kind: "thread-created", thread });
+          followComment(context, { projectId, threadId: created.thread.id, body: created.comment.body, opened: true });
         }
         return { thread, comment: commentView(created.comment, nameResolver(context.options.database)) };
       },
@@ -281,10 +356,8 @@ export function commentMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const threadId = requiredText(read, "thread", ID_LIMIT);
-        const thread = findThread(context.options.database, threadId);
-        if (thread === undefined) {
-          throw new MethodError("not-found", "there is no thread of that id on this server");
-        }
+        const thread = visibleThread(context, threadId);
+        mayComment(context, thread.projectId);
         const suggestion = optionalText(read, "suggestion", SUGGESTION_LIMIT);
         const clientId = optionalText(read, "clientId", CLIENT_ID_LIMIT);
         const added = addComment(context.options.database, {
@@ -302,6 +375,7 @@ export function commentMethods(): TeamMethod[] {
             thread: threadId,
             comment,
           });
+          followComment(context, { projectId: thread.projectId, threadId, body: added.comment.body, opened: false });
         }
         return { comment };
       },
@@ -312,10 +386,8 @@ export function commentMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const threadId = requiredText(read, "thread", ID_LIMIT);
-        const current = findThread(context.options.database, threadId);
-        if (current === undefined) {
-          throw new MethodError("not-found", "there is no thread of that id on this server");
-        }
+        const current = visibleThread(context, threadId);
+        mayComment(context, current.projectId);
         const resolved = flag(read, "resolved", true);
         // A naturally idempotent write: asking for the state a thread is already
         // in changes nothing, so it must not touch the row or announce a change
@@ -333,6 +405,14 @@ export function commentMethods(): TeamMethod[] {
         );
         const view = threadView(context.options.database, thread);
         announce(context, thread.projectId, { kind: "thread-updated", thread: view });
+        if (resolved) {
+          recordActivity(context.options.database, {
+            accountId: context.user.id,
+            projectId: thread.projectId,
+            kind: "resolve",
+            ref: threadId,
+          });
+        }
         return { thread: view };
       },
     },

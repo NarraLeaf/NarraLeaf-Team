@@ -727,3 +727,53 @@ export function persistIdentity(database: DatabaseSync, config: IdentityConfig):
     }
   });
 }
+
+/* ------------------------------------------------------------------ brand */
+
+/** The team's accent colour, as `#rrggbb`. */
+export const BRAND_ACCENT_KEY = "brand.accent";
+/** The team's logo: the file name under brand/ in the storage root (`<sha256>.<ext>`). */
+export const BRAND_LOGO_KEY = "brand.logo";
+
+/** How a team looks: an accent colour and a logo, either absent until somebody chooses. */
+export interface Brand {
+  readonly accent?: string;
+  readonly logo?: string;
+}
+
+const ACCENT_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+/** Whether a string is an accent colour this server stores. */
+export function isAccent(value: string): boolean {
+  return ACCENT_PATTERN.test(value);
+}
+
+export function storedBrand(database: DatabaseSync): Brand {
+  const accent = readSetting(database, BRAND_ACCENT_KEY);
+  const logo = readSetting(database, BRAND_LOGO_KEY);
+  return {
+    ...(accent !== undefined && isAccent(accent) ? { accent: accent.toLowerCase() } : {}),
+    ...(logo !== undefined && /^[0-9a-f]{64}\.(png|jpg|webp)$/.test(logo) ? { logo } : {}),
+  };
+}
+
+/** Set or clear (`null`) the accent colour. */
+export function setBrandAccent(database: DatabaseSync, accent: string | null): void {
+  if (accent === null) {
+    database.prepare("DELETE FROM settings WHERE key = ?").run(BRAND_ACCENT_KEY);
+    return;
+  }
+  if (!isAccent(accent)) {
+    throw new Error(`"${accent}" is not a colour; an accent is written #rrggbb`);
+  }
+  writeSetting(database, BRAND_ACCENT_KEY, accent.toLowerCase());
+}
+
+/** Set or clear (`null`) the logo file name. */
+export function setBrandLogo(database: DatabaseSync, logo: string | null): void {
+  if (logo === null) {
+    database.prepare("DELETE FROM settings WHERE key = ?").run(BRAND_LOGO_KEY);
+    return;
+  }
+  writeSetting(database, BRAND_LOGO_KEY, logo);
+}
