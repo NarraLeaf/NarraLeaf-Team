@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import { loadLoreLibrary } from "../src/lore/library.js";
 import type { RevisionDetails } from "../src/lore/verbs.js";
 import {
+  authorityWorkingCopyPath,
   discardCheckout,
   projectCacheDir,
   projectCheckoutPath,
@@ -61,6 +62,11 @@ describe("where Team's checkouts are", () => {
       expect(contains(served, checkout)).toBe(false);
       expect(contains(checkout, served)).toBe(false);
       expect(contains(projectCacheDir(root), checkout)).toBe(true);
+
+      const working = authorityWorkingCopyPath(root, "0123456789abcdef0123456789abcdef");
+      expect(contains(served, working)).toBe(false);
+      expect(contains(working, served)).toBe(false);
+      expect(contains(checkout, working)).toBe(false);
     }
   });
 
@@ -99,14 +105,19 @@ describe("who is in a position to open a store", () => {
       .map(({ path }) => path)
       .sort();
 
-    expect(callers).toEqual(["src/projects/cache.ts", "src/projects/read.ts"]);
+    // The third is the project authority's working copy, whose path comes
+    // from authorityWorkingCopyPath in cache.ts and from nowhere else - the
+    // same rule, held the same way.
+    expect(callers).toEqual(["src/projects/cache.ts", "src/projects/read.ts", "src/projects/workingCopy.ts"]);
   });
 
   it("is nothing that also knows where loreserver's own store is", async () => {
     // The two names that lead to the served store. Neither belongs anywhere a
     // repository path is built.
     const offenders = (await sources("src"))
-      .filter(({ path }) => path === "src/projects/cache.ts" || path === "src/projects/read.ts")
+      .filter(({ path }) =>
+        path === "src/projects/cache.ts" || path === "src/projects/read.ts" || path === "src/projects/workingCopy.ts",
+      )
       .filter(({ text }) => /instanceLayout|storageRootOf|immutableStore|mutableStore/.test(text))
       .map(({ path }) => path);
 

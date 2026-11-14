@@ -20,6 +20,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { findProjectById } from "./registry.js";
 import { openRevisionTree, type RevisionTree } from "./read.js";
+import type { WorkingCopyOptions } from "./workingCopy.js";
 import { knowsCommit, knowsCommitsOf, recordCommits } from "../collab/activity.js";
 import { emitWebhookEvent } from "../collab/webhooks.js";
 import { forLog } from "../identity/audit.js";
@@ -222,6 +223,33 @@ export class ProjectReadings {
       await tree?.close();
       this.inside.delete(projectId);
     }
+  }
+
+  /**
+   * How the project authority reaches one project's repository to open it and
+   * to commit its snapshots, or undefined when there is no such project.
+   *
+   * Here because this is where minting a repository token already lives: the
+   * authority presents the same kind of token the reader does, minted for the
+   * same account, and records its snapshots as committed by that account.
+   */
+  async workingCopyOptions(projectId: string): Promise<WorkingCopyOptions | undefined> {
+    const project = findProjectById(this.options.database, projectId);
+    if (project === undefined) {
+      return undefined;
+    }
+    const { root, config } = this.options;
+    this.keys ??= await KeyStore.open(identityLayout(root).keysDir).catch(() => undefined);
+    const token = this.mint(projectId, project.createdBy);
+    const committer = readerAccount(this.options.database, projectId, project.createdBy);
+    return {
+      root,
+      projectId,
+      projectName: project.name,
+      remote: dataRemoteUrl(audienceHosts(config)[0] ?? "127.0.0.1", config.dataPort),
+      ...(token === undefined ? {} : { token, authUrl: authUrl(config) }),
+      ...(committer === undefined ? {} : { identity: committer.id }),
+    };
   }
 
   /** Begin reading, and keep reading on an interval until stopped. */
