@@ -34,6 +34,7 @@ import {
 } from "./methods.js";
 import { accountMethods } from "./methods/account.js";
 import { collabMethods } from "./methods/collab.js";
+import { productionMethods } from "./methods/production.js";
 import { adminMethods } from "./methods/admin.js";
 import { clientMethods } from "./methods/clients.js";
 import { commentMethods } from "./methods/comments.js";
@@ -182,6 +183,7 @@ export function teamMethods(): readonly TeamMethod[] {
     ...projectMethods(),
     ...accountMethods(),
     ...collabMethods(),
+    ...productionMethods(),
     ...commentMethods(),
     ...clientMethods(),
     ...liveMethods(),

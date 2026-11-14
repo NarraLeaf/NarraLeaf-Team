@@ -21,6 +21,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { findProjectById } from "./registry.js";
 import { openRevisionTree, type RevisionTree } from "./read.js";
 import { knowsCommit, knowsCommitsOf, recordCommits } from "../collab/activity.js";
+import { emitWebhookEvent } from "../collab/webhooks.js";
 import { forLog } from "../identity/audit.js";
 import { audienceHosts, authUrl, dataRemoteUrl, type IdentityConfig } from "../identity/config.js";
 import { KeyStore } from "../identity/keys.js";
@@ -392,10 +393,22 @@ export class ProjectReadings {
     if (head === undefined || knowsCommit(database, projectId, head)) {
       return;
     }
-    const limit = knowsCommitsOf(database, projectId) ? NEW_REVISIONS_PER_PASS : BACKFILL_REVISIONS;
+    const known = knowsCommitsOf(database, projectId);
+    const limit = known ? NEW_REVISIONS_PER_PASS : BACKFILL_REVISIONS;
     const page = await readRevisionPage({ root, projectId, limit, limitBytes: 4 * 1024 * 1024 }).catch(() => undefined);
     if (page !== undefined) {
+      const fresh = known ? page.revisions.filter((revision) => !knowsCommit(database, projectId, revision.id)) : [];
       recordCommits(database, projectId, page.revisions);
+      // Only what is new since the last pass: the first pass's backfill is history, not news.
+      for (const revision of fresh.slice(0, 20).reverse()) {
+        emitWebhookEvent(database, {
+          type: "commit",
+          projectId,
+          ...(revision.by === undefined ? {} : { actor: revision.by }),
+          ref: revision.id,
+          summary: `${revision.by ?? "?"} committed${revision.message ? `: ${revision.message.split("\n")[0]!.slice(0, 200)}` : ""}`,
+        });
+      }
     }
   }
 

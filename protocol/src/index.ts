@@ -141,6 +141,12 @@ export const TEAM_CAPABILITIES = [
   "todos",
   /** Mentions, replies and assignments, kept per account until read. */
   "notifications",
+  /** Asking somebody to review a range of revisions, and their verdict. */
+  "reviews",
+  /** Names on revisions — "Demo 1" — that a project can be read at. */
+  "milestones",
+  /** Operators may have this server post its events to a chat or another service. */
+  "webhooks",
   /** A project's revisions may be read a page at a time. */
   "project-history",
   /**
@@ -366,6 +372,16 @@ export function projectMembersTopic(projectId: string): string {
 /** The to-dos shown to one project's members. */
 export function projectTodosTopic(projectId: string): string {
   return `project:${projectId}/todos`;
+}
+
+/** One project's review requests. Its members may hold it. */
+export function projectReviewsTopic(projectId: string): string {
+  return `project:${projectId}/reviews`;
+}
+
+/** One project's milestones. Its members may hold it. */
+export function projectMilestonesTopic(projectId: string): string {
+  return `project:${projectId}/milestones`;
 }
 
 /** One account's own to-dos — those it owns and those given to it. Only that account may hold it. */
@@ -955,7 +971,9 @@ export type TeamActivityKind =
   | "comment"
   | "resolve"
   | "todo-created"
-  | "todo-done";
+  | "todo-done"
+  | "review"
+  | "milestone";
 
 /**
  * One thing that happened, for a timeline.
@@ -991,6 +1009,12 @@ export interface TeamActivityDay {
 export type TeamTodoStatus = "open" | "doing" | "done";
 /** `private`: its owner alone. `project`: every member of its project. */
 export type TeamTodoVisibility = "private" | "project";
+/**
+ * What a to-do asks for. `task` is anything; `asset` asks for a file (a sprite, a sound) for the
+ * row it is anchored to, and names the asset that answered it once done; `translation` and `voice`
+ * give one language of a story or scene to somebody, and name the `locale`.
+ */
+export type TeamTodoKind = "task" | "asset" | "translation" | "voice";
 
 export interface TeamTodo {
   readonly id: string;
@@ -1004,6 +1028,12 @@ export interface TeamTodo {
   readonly body?: string;
   readonly status: TeamTodoStatus;
   readonly visibility: TeamTodoVisibility;
+  /** What it asks for; `task` where a client did not say. */
+  readonly kind: TeamTodoKind;
+  /** The language a `translation` or `voice` to-do is about, as a locale tag. */
+  readonly locale?: string;
+  /** The asset that answered an `asset` to-do, by id. Never read by the server. */
+  readonly asset?: string;
   readonly dueAt?: number;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -1019,7 +1049,90 @@ export type TeamTodosEvent =
 
 /* -------------------------------------------------------- notifications */
 
-export type TeamNotificationKind = "mention" | "reply" | "assigned";
+export type TeamNotificationKind = "mention" | "reply" | "assigned" | "review-requested" | "review-answered";
+
+/* -------------------------------------------------------------- reviews */
+
+/**
+ * `open` waits on the reviewer; `approved` and `changes` are their verdict; `withdrawn` is the
+ * requester taking it back. A verdict can be changed while the request stands.
+ */
+export type TeamReviewStatus = "open" | "approved" | "changes" | "withdrawn";
+
+/** Somebody asked to look at a range of a project's revisions. */
+export interface TeamReview {
+  readonly id: string;
+  readonly project: string;
+  /** Who asked, by username. */
+  readonly requester: string;
+  /** Who is asked, by username. */
+  readonly reviewer: string;
+  /** The revision before the range, absent for "everything up to". Never read by the server. */
+  readonly fromRevision?: string;
+  /** The last revision of the range. */
+  readonly toRevision: string;
+  readonly title: string;
+  readonly note?: string;
+  readonly status: TeamReviewStatus;
+  /** What the reviewer said with the verdict. */
+  readonly verdictNote?: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+export type TeamReviewsEvent = { readonly kind: "review-set"; readonly review: TeamReview };
+
+/* ----------------------------------------------------------- milestones */
+
+/** A name on one revision of a project. Unique per project. */
+export interface TeamMilestone {
+  readonly id: string;
+  readonly project: string;
+  readonly name: string;
+  readonly revision: string;
+  readonly note?: string;
+  readonly createdBy?: string;
+  readonly createdAt: number;
+}
+
+export type TeamMilestonesEvent =
+  | { readonly kind: "milestone-set"; readonly milestone: TeamMilestone }
+  | { readonly kind: "milestone-removed"; readonly milestone: string };
+
+/* ------------------------------------------------------------- webhooks */
+
+/** What a webhook can be told about. */
+export const TEAM_WEBHOOK_EVENTS = [
+  "commit",
+  "thread",
+  "todo-assigned",
+  "todo-done",
+  "review-requested",
+  "review-answered",
+  "milestone",
+] as const;
+export type TeamWebhookEvent = (typeof TEAM_WEBHOOK_EVENTS)[number];
+
+/**
+ * How the body is shaped. `json` is this server's own event object, signed; the others are the
+ * message shape of a chat service's incoming webhook, carrying one line of text.
+ */
+export const TEAM_WEBHOOK_FORMATS = ["json", "slack", "discord", "feishu"] as const;
+export type TeamWebhookFormat = (typeof TEAM_WEBHOOK_FORMATS)[number];
+
+export interface TeamWebhook {
+  readonly id: string;
+  /** Only this project's events, or every project's where absent. */
+  readonly project?: string;
+  readonly url: string;
+  readonly format: TeamWebhookFormat;
+  readonly events: readonly TeamWebhookEvent[];
+  readonly createdBy?: string;
+  readonly createdAt: number;
+  /** How the last delivery went: an HTTP status, or 0 for no answer. */
+  readonly lastStatus?: number;
+  readonly lastAt?: number;
+}
 
 export interface TeamNotification {
   readonly id: number;
@@ -1472,6 +1585,26 @@ export const TEAM_METHODS = {
   activityHeatmap: "activity.heatmap",
   /** The caller's to-dos, or one project's. */
   todosList: "todos.list",
+  /** Review requests in a project, or those the caller asked for or is asked. */
+  reviewsList: "reviews.list",
+  /** Ask somebody to review a range of revisions. */
+  reviewsCreate: "reviews.create",
+  /** Give a verdict (the reviewer), or withdraw (the requester). */
+  reviewsUpdate: "reviews.update",
+  /** A project's milestones, newest first. */
+  milestonesList: "milestones.list",
+  /** Put a name on a revision. Owners and editors. */
+  milestonesCreate: "milestones.create",
+  /** Take a name off. Owners, or whoever put it there. */
+  milestonesDelete: "milestones.delete",
+  /** The webhooks this server posts to. Operators. */
+  adminWebhooksList: "admin.webhooks.list",
+  /** Add one; answers its signing secret, once. Operators. */
+  adminWebhooksCreate: "admin.webhooks.create",
+  /** Remove one. Operators. */
+  adminWebhooksDelete: "admin.webhooks.delete",
+  /** Post a test event to one now and answer how it went. Operators. */
+  adminWebhooksTest: "admin.webhooks.test",
   /** Make a to-do. */
   todosCreate: "todos.create",
   /** Change a to-do: its status, its assignee, its words. */
@@ -1598,6 +1731,8 @@ export const CONTRACT = {
     projectLive: "project:{project}/live",
     projectMembers: "project:{project}/members",
     projectTodos: "project:{project}/todos",
+    projectReviews: "project:{project}/reviews",
+    projectMilestones: "project:{project}/milestones",
     accountTodos: "account:{account}/todos",
     accountNotifications: "account:{account}/notifications",
     live: "live:{session}",

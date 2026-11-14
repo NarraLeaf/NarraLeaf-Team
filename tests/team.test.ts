@@ -457,12 +457,15 @@ describe("opening a session", () => {
       "clients",
       "comments",
       "live",
+      "milestones",
       "notifications",
       "oauth",
       "overlay",
       "password-sign-in",
+      "reviews",
       "session",
       "todos",
+      "webhooks",
     ]);
   });
 });
@@ -3510,6 +3513,7 @@ const ADMIN_READS = [
   TEAM_METHODS.adminKeysList,
   TEAM_METHODS.adminAuditList,
   TEAM_METHODS.adminServerStatus,
+  TEAM_METHODS.adminWebhooksList,
 ];
 
 /** Every method of the family that changes something. */
@@ -3525,6 +3529,9 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminKeysRotate,
   TEAM_METHODS.adminKeysRetire,
   TEAM_METHODS.adminBrandSet,
+  TEAM_METHODS.adminWebhooksCreate,
+  TEAM_METHODS.adminWebhooksDelete,
+  TEAM_METHODS.adminWebhooksTest,
 ];
 
 /** Both halves, which is what the gate has to cover. */

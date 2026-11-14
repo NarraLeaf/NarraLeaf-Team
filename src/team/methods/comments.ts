@@ -21,6 +21,7 @@
  * same id gives back the row that already exists rather than saying the same
  * thing twice. See src/comments/store.ts.
  */
+import { emitWebhookEvent } from "../../collab/webhooks.js";
 import {
   addComment,
   commentView,
@@ -346,6 +347,13 @@ export function commentMethods(): TeamMethod[] {
         if (!created.repeated) {
           announce(context, projectId, { kind: "thread-created", thread });
           followComment(context, { projectId, threadId: created.thread.id, body: created.comment.body, opened: true });
+          emitWebhookEvent(context.options.database, {
+            type: "thread",
+            projectId,
+            actor: context.account.username,
+            ref: created.thread.id,
+            summary: `${context.account.username} ${kind === "suggestion" ? "suggested a change" : "commented"}: ${created.comment.body.replace(/\s+/g, " ").slice(0, 200)}`,
+          });
         }
         return { thread, comment: commentView(created.comment, nameResolver(context.options.database)) };
       },

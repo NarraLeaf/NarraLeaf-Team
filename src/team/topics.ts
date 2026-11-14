@@ -54,6 +54,8 @@ const PROJECT_SUFFIXES: readonly string[] = [
   "/live",
   "/members",
   "/todos",
+  "/reviews",
+  "/milestones",
 ];
 
 /** The prefix an account's own topics start with. */

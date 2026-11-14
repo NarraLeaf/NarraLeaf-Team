@@ -406,6 +406,13 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `todos.create` | `todos` | Make one: `title`, optional `body`, `project`, `visibility` (`private` default, or `project`), `assignee` (project to-dos only, a member of that project), `dueAt`, `anchor`. Announces `todo-set` on the owner's and assignee's `account:{account}/todos` and, for a project to-do, on `project:{project}/todos`; notifies the assignee. |
 | `todos.update` | `todos` | Change one. Its owner may change anything; its assignee only its `status`; a project owner may tidy a project to-do. `null` clears a field. Finishing one records activity. With `status: "done"`, a project's to-do may also carry `doneRevision`, the commit that finished it (Studio sends it when a to-do is ticked off in the commit dialog; the assignee may send it too). It is kept while the to-do stays done and cleared when it is opened again. |
 | `todos.delete` | `todos` | Its owner only. |
+| `reviews.list` | `reviews` | One `project`'s review requests, or (without one) those the caller asked for or is asked; open and changes-requested ones unless `includeClosed`. |
+| `reviews.create` | `reviews` | Ask `reviewer` (a member, not oneself) to review `toRevision` (and optionally from `fromRevision`), with a `title` and `note`. Viewers may not ask. Notifies the reviewer (`review-requested`). |
+| `reviews.update` | `reviews` | The reviewer gives a verdict, `approved` or `changes` with an optional `verdictNote`, and may change it; the requester `withdrawn`s or re-`open`s. A new verdict notifies the requester (`review-answered`). The line-by-line part is ordinary threads. |
+| `milestones.list` | `milestones` | One project's milestones, newest first. |
+| `milestones.create` | `milestones` | Put a `name` (unique in the project) on a `revision`. Owners and editors. |
+| `milestones.delete` | `milestones` | Whoever named it, or an owner. |
+| `admin.webhooks.list` / `create` / `delete` / `test` | `webhooks` | Operators. `create` takes `url` (http or https, no credentials in it), `format` (`json`, `slack`, `discord`, `feishu`), `events` and optionally `project`, and answers the signing `secret` once. `test` posts one event now and answers the status (0 for no answer). |
 | `notifications.list` | `notifications` | The caller's notifications, newest first, with `unread`. Mentions (`@username` in a comment), replies in a thread the caller is in, and to-dos given to them; never about a project they cannot see, never about their own act. |
 | `notifications.read` | `notifications` | Mark `ids`, or `all: true`, read. |
 | `members.list` | `session` | The accounts on this server, as a name beside a piece of work, in name order. Bounded the way `projects.list` is and for the same reason, with the same `total` and no cursor. |
@@ -613,3 +620,24 @@ The number is `2`. It moved to `2` while Team had never been released and the
 only client shipped in step with it, so the change cost nobody a migration. That
 justification does not return: once Team is released, a further breaking change is
 made by negotiation rather than by moving this number under a client's feet.
+
+
+## Webhooks
+
+An operator can have the server post its events to a URL: `commit` (new
+revisions since the last refresh pass, never the first pass's backfill),
+`thread`, `todo-assigned`, `todo-done` (project to-dos only), `review-requested`,
+`review-answered` and `milestone`. A webhook for a project hears only that
+project; one with no project hears all of them.
+
+Each delivery is one POST with `content-type: application/json`,
+`x-nlteam-event` and `x-nlteam-signature: sha256=<hex>`, the HMAC-SHA256 of the
+body under the webhook's secret. A `json` body is
+`{ event, project: { id, name }, summary, actor?, ref?, at }`; the chat formats
+are those services' incoming-webhook shapes carrying `[project] summary`.
+Redirects are not followed, a delivery gets five seconds, and a failure is
+recorded on the webhook (`lastStatus`, `lastAt`) and not retried.
+
+To-dos carry a `kind`: `task`, `asset` (asks for a file for the row it is
+anchored to; the assignee may set `asset` when finishing it), `translation` or
+`voice` (with a `locale`). The last three belong to a project.

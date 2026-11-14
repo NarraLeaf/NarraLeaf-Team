@@ -8,12 +8,14 @@
  */
 import { activityHeatmap, listActivity, recordActivity } from "../../collab/activity.js";
 import { listNotifications, markRead, notify } from "../../collab/notifications.js";
+import { emitWebhookEvent } from "../../collab/webhooks.js";
 import {
   createTodo,
   deleteTodo,
   findTodo,
   listTodos,
   maySeeTodo,
+  TODO_KINDS,
   TODO_STATUSES,
   TODO_VISIBILITIES,
   todoAccounts,
@@ -124,6 +126,9 @@ function todoInput(context: MethodContext, read: Record<string, unknown>): TodoI
     input.dueAt = due as number | null;
   }
   if (read["doneRevision"] !== undefined) input.doneRevision = requiredText(read, "doneRevision", ANCHOR_FIELD_LIMIT);
+  if (read["kind"] !== undefined) input.kind = oneOf(read, "kind", TODO_KINDS);
+  if (read["locale"] !== undefined) input.locale = read["locale"] === null ? null : requiredText(read, "locale", 35);
+  if (read["asset"] !== undefined) input.asset = read["asset"] === null ? null : requiredText(read, "asset", ANCHOR_FIELD_LIMIT);
   if (read["anchor"] !== undefined) {
     if (read["anchor"] === null) {
       input.anchor = null;
@@ -239,6 +244,15 @@ export function collabMethods(): TeamMethod[] {
           private: todo.visibility === "private",
         });
         if (todo.assigneeId !== undefined) {
+          if (todo.projectId !== undefined && todo.visibility === "project") {
+            emitWebhookEvent(context.options.database, {
+              type: "todo-assigned",
+              projectId: todo.projectId,
+              actor: context.account.username,
+              ref: todo.id,
+              summary: `${context.account.username} gave ${findUserById(context.options.database, todo.assigneeId)?.username ?? "?"}: ${todo.title}`,
+            });
+          }
           announceNotifications(
             context,
             notify(context.options.database, [todo.assigneeId], {
@@ -272,6 +286,15 @@ export function collabMethods(): TeamMethod[] {
         const view = todoView(context.options.database, todo);
         announceTodo(context, todo, { kind: "todo-set", todo: view }, previous);
         if (previous !== undefined && previous.status !== "done" && todo.status === "done") {
+          if (todo.projectId !== undefined && todo.visibility === "project") {
+            emitWebhookEvent(context.options.database, {
+              type: "todo-done",
+              projectId: todo.projectId,
+              actor: context.account.username,
+              ref: todo.id,
+              summary: `${context.account.username} finished: ${todo.title}`,
+            });
+          }
           recordActivity(context.options.database, {
             accountId: context.user.id,
             ...(todo.projectId === undefined ? {} : { projectId: todo.projectId }),
@@ -282,6 +305,15 @@ export function collabMethods(): TeamMethod[] {
           });
         }
         if (todo.assigneeId !== undefined && todo.assigneeId !== previous?.assigneeId) {
+          if (todo.projectId !== undefined && todo.visibility === "project") {
+            emitWebhookEvent(context.options.database, {
+              type: "todo-assigned",
+              projectId: todo.projectId,
+              actor: context.account.username,
+              ref: todo.id,
+              summary: `${context.account.username} gave ${findUserById(context.options.database, todo.assigneeId)?.username ?? "?"}: ${todo.title}`,
+            });
+          }
           announceNotifications(
             context,
             notify(context.options.database, [todo.assigneeId], {

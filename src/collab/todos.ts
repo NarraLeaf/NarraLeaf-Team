@@ -13,10 +13,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { integerColumn, optionalIntegerColumn, optionalTextColumn, textColumn, type Row } from "../identity/database.js";
 import { findUserById, type UserRecord } from "../identity/users.js";
 import { maySeeProject, projectRole, visibleProjectIds } from "../projects/members.js";
-import type { TeamTodo, TeamTodoStatus, TeamTodoVisibility } from "../team/protocol.js";
+import type { TeamTodo, TeamTodoKind, TeamTodoStatus, TeamTodoVisibility } from "../team/protocol.js";
 
 export const TODO_STATUSES: readonly TeamTodoStatus[] = ["open", "doing", "done"];
 export const TODO_VISIBILITIES: readonly TeamTodoVisibility[] = ["private", "project"];
+export const TODO_KINDS: readonly TeamTodoKind[] = ["task", "asset", "translation", "voice"];
 
 /** One to-do as stored, with ids rather than usernames. */
 export interface TodoRecord {
@@ -37,6 +38,9 @@ export interface TodoRecord {
   readonly doneAt: number | undefined;
   /** The revision that finished it, where one did. */
   readonly doneRevision: string | undefined;
+  readonly kind: TeamTodoKind;
+  readonly locale: string | undefined;
+  readonly asset: string | undefined;
 }
 
 /** Why a to-do could not be written, in the caller's terms. */
@@ -70,6 +74,10 @@ function toRecord(row: Row): TodoRecord {
     updatedAt: integerColumn(row, "updated_at"),
     doneAt: optionalIntegerColumn(row, "done_at"),
     doneRevision: optionalTextColumn(row, "done_revision"),
+    // Unknown reads as a plain task: a kind written by a newer Team is still a to-do.
+    kind: (TODO_KINDS as readonly string[]).includes(textColumn(row, "kind")) ? (textColumn(row, "kind") as TeamTodoKind) : "task",
+    locale: optionalTextColumn(row, "locale"),
+    asset: optionalTextColumn(row, "asset"),
   };
 }
 
@@ -117,6 +125,9 @@ export function todoView(database: DatabaseSync, todo: TodoRecord): TeamTodo {
     updatedAt: todo.updatedAt,
     ...(todo.doneAt === undefined ? {} : { doneAt: todo.doneAt }),
     ...(todo.doneRevision === undefined ? {} : { doneRevision: todo.doneRevision }),
+    kind: todo.kind,
+    ...(todo.locale === undefined ? {} : { locale: todo.locale }),
+    ...(todo.asset === undefined ? {} : { asset: todo.asset }),
   };
 }
 
@@ -131,19 +142,36 @@ export interface TodoInput {
   readonly anchor?: { document: string; element: string; revision?: string } | null;
   /** The revision that finishes it. Only with `status: "done"`, and only on a project's to-do. */
   readonly doneRevision?: string;
+  readonly kind?: TeamTodoKind;
+  readonly locale?: string | null;
+  /** The asset that answered an asset request. */
+  readonly asset?: string | null;
 }
 
 /** Check that a to-do's shape holds together, for the caller making it so. */
 function checkShape(
   database: DatabaseSync,
   actor: UserRecord,
-  shape: { projectId: string | undefined; assigneeId: string | undefined; visibility: TeamTodoVisibility; anchored: boolean },
+  shape: {
+    projectId: string | undefined;
+    assigneeId: string | undefined;
+    visibility: TeamTodoVisibility;
+    anchored: boolean;
+    kind: TeamTodoKind;
+    locale: string | undefined;
+  },
 ): void {
   if (shape.projectId !== undefined && !maySeeProject(database, shape.projectId, actor)) {
     throw new TodoRefusal("not-found", "there is no project of that id on this server");
   }
   if (shape.visibility === "project" && shape.projectId === undefined) {
     throw new TodoRefusal("bad-params", "a to-do shown to a project has to be in one");
+  }
+  if (shape.kind !== "task" && shape.projectId === undefined) {
+    throw new TodoRefusal("bad-params", "an asset, translation or voice to-do belongs to a project");
+  }
+  if ((shape.kind === "translation" || shape.kind === "voice") && shape.locale === undefined) {
+    throw new TodoRefusal("bad-params", "a translation or voice to-do names its locale");
   }
   if (shape.anchored && shape.projectId === undefined) {
     throw new TodoRefusal("bad-params", "an anchored to-do has to be in the project it points into");
@@ -167,14 +195,16 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
   if (input.doneRevision !== undefined) {
     throw new TodoRefusal("bad-params", "a to-do is finished by a revision after it is made, with todos.update");
   }
-  checkShape(database, actor, { projectId, assigneeId, visibility, anchored: anchor !== undefined });
+  const kind = input.kind ?? "task";
+  const locale = input.locale ?? undefined;
+  checkShape(database, actor, { projectId, assigneeId, visibility, anchored: anchor !== undefined, kind, locale });
   const status = input.status ?? "open";
   const id = randomUUID();
   database
     .prepare(
       `INSERT INTO todos (id, owner_id, assignee_id, project_id, document, element, revision, title, body, status,
-                          visibility, due_at, created_at, updated_at, done_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                          visibility, due_at, created_at, updated_at, done_at, kind, locale, asset)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -192,6 +222,9 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
       now,
       now,
       status === "done" ? now : null,
+      kind,
+      locale ?? null,
+      input.asset ?? null,
     );
   return findTodo(database, id) as TodoRecord;
 }
@@ -210,7 +243,7 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
     current.ownerId === actor.id ||
     (current.visibility === "project" && current.projectId !== undefined && projectRole(database, current.projectId, actor) === "owner");
   // Finishing it in a commit is still only moving its status, so an assignee may say which.
-  const onlyStatus = Object.keys(input).every((key) => key === "status" || key === "doneRevision");
+  const onlyStatus = Object.keys(input).every((key) => key === "status" || key === "doneRevision" || key === "asset");
   if (!owns && !(current.assigneeId === actor.id && onlyStatus)) {
     throw new TodoRefusal("refused", "only its owner may change this to-do; its assignee may change its status");
   }
@@ -225,7 +258,9 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
           : undefined
         : (input.anchor ?? undefined),
   };
-  checkShape(database, actor, { ...next, anchored: next.anchor !== undefined });
+  const kind = input.kind ?? current.kind;
+  const locale = input.locale === undefined ? current.locale : (input.locale ?? undefined);
+  checkShape(database, actor, { ...next, anchored: next.anchor !== undefined, kind, locale });
   const status = input.status ?? current.status;
   const doneAt = status === "done" ? (current.doneAt ?? now) : null;
   if (input.doneRevision !== undefined && (input.status !== "done" || next.projectId === undefined)) {
@@ -236,7 +271,8 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
   database
     .prepare(
       `UPDATE todos SET assignee_id = ?, project_id = ?, document = ?, element = ?, revision = ?, title = ?, body = ?,
-                        status = ?, visibility = ?, due_at = ?, updated_at = ?, done_at = ?, done_revision = ? WHERE id = ?`,
+                        status = ?, visibility = ?, due_at = ?, updated_at = ?, done_at = ?, done_revision = ?,
+                        kind = ?, locale = ?, asset = ? WHERE id = ?`,
     )
     .run(
       next.assigneeId ?? null,
@@ -252,6 +288,9 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
       now,
       doneAt,
       doneRevision ?? null,
+      kind,
+      locale ?? null,
+      input.asset === undefined ? (current.asset ?? null) : input.asset,
       id,
     );
   return findTodo(database, id) as TodoRecord;

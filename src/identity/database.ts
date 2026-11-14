@@ -668,6 +668,61 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE todos ADD COLUMN done_revision TEXT",
     ],
   },
+  {
+    version: 17,
+    description: "review requests, milestones, webhooks, and what a to-do asks for",
+    statements: [
+      // What a to-do asks for (task | asset | translation | voice), the
+      // language a translation or voice to-do is about, and the asset that
+      // answered an asset request. All opaque to the server but `kind`.
+      "ALTER TABLE todos ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'",
+      "ALTER TABLE todos ADD COLUMN locale TEXT",
+      "ALTER TABLE todos ADD COLUMN asset TEXT",
+      // Somebody asked to look at a range of revisions. The revisions are
+      // strings this server stores and never reads.
+      `CREATE TABLE reviews (
+         id            TEXT    PRIMARY KEY,
+         project_id    TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         requester_id  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         reviewer_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         from_revision TEXT,
+         to_revision   TEXT    NOT NULL,
+         title         TEXT    NOT NULL,
+         note          TEXT,
+         status        TEXT    NOT NULL,
+         verdict_note  TEXT,
+         created_at    INTEGER NOT NULL,
+         updated_at    INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE INDEX reviews_by_project ON reviews (project_id, updated_at)",
+      "CREATE INDEX reviews_by_reviewer ON reviews (reviewer_id, updated_at)",
+      // A name on a revision, unique within its project.
+      `CREATE TABLE milestones (
+         id          TEXT    PRIMARY KEY,
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         name        TEXT    NOT NULL,
+         revision    TEXT    NOT NULL,
+         note        TEXT,
+         created_by  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at  INTEGER NOT NULL,
+         UNIQUE (project_id, name)
+       ) STRICT`,
+      // Where this server posts its events. `secret` signs each body; it is
+      // shown once, when the webhook is made.
+      `CREATE TABLE webhooks (
+         id          TEXT    PRIMARY KEY,
+         project_id  TEXT    REFERENCES projects(id) ON DELETE CASCADE,
+         url         TEXT    NOT NULL,
+         format      TEXT    NOT NULL,
+         events      TEXT    NOT NULL,
+         secret      TEXT    NOT NULL,
+         created_by  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at  INTEGER NOT NULL,
+         last_status INTEGER,
+         last_at     INTEGER
+       ) STRICT`,
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */
