@@ -448,6 +448,6 @@ Team 读到的 `by`（都是 `bob` 用同一个令牌推上去的）：
 | P4 | ✅ | 动态、贡献图、待办、通知、头像（migration 15）；网页主页、待办看板、通知铃、个人设置。头像由浏览器裁剪重编码，服务器只校验格式与大小（无图像库） |
 | P5 | ✅ | Studio 行级批注与 Team 讨论串双向同步（clientId 幂等）；网页按行写批注；查看者不能写；修复：按 id 读写讨论串时未校验项目可见性 |
 | P6 | ✅ | 网页管理后台：账号、项目成员、品牌（主题色/LOGO）与设置、签名密钥与审计、服务器状态；`admin.brand.set` |
-| P7 | 进行中 | 已做：Studio 通知铃（点击跳到对应批注行）、行待办→Team 项目待办（解决即完成）、审阅者/只读成员提示；**提交时关联待办**（提交表单勾选我负责的待办，提交后标完成并记下 `doneRevision`，migration 16，网页待办卡片链到该修订）；**软锁提示**（`clients.announce` 带 `editing`，打开别人正在编辑的故事/蓝图时提示是谁、多久，不加锁）；**提交前提醒**（这次修改的故事里有未解决批注时在提交按钮旁提示）；**Live 光标、聊天与跟随**（独立的 `cursor`/`chat` 负载走 `live.say`，不经主持方，服务器与旧版 Studio 不受影响；故事行显示他人光标，蓝图目前只到文档级）。**未做**：建议修改一键采纳、审阅请求、资源需求单、翻译分配、里程碑、Webhook、Live 内重基 |
+| P7 | ✅ | Studio 通知铃、行待办→项目待办、角色提示；**提交时关联待办**（`doneRevision`，migration 16）；**软锁提示**（`clients.announce` 的 `editing`）；**提交前提醒**；**Live 光标、聊天与跟随**（独立 `cursor`/`chat` 负载，不经主持方）；**建议修改**（`kind: "suggestion"` 讨论串，一键采纳为普通编辑并解决）；**评审请求**（`reviews.*`，网页评审页、Studio 面板发起、通知直达网页）；**资源需求单 / 翻译与配音分配**（待办 `kind`=asset/translation/voice + `locale`，migration 17；Studio 行弹窗与面板发起，网页看板按类型筛选并显示各语言进度）；**里程碑**（`milestones.*`，网页历史页打标签）；**Webhook**（`admin.webhooks.*`，JSON 签名或 Slack/Discord/飞书文本，网页管理后台）；**Live 重基**（主持方「移到最新版本」：记录并推送、关旧房间开新房间，成员收到 `moving` 后自动加入新房间）。已知局限：蓝图光标只到文档级；资源需求单完成时还不会自动关联上传的资源文件（协议已有 `asset` 字段，界面未接） |
 
 锚点约定（Studio 与网页共用，服务器不解析）：故事行 `document = story:<storyId>`、`element = <sceneId>/<blockId>`；蓝图节点 `ui:<blueprintId>` / `<graphId>/<nodeId>`。
