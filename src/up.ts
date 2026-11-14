@@ -706,6 +706,10 @@ export async function up(
     stderr(`nlteam: ${describeError(error)}\n`);
     return 1;
   } finally {
+    // First, with a sentence: every Team socket is told the server is going and closed, so a
+    // client reconnects later rather than into a machine on its way down - and so no open socket
+    // is left for the listeners below to wait on.
+    team?.hub.closeAll("this server is shutting down");
     // Both servers hold a listening socket and the database a file handle; any
     // of them would keep the process alive after the work is over.
     if (endpoint !== undefined) {
@@ -714,18 +718,14 @@ export async function up(
     if (authorizationTls !== undefined) {
       await authorizationTls.close();
     }
-    // It holds a timer and a reader that would go on reading repositories
-    // through a database that is about to be closed under it.
-    // Before the database closes, and with a sentence. A session that simply
-    // stopped answering is one whose client reconnects into a machine that is
-    // going down, and then does it again a second later.
     // On the way out of a failure as well: stops the snapshot timer, and
     // tries once more for anything unsaved (the log has it regardless).
     await projectAuthorities?.stop().catch(() => undefined);
-    team?.hub.closeAll("this server is shutting down");
     // It holds a sweep timer and parked readers, each of which is a response
     // waiting for a byte that is not going to come now.
     blobs?.close();
+    // It holds a timer and a reader that would go on reading repositories
+    // through a database that is about to be closed under it.
     readings?.stop();
     database?.close();
   }

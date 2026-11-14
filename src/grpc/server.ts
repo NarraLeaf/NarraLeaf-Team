@@ -20,6 +20,7 @@
  */
 import { X509Certificate } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { createSecureContext, type SecureContext } from "node:tls";
 import {
@@ -320,6 +321,7 @@ function isGrpcRequest(headers: { readonly [name: string]: unknown }): boolean {
 export class GrpcServer {
   readonly #server: Http2Server | Http2SecureServer;
   readonly #sessions: Set<ServerHttp2Session>;
+  readonly #sockets: Set<Socket>;
   readonly #host: string;
   readonly #port: number;
   readonly #scheme: "http" | "https";
@@ -327,12 +329,14 @@ export class GrpcServer {
   private constructor(
     server: Http2Server | Http2SecureServer,
     sessions: Set<ServerHttp2Session>,
+    sockets: Set<Socket>,
     host: string,
     port: number,
     scheme: "http" | "https",
   ) {
     this.#server = server;
     this.#sessions = sessions;
+    this.#sockets = sockets;
     this.#host = host;
     this.#port = port;
     this.#scheme = scheme;
@@ -358,6 +362,15 @@ export class GrpcServer {
             ...(speaksHttp1(options) ? { allowHTTP1: true } : {}),
           });
     const sessions = new Set<ServerHttp2Session>();
+    // Every raw connection, whatever it became: an HTTP/2 session, an HTTP/1.1 keep-alive
+    // connection, or a socket upgraded to the Team protocol. Node tracks none of the last two once
+    // the server is closing, so without this one open console page or Studio keeps `close()`
+    // waiting for ever.
+    const sockets = new Set<Socket>();
+    server.on("connection", (socket: Socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
 
     server.on("session", (session: ServerHttp2Session) => {
       sessions.add(session);
@@ -442,6 +455,7 @@ export class GrpcServer {
     return new GrpcServer(
       server,
       sessions,
+      sockets,
       host,
       port,
       options.tls === undefined ? "http" : "https",
@@ -472,6 +486,12 @@ export class GrpcServer {
         session.destroy();
       }
       this.#sessions.clear();
+      // What is left: HTTP/1.1 keep-alive connections and upgraded sockets, which node never
+      // closes for a closing server.
+      for (const socket of this.#sockets) {
+        socket.destroy();
+      }
+      this.#sockets.clear();
     });
   }
 }
