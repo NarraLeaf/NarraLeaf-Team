@@ -166,7 +166,8 @@ printf '%s' 'their password' | nlteam user create bob --root /srv/team --role au
 nlteam project create harbour --root /srv/team --as ada
 ```
 
-Every account on a server reaches every project on it. An account that should
+Each project has members with a role (owner, editor, reviewer, viewer); new
+accounts and projects start out reaching everything, as before. An account that should
 never hold a password is given a token instead, with `nlteam token mint`; Studio
 takes one in place of a username under **Use an access token instead**.
 

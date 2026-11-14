@@ -391,8 +391,23 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `projects.list` | `session` | The projects on this server, in name order. Bounded rather than paged: at most a thousand rows, and a shorter answer once they total a mebibyte. `total` is how many there are in all, so a list shorter than `total` was cut. There is no cursor, a client reads this whole, and one that ignored a cursor would quietly take the first page for the server. |
 | `projects.get` | `session` | One project: its row, and the project file read out of its repository, the title, the stage, how many scenes and assets. A file the server could not make sense of comes back `readable: false` with a sentence, never a refusal, and so does one whose first clone has not landed. Takes an id or a name. |
 | `projects.history` | `session` | A page of one project's revisions, newest first. `limit` defaults to 20 and is capped at 100, and a page also ends once the revisions on it total a mebibyte, whichever comes first, since a revision carries the message it was pushed with and that message comes out of a repository rather than out of a field this server bounds. The cursor is the id of the revision to carry on after, and is absent when there is no page beyond this one. A project the server has no checkout of yet answers an empty page rather than a refusal, which is not the same as a project with no revisions. |
-| `projects.create` | `session` | Make a project, or, given a `repositoryId`, register a repository the author already has. Making one asks the content server for the repository and takes the row back if it refuses; registering one asks it for nothing, because the repository already exists under that id. Announces `project-created` on the `projects` topic. |
-| `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Any account may, and forgetting a project that is already gone answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
+| `projects.create` | `session` | Make a project, or, given a `repositoryId`, register a repository the author already has. Making one asks the content server for the repository and takes the row back if it refuses; registering one asks it for nothing, because the repository already exists under that id. Announces `project-created` on the `projects` topic. The project row carries `role`, the caller's role in it, as every project row does. |
+| `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Only an owner of the project, or an operator, may (anybody else is `refused`), and forgetting a project that is already gone, or one the caller cannot see, answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
+| `projects.members.list` | `session` | Who belongs to one project: `members` (username, display name, role, who gave them it, when), owners first, with `total`, and `role`, the caller's own, which for an operator without a row of their own is `owner`. Any member may ask. A project the caller has no role in is `not-found`. |
+| `projects.members.set` | `session` | Give an account (`username`) a role (`role`: `owner`, `editor`, `reviewer` or `viewer`) in a project, adding it if it is not a member. Only an owner, or an operator, may (anybody else is `refused`). Refused when it would demote the project's only owner of its own. Setting the role somebody already has changes nothing and announces nothing. Announces `member-set` on the project's members topic, and `project-access-changed` on `projects` to that account alone. |
+| `projects.members.remove` | `session` | Take an account (`username`) out of a project. Owners and operators only, and never the only owner. Removing somebody who is not a member answers `{}`. Announces `member-removed` on the project's members topic and `project-access-changed` to the account removed, and withdraws, at once, every subscription that account's sessions hold on the project. |
+| `account.devices.list` | `session` | The devices the caller is signed in on through the browser sign-in: id, the name the device gave, the application, when it signed in and was last used. |
+| `account.devices.revoke` | `session` | Sign one of the caller's own devices out (`device`). Every token it holds is refused at once. Another account's device, or one already signed out, answers `{}`. |
+| `account.profile.get` | `session` | An account's profile (`username`, or the caller's): display name, bio, `avatarUrl`. |
+| `account.profile.update` | `session` | Change the caller's own `displayName` and `bio`. Avatars are uploaded over HTTP (`PUT /api/console/v1/avatar`, console session only) and served content-addressed at `/api/team/v1/avatars/{username}/{sha256}.{ext}` to signed-in callers. |
+| `activity.list` | `activity` | A page of what happened, newest first, for an `account` and/or a `project`: commits (read by the refresh pass; the author string is matched to an account where it can be, and is unverified), threads, comments, resolutions, to-dos made and finished. Only rows about projects the caller can see; private rows only to their own account. |
+| `activity.heatmap` | `activity` | Per-day counts for one account over the last year, bucketed in the caller's time zone (`tzOffsetMinutes`, as `Date#getTimezoneOffset`). The same visibility as `activity.list`. |
+| `todos.list` | `todos` | The caller's to-dos (owned, or assigned in a project they can see), or one `project`'s (shown to the project, plus the caller's own private ones there). `includeDone` defaults to false. |
+| `todos.create` | `todos` | Make one: `title`, optional `body`, `project`, `visibility` (`private` default, or `project`), `assignee` (project to-dos only, a member of that project), `dueAt`, `anchor`. Announces `todo-set` on the owner's and assignee's `account:{account}/todos` and, for a project to-do, on `project:{project}/todos`; notifies the assignee. |
+| `todos.update` | `todos` | Change one. Its owner may change anything; its assignee only its `status`; a project owner may tidy a project to-do. `null` clears a field. Finishing one records activity. |
+| `todos.delete` | `todos` | Its owner only. |
+| `notifications.list` | `notifications` | The caller's notifications, newest first, with `unread`. Mentions (`@username` in a comment), replies in a thread the caller is in, and to-dos given to them; never about a project they cannot see, never about their own act. |
+| `notifications.read` | `notifications` | Mark `ids`, or `all: true`, read. |
 | `members.list` | `session` | The accounts on this server, as a name beside a piece of work, in name order. Bounded the way `projects.list` is and for the same reason, with the same `total` and no cursor. |
 | `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. `limit` defaults to 50 and is capped at 200, and a page also ends once the threads on it total a mebibyte, whichever comes first, since a thread carries the comment that opened it and that comment may hold a suggestion, so the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. |
 | `threads.get` | `comments` | One thread and a page of its comments, oldest first. `limit` defaults to 50 and is capped at 200, and a page also ends once the comments on it total a mebibyte; `after` carries the reader on from the cursor the last page ended with, and the cursor is absent when the conversation ends there. The thread's own `comments` count is how many there are in all, so a client knows what it holds a page of. |
@@ -431,6 +446,16 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 
 ### Administering a server
 
+`admin.brand.set` (`accent`: `#rrggbb` or `null`) sets the team's accent colour;
+the logo is uploaded by an operator over HTTP (`PUT /api/console/v1/brand/logo`,
+console session, PNG/JPEG/WebP up to 512 KiB) and served to anybody at
+`/api/team/v1/brand/logo/{sha256}.{ext}`. Both appear in the discovery document
+as `brand: { accent?, logoUrl? }`, which the console and Studio draw. The web
+console's administration pages (accounts, project members, brand and settings,
+signing keys and the decision log, server status) are built on these methods and
+the rest of the family below.
+
+
 The `admin` family is refused to anybody who is not an operator, and the check is
 made **on every call** rather than when the session opened. That is not
 belt-and-braces: this server's whole claim about revocation is that it takes
@@ -463,6 +488,13 @@ an ordinary event, `{ kind: "subscription-withdrawn", topic, why }`, and to that
 session alone: the sequence does not move for the operators still listening, and
 the session stays open and keeps everything else it subscribed to.
 
+**A project subscription does not outlive the account's role in it.** The same
+check, made the same way, takes back every `project:{project}…` topic from an
+account that no longer has a role in that project, with the same event. Taking
+somebody out with `projects.members.remove` also asks that account's sessions to
+check at once, so for that path there is no window at all. A project that was
+forgotten is not withdrawn this way: it has already said `project-forgotten`.
+
 ### Anchors
 
 Where in a project something is attached is an **anchor**: `{ document?, element?, revision? }`,
@@ -473,6 +505,20 @@ stood at. That the server never reads them is what lets the two halves ship on
 separate schedules: a client that begins anchoring to a new kind of thing needs
 no server release.
 
+The clients agree on a vocabulary among themselves, so that a thread written in
+one shows in the other:
+
+| What | `document` | `element` |
+|---|---|---|
+| A story row | `story:<storyId>` | `<sceneId>/<blockId>` |
+| A blueprint node | `ui:<blueprintId>` | `<graphId>/<nodeId>` |
+
+Studio writes its row comments to these threads whenever the project is on a
+Team server (pushing local ones once each, with their local ids as client ids,
+and pulling the server's), and keeps `editor/story-comments.json` as the
+offline copy; the web console reads and writes the same threads. A viewer of a
+project reads its threads and may not write in them (`refused`).
+
 ## Topics
 
 A topic is a string a client subscribes to. Every one has a publisher; a name the
@@ -480,12 +526,16 @@ server never publishes on is refused rather than left waiting.
 
 | Topic | When it fires |
 |---|---|
-| `projects` | The list of projects on this server changed. |
+| `projects` | The list of projects on this server changed. Each event goes only to the accounts it concerns: `project-created` and `project-forgotten` to the project's members and the operators, `project-access-changed` to the one account whose role changed. The sequence moves for everybody, so a session left out sees a gap and may read the list again. |
 | `project:{project}` | One project's row changed, or the server read its repository again. |
 | `project:{project}/threads` | A thread or comment in one project changed. |
 | `project:{project}/overlay` | An overlay record on one project changed. |
 | `project:{project}/clients` | An installation opened or closed one project. |
 | `project:{project}/live` | A live session on one project opened, changed or closed. |
+| `project:{project}/members` | Somebody was given a role in one project, had it changed, or was taken out. |
+| `project:{project}/todos` | A to-do shown to one project was made, changed or removed. |
+| `account:{account}/todos` | One of the account's own to-dos changed. Held by that account only; anybody else's is "not found". |
+| `account:{account}/notifications` | A notification arrived, or some were read. Held by that account only. |
 | `live:{session}` | Something was said inside one live session. Kept by nobody. |
 | `admin/users` | An account was made, disabled, enabled, given or denied administration, or had its tokens refused. Operators only. |
 | `admin/settings` | A setting of this server changed. Operators only. |
@@ -504,6 +554,29 @@ frames than the rest of this protocol together, to say something a panel could
 only act on by re-reading a page it already holds. **An allowed decision is
 published nowhere.** A client that wants the whole log pages `admin.audit.list`,
 and has to: the sequence on that topic counts refusals, not rows.
+
+## Project files
+
+Not part of the socket: two read-only HTTP routes on the same listener, for the
+web console's viewers. Signed in by a console cookie or a bearer token; any role
+in the project may read, and a project the caller has no role in is a 404.
+
+```
+GET /api/team/v1/projects/{project}/tree/{revision}          {revision, files: [{path, size}], total}
+GET /api/team/v1/projects/{project}/raw/{revision}/{path…}   the file's bytes
+```
+
+`{revision}` is a revision id or `head`. A revision id's answers are
+`immutable`; `head`'s are `no-cache` and carry `x-team-revision` naming what it
+resolved to. Team never interprets the bytes: the console reads them with
+`@narraleaf/project-view` (`project-view/` in this repository). A path is looked
+up in the revision's own tree, never joined onto a directory. JSON, text,
+common image, audio, video and font types are served as themselves; anything
+else is an attachment. Asset bytes, which Studio stores without an extension
+under `assets/content/`, may be asked for as a type with `?as=png` (that
+directory only, types on the list only). Every file answer carries `nosniff` and
+`Content-Security-Policy: sandbox`, so nothing committed to a project can run
+in this origin. Files over 32 MiB are refused with 413.
 
 ## Limits
 

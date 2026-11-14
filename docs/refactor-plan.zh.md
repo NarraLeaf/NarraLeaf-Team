@@ -201,9 +201,12 @@ CREATE TABLE project_members (
 |---|---|---|---|---|
 | owner | 读写 | ✓ | ✓ | ✓ |
 | editor | 读写 | ✓ | ✓ | — |
-| reviewer | 只读 | ✓ | ✓ | — |
-| viewer | 只读 | 只看 | 只看自己的 | — |
+| reviewer | **无**（在网页上看） | ✓ | ✓ | — |
+| viewer | **无**（在网页上看） | 只看 | 只看自己的 | — |
 
+（2026-11-13 定：因为 loreserver 不分读写，reviewer/viewer 在仓库层就是非成员，只能通过 Team 读项目。已实现：migration 12、`src/projects/members.ts`、四个授权应答和协议的可见性检查。）
+
+- ⚠ **实测（2026-11-13，§10 实测三）：loreserver 0.8.6 不区分读和写。** 把令牌和权限应答里的权限都改成只有 `read`，推送照样成功。它真正执行的只有「是不是成员」：Team 应答 denied 的项目根本打不开。所以 reviewer 和 viewer 的「只读」在仓库层**拦不住**，只能靠 Studio 界面限制，并由 Team 事后发现（见 §10）。
 - 服务器级 `admin` 视同所有项目的 owner。
 - **迁移**：把现有账号全部以 editor 身份加进每个现有项目，升级后行为不变。可以加一个设置项「新账号默认加入所有项目」，兼容现在的小团队用法。
 - loreserver 问「这个令牌能否写这个仓库」时，按角色回答（`registry.ts` 里现在那一句「全员可访问」的规则改掉）。
@@ -420,3 +423,31 @@ Team 读到的 `by`（都是 `bob` 用同一个令牌推上去的）：
 - 临时存储根、打过补丁的构建副本和测试脚本都在 Claude 的临时目录里，没有动这个仓库的代码。
 - 测试在服务器上登记了 7 个 `*-mwew…` 项目，都在临时存储根里，删掉目录就没了。
 - Lore 在本机的用户级会话存储里留了一条 `lore://localhost:41337` 下 `bob` 的登录记录（测试账号，服务器已经停了）。
+
+### 实测三：loreserver 是否区分读写（2026-11-13）
+
+做法：临时副本里把 `PROJECT_PERMISSIONS` 改成只有 `["read"]`。这样登录交换出来的令牌、`CheckUserPermission` 和 `LookupUserPermissions` 的应答里都只有读权限。然后跑 Studio 的「克隆并来回推送」「拒绝分叉推送后同步合并」两个用例。
+
+结果：**两个用例都通过，推送成功**。auth 日志里只有 `check … allowed` 和 `multiresource … allowed`，loreserver 从没问过「能不能写」。这跟 `src/projects/registry.ts` 注释里说的「repository authorizer never looks at the verbs」一致。
+
+结论：
+- 能在仓库层执行的只有**成员资格**：不是成员就 denied，打不开。
+- 「只读角色不能推送」做不到，除非 Lore 以后支持按动词授权。
+- 可选的处理方式：(a) reviewer/viewer 在仓库层照样能写，只在 Studio 界面上隐藏提交和推送，Team 在刷新时发现非可写角色推上来的修订就记审计、通知 owner；(b) 只读角色干脆不给仓库访问权，只能在网页上看（网页读的是 Team 自己的检出，不需要他们本人有仓库权限），批注和待办都走协议；(c) 先只做成员资格，角色延后。
+
+---
+
+## 11. 进度（2026-11-14）
+
+| 阶段 | 状态 | 说明 |
+|---|---|---|
+| P0 | ✅ | 裁决写入 architecture/security；三项实测记录在 §10 |
+| P1 | ✅ | 项目角色（migration 12）、成员管理协议、项目事件只发给相关账号；`web_sessions`（migration 13）、Cookie 登录、同源 WebSocket、`/console` 静态服务、`@narraleaf/design-tokens` 与网页外壳；HTTP/2 上非 gRPC 请求改走网页处理器（浏览器协商 h2，否则网页不可达） |
+| P2 | ✅ | OAuth：授权码+PKCE、设备码、刷新令牌轮换与重放检测（migration 14）；令牌带 `grant` 声明，吊销设备立即生效；访问令牌沿用登录令牌时长（会话每次调用都校验过期，1 小时会让 Studio 每小时断线）；Studio「在浏览器中登录」、后台续期、`narraleaf://` 连接链接 |
+| P3 | ✅（部分） | `tree`/`raw` 只读路由；`@narraleaf/project-view` 读故事/角色/资源/蓝图；网页故事、蓝图、资源、历史查看器。**未做**：Studio 改为从该包导入只读类型 |
+| P4 | ✅ | 动态、贡献图、待办、通知、头像（migration 15）；网页主页、待办看板、通知铃、个人设置。头像由浏览器裁剪重编码，服务器只校验格式与大小（无图像库） |
+| P5 | ✅ | Studio 行级批注与 Team 讨论串双向同步（clientId 幂等）；网页按行写批注；查看者不能写；修复：按 id 读写讨论串时未校验项目可见性 |
+| P6 | ✅ | 网页管理后台：账号、项目成员、品牌（主题色/LOGO）与设置、签名密钥与审计、服务器状态；`admin.brand.set` |
+| P7 | 进行中 | 已做：Studio 通知铃（点击跳到对应批注行）、行待办→Team 项目待办（解决即完成）、审阅者/只读成员提示。**未做**：§6 P2/P3 各项（Live 光标与聊天、软锁、建议修改、审阅请求、提交前提醒、资源需求单、翻译分配、里程碑、Webhook）、提交时关联待办 |
+
+锚点约定（Studio 与网页共用，服务器不解析）：故事行 `document = story:<storyId>`、`element = <sceneId>/<blockId>`；蓝图节点 `ui:<blueprintId>` / `<graphId>/<nodeId>`。

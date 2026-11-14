@@ -266,6 +266,35 @@ server, or a caller Team no longer admits.
 Both tokens carry a `resources` claim naming the projects and what the bearer may
 do to each. The version-control server refuses a token that arrives without it.
 
+## The web console
+
+`nlteam up` serves a web console at `https://<host>:41402/console/`, on the same
+port and certificate as everything else. People sign in with the same account
+and password they would give Studio; the browser keeps a session cookie for up
+to thirty days (seven unused), and `nlteam user disable` or
+`nlteam user revoke-tokens` ends it as it ends tokens.
+
+The page is built into `dist/console` by `npm run build` (or
+`npm run build:console` alone). A server built without it answers
+`/console/` with a 503 saying so. `NLTEAM_CONSOLE_ROOT` points the server at
+another directory, for working on the page.
+
+Studio signs in through the console too: a server that announces `oauth` (every
+0.2 server does) is offered "Sign in with browser", which opens
+`/oauth/authorize`, has the person sign in and approve the device, and returns
+to Studio. Where Studio's machine has no browser, the device flow shows a code
+to type at `/console/device` from any device. Each signed-in Studio is a device
+its owner can sign out from the console, and `nlteam user revoke-tokens` signs
+out all of them. The password sign-in stays for Studio builds that predate this.
+
+A link of the form `narraleaf://team/connect?server=https://<host>:41402` opens
+Studio's Add Server dialog with the address filled in.
+
+A browser has to trust the certificate the way Studio does. With Team's own
+authority that means installing `tls/ca.crt` on the machine, which is the same
+step as `nlteam trust`; a certificate supplied with `--tls-cert` from an
+authority browsers already trust needs nothing.
+
 ## Trusting the certificate
 
 Studio verifies the endpoint's certificate against its own host's trust store and
@@ -865,13 +894,20 @@ nlteam project list --server team.example.com:41402
 nlteam project create harbour --repository 19c0d42... --root /srv/team --as ada
 ```
 
-**Every account on a server reaches every project on it.** There is no
-per-project access to grant or remove. The question asked on each repository
-access is answered from the account alone: an account of this server, not
-disabled, holding a token this server has not refused. A resource that is not one
-of this server's projects is refused.
+**Access is per project.** Each project has members, each with a role: owner,
+editor, reviewer or viewer. Owners and editors open the repository; reviewers and viewers do not, and read
+the project through Team instead. The version-control server was measured not to
+tell reading from writing — anybody it lets open a repository can push to it — so
+a role that may not write is a role that may not open it. An operator owns every
+project. A new project starts with its creator as owner and every other account
+as editor, and a new account starts as an editor of every project, so a server
+upgraded to this behaves as it did before until somebody narrows a project.
+An owner of a project, or an operator, changes who belongs and in which role over
+the session, with `projects.members.set` and `projects.members.remove`; there is
+no command for it yet. A project always keeps one owner of its own, and taking
+somebody out takes their access at once.
 
-To stop somebody, stop the account: `nlteam user disable`, or
+To stop somebody everywhere, stop the account: `nlteam user disable`, or
 `nlteam user revoke-tokens` for a token that has been exposed.
 
 `project create` generates the repository id, asks the version-control server to

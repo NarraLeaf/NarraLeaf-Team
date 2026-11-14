@@ -125,3 +125,69 @@ the notes, threads and attachments people have left.
 The work itself is not in it. That is in the repositories, on the content plane.
 Presence, rooms and the per-topic sequence counters are not in it either: they
 are lost on restart and rebuilt by whoever reconnects.
+
+## Decided for 0.2: the web console
+
+Recorded here before the code exists, so that what is built can be held to it
+and a later change has to change this section first. The plan, with what was
+measured behind it, is [refactor-plan.zh.md](refactor-plan.zh.md).
+
+**A third host.** Studio edits, the command line scripts and rescues, and a
+web console served by the server itself looks, comments and administers. The
+reason the web interface was removed earlier still holds against what it was —
+a second place to list and open projects — and does not hold against this one,
+which does what Studio cannot by construction: a view across projects, a view of
+a person, and knowing what happened without opening anything.
+
+**D1. The console never edits a project.** It reads content, writes threads,
+to-dos and settings, and nothing else. A second place to change a scene is a
+second answer to "why did this change", and the repository keeps one writer.
+
+**D2. The server passes project files through unread.** The console reads a
+revision's files as bytes, through a route that serves them from Team's own
+checkout, and parses them in the browser with a viewer package shared with
+Studio. *An anchor is never parsed* and *Team does not read Studio's formats*
+both stand: what changes is that Team now hands the bytes on.
+
+**D3. Access is per project again.** Each project has members with a role —
+owner, editor, reviewer, viewer — and the repository question is answered from
+it. This reverses the rule that every account reaches every project. Existing
+accounts are migrated in as editors of every existing project, so an upgrade
+changes nobody's access.
+
+**D4. Team is an OAuth 2 authorization server for Studio.** Studio signs in by
+opening the system browser on Team's own page (authorization code with PKCE, a
+loopback redirect), and receives the same token it does today together with a
+refresh token. The password route is kept for one major version.
+
+**D5. Threads on the server are the record when a project has one.** Studio's
+in-project comment file is what a project without a server uses, and a cache
+otherwise.
+
+**D6. To-dos are a table of their own**, not overlay records, because whether
+somebody else may see one is decided by the server, and an overlay body is not
+read.
+
+**D7. The console holds a session.** A same-origin, `HttpOnly` cookie, revocable
+and recorded. Studio and the command line keep stateless tokens. The console's
+data travels on the same protocol socket as Studio's, opened by the same origin
+with the cookie; REST grows sign-in, OAuth, file reads and uploads, and no data
+methods.
+
+
+## The web console's viewers (0.2, P3)
+
+The console reads a project at any revision through the two file routes in
+docs/protocol.md (Project files), and interprets the bytes in the browser with
+`@narraleaf/project-view` (`project-view/`): the story library and documents,
+the characters, the asset registers and the UI blueprints. Each reader refuses a
+schema newer than the Studio it was written against
+(`STORY_DOCUMENT_MAX_SCHEMA` and its neighbours), and shows "this revision needs
+a newer Team" rather than a guess. Raising those ceilings when Studio raises its
+schemas is the one change a Studio format bump asks of Team, and it is a change
+to the page, not to the server.
+
+The plan (§4.1) has Studio import its read-only types from this package so the
+two cannot drift. That half is not done: Studio's `shared/` types are richer than
+a viewer needs and carry its own migrations, so for now the package mirrors the
+fields it reads, and its tests pin the shapes.
