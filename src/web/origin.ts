@@ -28,7 +28,10 @@ export function originIsOurs(request: IncomingMessage): boolean {
   if (origin === undefined || origin === "null") {
     return origin === undefined;
   }
-  const host = request.headers.host;
+  // HTTP/2 names the host in `:authority` rather than in a `host` header, and a
+  // browser speaks HTTP/2 on this port as readily as HTTP/1.1.
+  const authority = request.headers[":authority"];
+  const host = request.headers.host ?? (typeof authority === "string" ? authority : undefined);
   if (host === undefined) {
     return false;
   }
@@ -48,4 +51,17 @@ export function originIsOurs(request: IncomingMessage): boolean {
  */
 export function remoteAddressOf(request: IncomingMessage): string {
   return request.socket.remoteAddress ?? "an unknown address";
+}
+
+/**
+ * True only when a browser said the request came from a page of this server.
+ *
+ * Stricter than {@link originIsOurs}: an absent `origin` is refused. Used where
+ * the answer is a cookie or the credential is one — the console's sign-in and
+ * sign-out, and a socket upgrade that is signed in by a cookie — because there
+ * the only client is a browser, every browser sends the header on these
+ * requests, and a request without one is not a page of this server.
+ */
+export function sameOrigin(request: IncomingMessage): boolean {
+  return request.headers.origin !== undefined && originIsOurs(request);
 }

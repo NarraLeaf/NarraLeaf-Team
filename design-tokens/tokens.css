@@ -1,0 +1,91 @@
+/*
+ * NarraLeaf design tokens.
+ *
+ * Lifted from NarraLeaf Studio's src/renderer/styles/styles.css (:root.nl-studio)
+ * so that the Team web console reads as the same product. Colours are written
+ * as space-separated RGB channels, as Studio writes them, so that a rule can
+ * add its own alpha: `rgb(var(--nl-primary) / 0.18)`.
+ *
+ * Five surfaces, darkest to lightest on the dark ladder: canvas, sunken,
+ * surface, raised, overlay. Three foregrounds: fg, fg-muted, fg-subtle.
+ *
+ * `--nl-primary` is the accent as a fill. `--nl-primary-ink` is the accent as
+ * text or a hairline, which on the light ladder has to be darker to be read —
+ * Studio derives it from the accent at runtime; here the brand accent's light
+ * ink is written down.
+ *
+ * Until this package is published, Studio keeps its own copy; when it is, both
+ * import this file and the copy goes.
+ */
+:root {
+  color-scheme: dark;
+
+  --nl-primary: 64 168 196; /* #40a8c4 */
+  --nl-on-primary: 255 255 255;
+  --nl-primary-ink-on-dark: var(--nl-primary);
+  --nl-primary-ink-on-light: 31 122 147; /* #1f7a93 — 4.8:1 on white */
+  --nl-primary-ink: var(--nl-primary-ink-on-dark);
+
+  --nl-surface-canvas: 5 6 10; /* #05060a */
+  --nl-surface-sunken: 11 13 18; /* #0b0d12 */
+  --nl-surface: 15 17 21; /* #0f1115 */
+  --nl-surface-raised: 30 31 34; /* #1e1f22 */
+  --nl-surface-overlay: 34 36 42; /* #22242a */
+  --nl-fg: 238 241 245; /* #eef1f5 */
+  --nl-fg-muted: 154 163 174; /* #9aa3ae */
+  --nl-fg-subtle: 107 116 128; /* #6b7480 */
+  --nl-binding: 126 112 194; /* #7e70c2 */
+  --nl-danger: 218 105 88; /* #da6958 */
+  --nl-success: 109 176 148; /* #6db094 */
+  --nl-warning: 204 170 92; /* #ccaa5c */
+
+  --nl-edge: rgb(255 255 255 / 0.1);
+  --nl-edge-subtle: rgb(255 255 255 / 0.05);
+  --nl-edge-strong: rgb(255 255 255 / 0.2);
+  --nl-fill: rgb(255 255 255 / 0.1);
+  --nl-fill-subtle: rgb(255 255 255 / 0.05);
+  --nl-fill-strong: rgb(255 255 255 / 0.2);
+  --nl-control-border: rgb(255 255 255 / 0.3);
+  --nl-control-border-hover: rgb(255 255 255 / 0.5);
+  --nl-control-fill: rgb(255 255 255 / 0.05);
+  --nl-control-fill-hover: rgb(255 255 255 / 0.1);
+
+  --nl-ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  --nl-mono-font: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --nl-radius-sm: 4px;
+  --nl-radius: 6px;
+  --nl-radius-lg: 10px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --nl-primary-ink: var(--nl-primary-ink-on-light);
+
+    --nl-surface-canvas: 215 219 226; /* #d7dbe2 */
+    --nl-surface-sunken: 227 230 236; /* #e3e6ec */
+    --nl-surface: 238 240 244; /* #eef0f4 */
+    --nl-surface-raised: 248 249 251; /* #f8f9fb */
+    --nl-surface-overlay: 255 255 255; /* #ffffff */
+    --nl-fg: 27 33 41; /* #1b2129 */
+    --nl-fg-muted: 90 100 114; /* #5a6472 */
+    --nl-fg-subtle: 112 122 135; /* #707a87 */
+    --nl-binding: 103 90 168; /* #675aa8 */
+    --nl-danger: 172 73 57; /* #ac4939 */
+    --nl-success: 59 114 91; /* #3b725b */
+    --nl-warning: 127 103 46; /* #7f672e */
+
+    --nl-edge: rgb(15 23 42 / 0.13);
+    --nl-edge-subtle: rgb(15 23 42 / 0.07);
+    --nl-edge-strong: rgb(15 23 42 / 0.22);
+    --nl-fill: rgb(15 23 42 / 0.08);
+    --nl-fill-subtle: rgb(15 23 42 / 0.04);
+    --nl-fill-strong: rgb(15 23 42 / 0.14);
+    --nl-control-border: rgb(15 23 42 / 0.35);
+    --nl-control-border-hover: rgb(15 23 42 / 0.55);
+    --nl-control-fill: rgb(15 23 42 / 0.04);
+    --nl-control-fill-hover: rgb(15 23 42 / 0.08);
+  }
+}

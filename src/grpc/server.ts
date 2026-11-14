@@ -310,6 +310,12 @@ function handleStream(
   });
 }
 
+/** Whether a request is a gRPC call, which is to say its content type says so. */
+function isGrpcRequest(headers: { readonly [name: string]: unknown }): boolean {
+  const type = headers["content-type"];
+  return typeof type === "string" && type.toLowerCase().startsWith("application/grpc");
+}
+
 /** A gRPC server, listening. */
 export class GrpcServer {
   readonly #server: Http2Server | Http2SecureServer;
@@ -373,17 +379,25 @@ export class GrpcServer {
         );
       });
     }
+    const http1 = options.http1;
     server.on("stream", (stream, headers) => {
+      // A browser negotiates h2 on this port as readily as a gRPC client does,
+      // because it is offered first. So on h2 it is the content type, not the
+      // protocol, that says which side a request is for: gRPC always says
+      // application/grpc, and a page, its sign-in and the discovery document
+      // never do. Those go to the same handler HTTP/1.1 reaches, below.
+      if (http1 !== undefined && !isGrpcRequest(headers)) {
+        return;
+      }
       handleStream(stream, headers, options);
     });
 
-    // Guarded on the version rather than trusted to fire only for HTTP/1.1: the compat
-    // layer emits `request` for an h2 stream as well, and that stream has already been
-    // answered by the handler above.
-    const http1 = options.http1;
+    // The compat layer emits `request` for every h2 stream as well as for every
+    // HTTP/1.1 request, so an h2 stream is taken here only when the handler
+    // above left it — when it is not gRPC.
     if (http1 !== undefined) {
       server.on("request", (request, response) => {
-        if (request.httpVersionMajor === 1) {
+        if (request.httpVersionMajor === 1 || !isGrpcRequest(request.headers)) {
           http1(request as unknown as IncomingMessage, response as unknown as ServerResponse);
         }
       });

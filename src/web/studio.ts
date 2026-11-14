@@ -34,7 +34,7 @@ import {
   sharedSignInLimiter,
 } from "../identity/signin.js";
 import { mintToken } from "../identity/tokens.js";
-import { authenticate, SIGN_IN_REFUSED_MESSAGE } from "../identity/users.js";
+import { authenticate, SIGN_IN_REFUSED_MESSAGE, type UserRecord } from "../identity/users.js";
 import { mintingConfig, type TeamService } from "../team/service.js";
 import { originIsOurs, remoteAddressOf } from "./origin.js";
 
@@ -53,7 +53,7 @@ export const STUDIO_SIGN_IN_PATH = `${PREFIX}/sign-in`;
 /** How much of a request body is read before it is refused as nonsense. */
 const MAXIMUM_BODY_BYTES = 4 * 1024;
 
-function sendJson(response: ServerResponse, status: number, body: unknown): void {
+export function sendJson(response: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -70,7 +70,7 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
  * between two refusals is a client that will print whichever it got, so the
  * sentence is the whole of the answer.
  */
-function refuse(response: ServerResponse, status: number, message: string): void {
+export function refuse(response: ServerResponse, status: number, message: string): void {
   sendJson(response, status, { error: message });
 }
 
@@ -80,7 +80,7 @@ function refuse(response: ServerResponse, status: number, message: string): void
  * `retry-after` as well as the sentence, because a client that reads it can
  * wait rather than keep asking, and one that does not has been told in words.
  */
-function holdOff(response: ServerResponse, seconds: number): void {
+export function holdOff(response: ServerResponse, seconds: number): void {
   const body = JSON.stringify({
     error: `too many sign-ins from here have been refused; try again in ${seconds} seconds`,
   });
@@ -102,7 +102,7 @@ function holdOff(response: ServerResponse, seconds: number): void {
  * abandoned halfway through is enough to make one. The same guard ./api.ts puts
  * in front of the operator's interface, for the same reason.
  */
-function answering(
+export function answering(
   options: TeamService,
   response: ServerResponse,
   work: Promise<void>,
@@ -120,7 +120,7 @@ function answering(
 }
 
 /** Read a JSON body, or say what was wrong with it. */
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown> | string> {
+export async function readJson(request: IncomingMessage): Promise<Record<string, unknown> | string> {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of request) {
@@ -187,7 +187,7 @@ export function serveStudioApi(
 }
 
 /** Say which methods an address takes, in the header and in the sentence. */
-function onlyMethods(response: ServerResponse, allow: string, spoken: string): void {
+export function onlyMethods(response: ServerResponse, allow: string, spoken: string): void {
   response.writeHead(405, { allow, "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify({ error: `that address takes ${spoken}` }));
 }
@@ -242,57 +242,21 @@ async function answerSignIn(
     return;
   }
 
-  const body = await readJson(request);
-  if (typeof body === "string") {
-    // What was wrong with the request, which is not a statement about any
-    // account: a body too long or not JSON is answered before a password is
-    // read out of it.
-    refuse(response, 400, body);
-    return;
+  const outcome = await checkSignIn(options, request, "studio");
+  switch (outcome.kind) {
+    case "bad":
+      refuse(response, 400, outcome.message);
+      return;
+    case "held":
+      holdOff(response, outcome.seconds);
+      return;
+    case "refused":
+      refuse(response, 401, SIGN_IN_REFUSED_MESSAGE);
+      return;
+    case "accepted":
+      break;
   }
-  const username = text(body, "username");
-  const password = typeof body["password"] === "string" ? body["password"] : undefined;
-  if (username === undefined || password === undefined) {
-    refuse(response, 400, "a sign-in takes a username and a password");
-    return;
-  }
-
-  const limiter = options.signIns ?? sharedSignInLimiter();
-  const address = remoteAddressOf(request);
-  const wait = limiter.waitFor(username, address);
-  if (wait > 0) {
-    const seconds = Math.ceil(wait / 1000);
-    options.log?.(`studio: sign-in for ${JSON.stringify(username)} held off for ${seconds}s`);
-    // A different sentence from the refusal below, and it may be: what it says
-    // is how often this caller has been wrong, which they already know, and
-    // nothing about whether the account they named is one this server has.
-    holdOff(response, seconds);
-    return;
-  }
-
-  // Not wrapped in anything: how many password checks this process runs at once
-  // is the hasher's own business now, so this door and the management plane's
-  // `admin.users.create` are held to one budget rather than to two.
-  const result = await authenticate(
-    options.database,
-    defaultPasswordHasher(),
-    username,
-    password,
-  );
-  if (result.kind === "refused" || result.user.isServiceAccount) {
-    if (result.kind === "refused") {
-      limiter.refused(username, address);
-    } else {
-      // The password was right; the account is simply not one a person signs
-      // in to. Counting it would hold that against whoever typed it.
-      limiter.accepted(username, address);
-    }
-    await holdRefusedSignIn();
-    options.log?.(`studio: sign-in refused for ${JSON.stringify(username)}`);
-    refuse(response, 401, SIGN_IN_REFUSED_MESSAGE);
-    return;
-  }
-  limiter.accepted(username, address);
+  const result = { user: outcome.user };
 
   const config = mintingConfig(options);
   const minted = mintToken(result.user, options.keys.signingKey, config, {
@@ -315,3 +279,75 @@ async function answerSignIn(
   });
 }
 
+/** What a username and a password amounted to. */
+export type SignInOutcome =
+  | { readonly kind: "accepted"; readonly user: UserRecord }
+  /** The body was not a sign-in at all; nothing about any account. */
+  | { readonly kind: "bad"; readonly message: string }
+  /** Refused often enough from here that this one was not tried. */
+  | { readonly kind: "held"; readonly seconds: number }
+  /** Not this account, not this password, or not an account a person signs in to. */
+  | { readonly kind: "refused" };
+
+/**
+ * Read a sign-in body and check it, with every guard this door has.
+ *
+ * Shared by the Studio route, which answers a token, and the console route,
+ * which answers a cookie: two doors onto one password check must be held to one
+ * limiter and one refusal, or the weaker one is the door.
+ */
+export async function checkSignIn(
+  options: TeamService,
+  request: IncomingMessage,
+  door: string,
+): Promise<SignInOutcome> {
+  const body = await readJson(request);
+  if (typeof body === "string") {
+    // What was wrong with the request, which is not a statement about any
+    // account: a body too long or not JSON is answered before a password is
+    // read out of it.
+    return { kind: "bad", message: body };
+  }
+  const username = text(body, "username");
+  const password = typeof body["password"] === "string" ? body["password"] : undefined;
+  if (username === undefined || password === undefined) {
+    return { kind: "bad", message: "a sign-in takes a username and a password" };
+  }
+
+  const limiter = options.signIns ?? sharedSignInLimiter();
+  const address = remoteAddressOf(request);
+  const wait = limiter.waitFor(username, address);
+  if (wait > 0) {
+    const seconds = Math.ceil(wait / 1000);
+    options.log?.(`${door}: sign-in for ${JSON.stringify(username)} held off for ${seconds}s`);
+    // A different sentence from the refusal below, and it may be: what it says
+    // is how often this caller has been wrong, which they already know, and
+    // nothing about whether the account they named is one this server has.
+    return { kind: "held", seconds };
+  }
+
+  // Not wrapped in anything: how many password checks this process runs at once
+  // is the hasher's own business now, so this door and the management plane's
+  // `admin.users.create` are held to one budget rather than to two.
+  const result = await authenticate(
+    options.database,
+    defaultPasswordHasher(),
+    username,
+    password,
+  );
+  if (result.kind === "refused" || result.user.isServiceAccount) {
+    if (result.kind === "refused") {
+      limiter.refused(username, address);
+    } else {
+      // The password was right; the account is simply not one a person signs
+      // in to. Counting it would hold that against whoever typed it.
+      limiter.accepted(username, address);
+    }
+    await holdRefusedSignIn();
+    options.log?.(`${door}: sign-in refused for ${JSON.stringify(username)}`);
+    return { kind: "refused" };
+  }
+  limiter.accepted(username, address);
+
+  return { kind: "accepted", user: result.user };
+}

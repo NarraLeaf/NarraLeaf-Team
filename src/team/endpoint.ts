@@ -32,6 +32,8 @@ import {
   serverCapabilities,
   type TeamMethod,
 } from "./methods.js";
+import { accountMethods } from "./methods/account.js";
+import { collabMethods } from "./methods/collab.js";
 import { adminMethods } from "./methods/admin.js";
 import { clientMethods } from "./methods/clients.js";
 import { commentMethods } from "./methods/comments.js";
@@ -45,7 +47,9 @@ import {
   TEAM_SOCKET_PATH,
   type TeamCapability,
 } from "./protocol.js";
-import { TeamSession } from "./session.js";
+import { TeamSession, type SessionIdentity } from "./session.js";
+import { describeWebSessionRefusal, identifyWebSession, webSessionCookie } from "../identity/websessions.js";
+import { sameOrigin } from "../web/origin.js";
 import { completeUpgrade, isWebSocketUpgrade, refuseUpgrade } from "./websocket.js";
 
 /**
@@ -128,10 +132,56 @@ export interface TeamSocket {
   readonly handleUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
 }
 
+/**
+ * How an upgrade is signed in, as something to ask again on every call.
+ *
+ * A bearer token, when the request carries an `authorization` header: Studio
+ * and the command line. Otherwise the console's cookie, and then only from a
+ * page of this server — a browser attaches cookies to a WebSocket handshake
+ * that any site can start, and `origin` is the one thing that tells a page of
+ * this server from a page elsewhere riding the person's session.
+ */
+function credentialOf(
+  request: IncomingMessage,
+  service: TeamService,
+):
+  | { readonly kind: "ok"; readonly identify: () => SessionIdentity }
+  | { readonly kind: "refused"; readonly status: number; readonly detail: string } {
+  const header = request.headers["authorization"];
+  const authorization = Array.isArray(header) ? header[0] : header;
+  const cookie = webSessionCookie(request.headers.cookie);
+  if (authorization !== undefined || cookie === undefined) {
+    const token = bearerToken(authorization);
+    return {
+      kind: "ok",
+      identify: () => {
+        const identified = identifyToken(service.database, service.keys, service.config, token);
+        return identified.kind === "identified"
+          ? { kind: "identified", user: identified.user }
+          : { kind: "refused", detail: describeRefusal(identified.reason) };
+      },
+    };
+  }
+  if (!sameOrigin(request)) {
+    return { kind: "refused", status: 403, detail: "a console session connects only from a page of this server" };
+  }
+  return {
+    kind: "ok",
+    identify: () => {
+      const identified = identifyWebSession(service.database, cookie);
+      return identified.kind === "identified"
+        ? { kind: "identified", user: identified.user }
+        : { kind: "refused", detail: describeWebSessionRefusal(identified.reason, describeRefusal) };
+    },
+  };
+}
+
 /** Every method this build serves. */
 export function teamMethods(): readonly TeamMethod[] {
   return [
     ...projectMethods(),
+    ...accountMethods(),
+    ...collabMethods(),
     ...commentMethods(),
     ...clientMethods(),
     ...liveMethods(),
@@ -179,16 +229,14 @@ export function createTeamSocket(options: TeamSocketOptions): TeamSocket {
       return true;
     }
 
-    const header = request.headers["authorization"];
-    const token = bearerToken(Array.isArray(header) ? header[0] : header);
-    const identified = identifyToken(
-      options.service.database,
-      options.service.keys,
-      options.service.config,
-      token,
-    );
+    const credential = credentialOf(request, options.service);
+    if (credential.kind === "refused") {
+      refuseUpgrade(socket, credential.status, credential.detail);
+      return true;
+    }
+    const identified = credential.identify();
     if (identified.kind === "refused") {
-      refuseUpgrade(socket, 401, describeRefusal(identified.reason));
+      refuseUpgrade(socket, 401, identified.detail);
       return true;
     }
 
@@ -216,7 +264,7 @@ export function createTeamSocket(options: TeamSocketOptions): TeamSocket {
       service: options.service,
       methods,
       presence,
-      token: token as string,
+      identify: credential.identify,
       user: identified.user,
       serverName,
       version: options.version,

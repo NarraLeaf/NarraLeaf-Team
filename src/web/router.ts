@@ -25,14 +25,21 @@
  *     kept apart for that reason: it neither reads a body into memory nor
  *     writes one, and the arm above does neither by design.
  *
- * Anything else is a 404. There are no pages on this port: this server is
- * administered from Studio and from the `nlteam` commands, and neither of them
- * is a browser.
+ *   - `/console/…`, `/api/console/…` and `/`, which src/web/console.ts answers:
+ *     the web console's page and its cookie sign-in. The page is the one
+ *     browser client of this server, and it talks to it over the same socket
+ *     Studio does.
+ *
+ * Anything else is a 404.
  */
 import { serveDiscovery, type DiscoveryDocument } from "../identity/discovery.js";
 import { serveIdentityRoutes, type IdentityRoutesOptions } from "../identity/endpoint.js";
 import type { TeamService } from "../team/service.js";
 import { serveTeamBlobs, type BlobRoutesOptions } from "./blobs.js";
+import { serveConsole, type ConsoleOptions } from "./console.js";
+import { serveOAuth } from "./oauth.js";
+import { serveProjectFiles } from "./files.js";
+import { serveAvatars } from "./avatars.js";
 import { serveStudioApi } from "./studio.js";
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -55,6 +62,8 @@ export interface WebOptions {
    * because the second is worked out from the first.
    */
   readonly blobs?: BlobRoutesOptions;
+  /** The web console: its cookie sign-in and its page. Absent where nothing serves it. */
+  readonly console?: ConsoleOptions;
 }
 
 /**
@@ -97,6 +106,22 @@ export function webHandler(
     }
 
     if (options.blobs !== undefined && serveTeamBlobs(options.blobs, request, response, path)) {
+      return;
+    }
+
+    if (options.console !== undefined && serveAvatars(options.console.service, request, response, path)) {
+      return;
+    }
+
+    if (options.console !== undefined && serveProjectFiles(options.console.service, request, response, path)) {
+      return;
+    }
+
+    if (options.console !== undefined && serveOAuth(options.console.service, request, response, path)) {
+      return;
+    }
+
+    if (options.console !== undefined && serveConsole(options.console, request, response, path)) {
       return;
     }
 

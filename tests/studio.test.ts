@@ -233,7 +233,7 @@ describe("what this build says it can do", () => {
     // nothing there is named again here. What is left is the sign-in, which
     // happens before any session exists. Matched literally by Studio, so the
     // spelling is the assertion.
-    expect(serviceCapabilities(await anyOptions())).toEqual(["password-sign-in"]);
+    expect(serviceCapabilities(await anyOptions())).toEqual(["password-sign-in", "oauth"]);
   });
 
   it("adds the history only where there is something to read one out of", async () => {
@@ -318,6 +318,7 @@ describe("what the reader this server actually runs makes it say", () => {
 
     expect(serviceCapabilities({ ...options, readings })).toEqual([
       "password-sign-in",
+      "oauth",
       "project-history",
     ]);
   });

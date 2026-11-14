@@ -1,0 +1,11 @@
+{
+  "name": "@narraleaf/design-tokens",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NarraLeaf's colour, surface and type tokens as CSS custom properties, shared by Studio and the Team web console",
+  "license": "MIT",
+  "exports": {
+    "./tokens.css": "./tokens.css"
+  },
+  "files": ["tokens.css"]
+}

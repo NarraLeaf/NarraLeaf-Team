@@ -20,17 +20,22 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "node scripts/build.mjs && node scripts/build-console.mjs",
     "dev": "node scripts/build.mjs --watch",
     "contract": "node scripts/gen-contract.mjs",
     "lint": "oxlint",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
+    "test": "vitest run",
+    "build:console": "node scripts/build-console.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9",
     "esbuild": "^0.25.4",
     "oxlint": "1.80.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
     "typescript": "^5.8.3",
     "vitest": "^3.1.3"
   },
