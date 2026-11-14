@@ -116,6 +116,26 @@ describe("the project authority", () => {
     expect(server.serialize().has(otherPath)).toBe(false);
   });
 
+  it("takes a project's first story when it has no story library yet", () => {
+    // A project nobody has written a story in has no editor/story/index.json.
+    const server = new ProjectAuthority({ files: new Map<string, unknown>(), clock: () => NOW });
+    const first = "00000000-0000-4000-8000-000000000010";
+    const firstPath = `editor/story/stories/${first}/storydoc.json`;
+    const made = server.submit({
+      clientId: "f1",
+      by: "alice",
+      document: { doc: "story", storyId: first },
+      op: {
+        op: "create-story",
+        entry: { id: first, name: "Main", documentPath: firstPath, createdAt: NOW, updatedAt: NOW },
+        document: { ...story(), id: first, name: "Main" },
+      },
+    });
+    expect(made).toMatchObject({ kind: "effect", touched: [firstPath, LIBRARY] });
+    expect(server.paths()).toEqual(expect.arrayContaining([firstPath, LIBRARY]));
+    expect(JSON.parse(String(server.serialize().get(LIBRARY))).stories.map((entry: { id: string }) => entry.id)).toEqual([first]);
+  });
+
   it("applies an operation that reaches another document: a deleted character's rows", () => {
     const row = { id: "r1", kind: "nodeAction", parentId: null, childrenIds: [], payload: { action: "dialogue", characterId: "alice", text: { textId: "t1", role: "dialogue", value: "hi" } } };
     const server = new ProjectAuthority({
@@ -180,6 +200,6 @@ describe("the project authority", () => {
   it("runs a kernel bundled from Studio, with a stamp saying which", () => {
     const stamp = JSON.parse(readFileSync(new URL("../studio-kernel/vendor/stamp.json", import.meta.url), "utf8"));
     expect(typeof stamp.studioCommit).toBe("string");
-    expect(ProjectAuthority.kernelVersion).toBe(3);
+    expect(ProjectAuthority.kernelVersion).toBe(4);
   });
 });

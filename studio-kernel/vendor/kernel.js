@@ -1110,6 +1110,16 @@ function normalizeOptionalNonNegativeNumber(value) {
 }
 
 // ../NarraLeaf-Studio/src/shared/story/storyModel.ts
+function createEmptyStoryLibraryIndex(now) {
+  return {
+    schemaVersion: STORY_LIBRARY_INDEX_SCHEMA_VERSION,
+    stories: [],
+    meta: {
+      createdAt: now,
+      updatedAt: now
+    }
+  };
+}
 function storyDocumentRelativePath(storyId) {
   assertValidStoryId(storyId);
   return `editor/story/stories/${storyId}/storydoc.json`;
@@ -6739,9 +6749,9 @@ function applyToDocument(view, document, op, context) {
     case "characters":
       return applyCharacters(view, path, op);
     case "localization":
-      return applyUnits(view, path, op, "set-translation", "set-translations");
+      return applyUnits(view, path, op);
     case "voice":
-      return applyUnits(view, path, op, "set-take", "set-takes");
+      return applyUnits(view, path, op);
     case "localization-keys":
       return applyKeys(view, path, op);
     case "variables":
@@ -6797,10 +6807,11 @@ function storyView(view) {
 }
 function applyStory(view, storyId, op, context) {
   const path = liveDocumentPath({ doc: "story", storyId });
-  const library = view.get(STORY_LIBRARY_FILE);
+  let library = view.get(STORY_LIBRARY_FILE);
   if (op.op === "create-story") {
     if (library === void 0) {
-      throw new Error("the project has no story library");
+      library = createEmptyStoryLibraryIndex(context.now);
+      view.set(STORY_LIBRARY_FILE, library);
     }
     if (library.stories.some((entry) => entry.id === storyId) || view.get(path) !== void 0) {
       return { changed: false, touched: [] };
@@ -6904,16 +6915,17 @@ function applyCharacters(view, path, op) {
   }
   return { changed: changed || stories.touched.size > 0, touched: changed ? [path, ...stories.touched] : [...stories.touched] };
 }
-function applyUnits(view, path, op, one, many) {
-  const document = view.get(path);
-  if (document === void 0) {
-    return { changed: false, touched: [] };
-  }
-  const units = { ...document.units ?? {} };
-  const entries = op.op === one ? [{ unitId: op.unitId, unit: op.unit }] : op.units;
-  if (op.op !== one && op.op !== many) {
+function onFile(changed, path) {
+  return changed ? { changed: true, touched: [path] } : { changed: false, touched: [] };
+}
+function applyUnitsOpToDocument(document, op) {
+  const verb = op.op;
+  const single = verb === "set-translation" || verb === "set-take";
+  if (!single && verb !== "set-translations" && verb !== "set-takes") {
     throw unknownVerb(op);
   }
+  const units = { ...document.units ?? {} };
+  const entries = single ? [{ unitId: op.unitId, unit: op.unit }] : op.units;
   for (const entry of entries) {
     if (entry.unit === null) {
       delete units[entry.unitId];
@@ -6922,7 +6934,12 @@ function applyUnits(view, path, op, one, many) {
     }
   }
   document.units = units;
-  return { changed: true, touched: [path] };
+  return true;
+}
+function applyUnits(view, path, op) {
+  const document = view.get(path);
+  if (document === void 0) return { changed: false, touched: [] };
+  return onFile(applyUnitsOpToDocument(document, op), path);
 }
 function applyDerived(view, derived) {
   const touched = [];
@@ -6940,44 +6957,49 @@ function applyDerived(view, derived) {
   }
   return touched;
 }
-function applyKeys(view, path, op) {
-  const document = view.get(path);
-  if (document === void 0) return { changed: false, touched: [] };
+function applyLocalizationKeyOpToDocument(document, op) {
   const keys = { ...document.keys ?? {} };
   switch (op.op) {
     case "set-key":
       keys[op.name] = op.definition;
       break;
     case "remove-key":
-      if (!(op.name in keys)) return { changed: false, touched: [] };
+      if (!(op.name in keys)) return false;
       delete keys[op.name];
       break;
     default:
       throw unknownVerb(op);
   }
   document.keys = keys;
-  return { changed: true, touched: [path] };
+  return true;
 }
-function applyVariables(view, path, op) {
-  const registry = view.get(path);
-  if (registry === void 0) return { changed: false, touched: [] };
+function applyKeys(view, path, op) {
+  const document = view.get(path);
+  if (document === void 0) return { changed: false, touched: [] };
+  return onFile(applyLocalizationKeyOpToDocument(document, op), path);
+}
+function applyVariableOpToDocument(registry, op) {
   const entries = registry.entries ?? (registry.entries = {});
   switch (op.op) {
     case "create-variable":
       entries[op.entry.id] = { ...op.entry };
-      break;
+      return true;
     case "update-variable":
-      if (!entries[op.variableId]) return { changed: false, touched: [] };
+      if (!entries[op.variableId]) return false;
       entries[op.variableId] = { ...op.entry };
-      break;
+      return true;
     case "delete-variable":
-      if (!entries[op.variableId]) return { changed: false, touched: [] };
+      if (!entries[op.variableId]) return false;
       delete entries[op.variableId];
-      break;
+      return true;
     default:
       throw unknownVerb(op);
   }
-  return { changed: true, touched: [path] };
+}
+function applyVariables(view, path, op) {
+  const registry = view.get(path);
+  if (registry === void 0) return { changed: false, touched: [] };
+  return onFile(applyVariableOpToDocument(registry, op), path);
 }
 function moveBefore(list, id, beforeId) {
   const moving = list.find((entry) => entry.id === id);
@@ -6988,15 +7010,13 @@ function moveBefore(list, id, beforeId) {
   rest.splice(index, 0, moving);
   return rest;
 }
-function applyAppTags(view, path, op) {
-  const document = view.get(path);
-  if (document === void 0) return { changed: false, touched: [] };
+function applyAppTagOpToDocument(document, op) {
   switch (op.op) {
     case "create-app-tag":
       document.tags = document.tags.some((entry) => entry.id === op.tag.id) ? document.tags.map((entry) => entry.id === op.tag.id ? op.tag : entry) : insertLiveRecordBefore(document.tags, op.tag, op.beforeId);
       break;
     case "update-app-tag":
-      if (!document.tags.some((entry) => entry.id === op.tagId)) return { changed: false, touched: [] };
+      if (!document.tags.some((entry) => entry.id === op.tagId)) return false;
       document.tags = document.tags.map((entry) => entry.id === op.tagId ? op.tag : entry);
       break;
     case "delete-app-tag":
@@ -7017,17 +7037,20 @@ function applyAppTags(view, path, op) {
       throw unknownVerb(op);
   }
   normalizeAppTagDocument(document);
-  return { changed: true, touched: [path] };
+  return true;
 }
-function applyDlc(view, path, op) {
+function applyAppTags(view, path, op) {
   const document = view.get(path);
   if (document === void 0) return { changed: false, touched: [] };
+  return onFile(applyAppTagOpToDocument(document, op), path);
+}
+function applyDlcOpToDocument(document, op) {
   switch (op.op) {
     case "create-dlc":
       document.dlcs = document.dlcs.some((entry) => entry.id === op.dlc.id) ? document.dlcs.map((entry) => entry.id === op.dlc.id ? op.dlc : entry) : insertLiveRecordBefore(document.dlcs, op.dlc, op.beforeId);
       break;
     case "update-dlc":
-      if (!document.dlcs.some((entry) => entry.id === op.dlcId)) return { changed: false, touched: [] };
+      if (!document.dlcs.some((entry) => entry.id === op.dlcId)) return false;
       document.dlcs = document.dlcs.map((entry) => entry.id === op.dlcId ? op.dlc : entry);
       break;
     case "delete-dlc":
@@ -7037,17 +7060,20 @@ function applyDlc(view, path, op) {
       throw unknownVerb(op);
   }
   document.dlcs = normalizeProjectDlcs(document.dlcs);
-  return { changed: true, touched: [path] };
+  return true;
 }
-function applyBrand(view, path, op) {
+function applyDlc(view, path, op) {
   const document = view.get(path);
   if (document === void 0) return { changed: false, touched: [] };
+  return onFile(applyDlcOpToDocument(document, op), path);
+}
+function applyBrandOpToDocument(document, op) {
   switch (op.op) {
     case "create-brand-color":
       document.colors = document.colors.some((entry) => entry.id === op.color.id) ? document.colors.map((entry) => entry.id === op.color.id ? op.color : entry) : insertLiveRecordBefore(document.colors, op.color, op.beforeId);
       break;
     case "update-brand-color":
-      if (!document.colors.some((entry) => entry.id === op.colorId)) return { changed: false, touched: [] };
+      if (!document.colors.some((entry) => entry.id === op.colorId)) return false;
       document.colors = document.colors.map((entry) => entry.id === op.colorId ? op.color : entry);
       break;
     case "delete-brand-color":
@@ -7058,34 +7084,39 @@ function applyBrand(view, path, op) {
       break;
     case "set-brand-fonts":
       document.fonts = normalizeProjectFontStack(op.fonts);
-      return { changed: true, touched: [path] };
+      return true;
     default:
       throw unknownVerb(op);
   }
   document.colors = normalizeProjectBrandColors(document.colors);
-  return { changed: true, touched: [path] };
+  return true;
 }
-function applyDictionary(view, path, op) {
+function applyBrand(view, path, op) {
   const document = view.get(path);
   if (document === void 0) return { changed: false, touched: [] };
+  return onFile(applyBrandOpToDocument(document, op), path);
+}
+function applyDictionaryOpToDocument(document, op) {
   switch (op.op) {
     case "set-dictionary-entry": {
       const entry = op.entry;
       const rest = document.entries.filter((candidate) => candidate.term !== op.term && candidate.term !== entry?.term);
       document.entries = normalizeDictionaryEntries(entry ? [...rest, entry] : rest);
-      break;
+      return true;
     }
     case "set-dictionary-options":
       document.options = normalizeDictionaryOptions(op.options);
-      break;
+      return true;
     default:
       throw unknownVerb(op);
   }
-  return { changed: true, touched: [path] };
 }
-function applyAudioTracks(view, path, op) {
+function applyDictionary(view, path, op) {
   const document = view.get(path);
   if (document === void 0) return { changed: false, touched: [] };
+  return onFile(applyDictionaryOpToDocument(document, op), path);
+}
+function applyAudioTrackOpToDocument(document, op) {
   let tracks = [...document.tracks];
   switch (op.op) {
     case "create-audio-track": {
@@ -7102,7 +7133,7 @@ function applyAudioTracks(view, path, op) {
       break;
     case "delete-audio-track": {
       const doomed = tracks.find((track) => track.id === op.trackId);
-      if (!doomed) return { changed: false, touched: [] };
+      if (!doomed) return false;
       tracks = tracks.filter((track) => track.id !== op.trackId).map((track) => track.parentId === op.trackId ? { ...track, parentId: doomed.parentId } : track);
       break;
     }
@@ -7113,11 +7144,19 @@ function applyAudioTracks(view, path, op) {
       throw unknownVerb(op);
   }
   document.tracks = normalizeProjectAudioTracks(tracks);
-  return { changed: true, touched: [path] };
+  return true;
 }
-function applyAssetSets(view, path, op) {
+function applyAudioTracks(view, path, op) {
   const document = view.get(path);
   if (document === void 0) return { changed: false, touched: [] };
+  return onFile(applyAudioTrackOpToDocument(document, op), path);
+}
+function applyAssetSetOpToDocument(document, op) {
+  if (!assetSetOpToDocument(document, op)) return false;
+  Object.assign(document, normalizeProjectAssetSets(document));
+  return true;
+}
+function assetSetOpToDocument(document, op) {
   switch (op.op) {
     case "create-asset-sets": {
       const next = document.sets.filter((set) => !op.creates.some((create) => create.set.id === set.id));
@@ -7126,15 +7165,15 @@ function applyAssetSets(view, path, op) {
         next.splice(index < 0 ? next.length : index, 0, create.set);
       }
       document.sets = next;
-      break;
+      return true;
     }
     case "update-asset-set":
       document.sets = document.sets.map((set) => set.id === op.setId ? { ...op.set, id: op.setId } : set);
-      break;
+      return true;
     case "delete-asset-sets": {
       const doomed = new Set(op.setIds);
       document.sets = document.sets.filter((set) => !doomed.has(set.id));
-      break;
+      return true;
     }
     case "move-asset-sets": {
       const moves = new Map(op.moves.map((move) => [move.setId, move.groupId]));
@@ -7144,12 +7183,16 @@ function applyAssetSets(view, path, op) {
         const { groupId: _current, ...rest } = set;
         return groupId ? { ...rest, groupId } : rest;
       });
-      break;
+      return true;
     }
     default:
       throw unknownVerb(op);
   }
-  return { changed: true, touched: [path] };
+}
+function applyAssetSets(view, path, op) {
+  const document = view.get(path);
+  if (document === void 0) return { changed: false, touched: [] };
+  return onFile(applyAssetSetOpToDocument(document, op), path);
 }
 function applyWhole(view, path, apply) {
   const document = view.get(path);
@@ -7342,7 +7385,7 @@ function unknownVerb(op) {
 }
 
 // ../NarraLeaf-Studio/src/shared/authority/kernel.ts
-var KERNEL_VERSION = 3;
+var KERNEL_VERSION = 4;
 export {
   ASSET_CONTENT_ROOT,
   KERNEL_VERSION,
