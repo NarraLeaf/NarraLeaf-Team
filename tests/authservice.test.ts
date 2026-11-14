@@ -44,6 +44,7 @@ import {
   newProjectId,
   resourceIdOf,
 } from "../src/projects/registry.js";
+import { removeProjectMember, setProjectMember } from "../src/projects/members.js";
 import { startAuthorizationService } from "../src/projects/service.js";
 import { useTemporaryRoots } from "./temporary.js";
 
@@ -261,10 +262,51 @@ describe("CheckUserPermission", () => {
     });
     const resource = resourceIdOf(project.id);
 
-    // Both, and bob was given nothing: an account of this server reaches every
-    // project on it, and who made one is not part of the question.
+    // Both: ada made it and owns it, and bob, an account that existed when it
+    // was made, was made an editor of it (src/projects/members.ts).
     expect(await team.check(team.bearer(ada), [resource])).toEqual([resource]);
     expect(await team.check(team.bearer(bob), [resource])).toEqual([resource]);
+  });
+
+  it("refuses the repository to a reviewer, a viewer and a non-member", async () => {
+    // loreserver 0.8.6 was measured to let anybody it lets open a repository
+    // push to it, so a role that may not write must not open it at all.
+    const team = await harness();
+    const ada = await team.user("ada");
+    const rita = await team.user("rita");
+    const vic = await team.user("vic");
+    const nora = await team.user("nora");
+    const project = createProject(team.database, { id: newProjectId(), name: "harbour", createdBy: ada.id });
+    const resource = resourceIdOf(project.id);
+    setProjectMember(team.database, { projectId: project.id, userId: rita.id, role: "reviewer" });
+    setProjectMember(team.database, { projectId: project.id, userId: vic.id, role: "viewer" });
+    removeProjectMember(team.database, project.id, nora.id);
+
+    expect(await team.check(team.bearer(rita), [resource])).toEqual([]);
+    expect(await team.check(team.bearer(vic), [resource])).toEqual([]);
+    expect(await team.check(team.bearer(nora), [resource])).toEqual([]);
+    expect(await team.lookup(team.bearer(rita))).toEqual([]);
+    expect(await team.lookup(team.bearer(nora))).toEqual([]);
+    // And the audit line says why, which is what an operator asked "why can't
+    // she open it" needs.
+    const details = listDecisions(team.database).map((decision) => decision.detail);
+    expect(details).toContain("reviewer of the project, which reads it through Team rather than the repository");
+    expect(details).toContain("not a member of the project");
+  });
+
+  it("lets an operator open every project, member or not", async () => {
+    const team = await harness();
+    const ada = await team.user("ada");
+    const project = createProject(team.database, { id: newProjectId(), name: "harbour", createdBy: ada.id });
+    await createUser(team.database, hasher, {
+      username: "root",
+      password: "a password nobody guesses",
+      groups: ["admin"],
+    });
+    const root = requireUser(team.database, "root");
+    removeProjectMember(team.database, project.id, root.id);
+
+    expect(await team.check(team.bearer(root), [resourceIdOf(project.id)])).toEqual([resourceIdOf(project.id)]);
   });
 
   it("returns only the granted subset when asked about several at once", async () => {
@@ -472,7 +514,7 @@ describe("CheckUserPermission", () => {
         username: "ada",
         resource: "harbour",
         allowed: true,
-        detail: "account of this server",
+        detail: "owner of the project",
       },
     ]);
   });

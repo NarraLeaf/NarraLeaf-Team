@@ -27,6 +27,7 @@ import {
   type VerifyOptions,
 } from "./tokens.js";
 import { findUserById, type UserRecord } from "./users.js";
+import { grantIsLive } from "./oauth.js";
 
 /** Why a caller was not identified. */
 export type CallerRefusal =
@@ -37,7 +38,9 @@ export type CallerRefusal =
   | "unknown-account"
   | "disabled"
   /** The account's tokens were revoked after this one was signed. */
-  | "stale-epoch";
+  | "stale-epoch"
+  /** The device this token was issued to through the browser sign-in was signed out. */
+  | "revoked-grant";
 
 /** Who is calling, or why nobody is. */
 export type CallerIdentification =
@@ -51,6 +54,7 @@ const REFUSAL_REASONS: Readonly<Record<CallerRefusal, string>> = {
   "unknown-account": "the token names an account this server does not have",
   disabled: "the account is disabled",
   "stale-epoch": "the token was issued before the account's access was revoked",
+  "revoked-grant": "the device this token was issued to has been signed out; sign in again",
 };
 
 /**
@@ -109,6 +113,9 @@ export function identifyToken(
   // access. src/identity/tokens.ts sets out what that does and does not undo.
   if (verification.claims.token_epoch < user.tokenEpoch) {
     return { kind: "refused", reason: "stale-epoch" };
+  }
+  if (verification.claims.grant !== undefined && !grantIsLive(database, verification.claims.grant, user.id)) {
+    return { kind: "refused", reason: "revoked-grant" };
   }
 
   return { kind: "identified", user, claims: verification.claims };
