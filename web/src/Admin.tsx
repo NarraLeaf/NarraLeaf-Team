@@ -19,15 +19,17 @@ import type {
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
+import { Webhooks } from "./Production";
 import type { ConnectionState, TeamConnection } from "./socket";
 
-type Section = "accounts" | "projects" | "brand" | "security" | "server";
-const SECTIONS: readonly Section[] = ["accounts", "projects", "brand", "security", "server"];
+type Section = "accounts" | "projects" | "brand" | "security" | "webhooks" | "server";
+const SECTIONS: readonly Section[] = ["accounts", "projects", "brand", "security", "webhooks", "server"];
 const SECTION_PHRASE: Record<Section, Phrase> = {
   accounts: "adminAccounts",
   projects: "adminProjects",
   brand: "adminBrand",
   security: "adminSecurity",
+  webhooks: "adminWebhooks",
   server: "adminServer",
 };
 const ROLES: readonly TeamProjectRole[] = ["owner", "editor", "reviewer", "viewer"];
@@ -71,6 +73,7 @@ export function Admin({ connection, state }: { connection: TeamConnection; state
       {open && section === "projects" ? <Projects connection={connection} /> : null}
       {open && section === "brand" ? <Brand connection={connection} /> : null}
       {open && section === "security" ? <Security connection={connection} /> : null}
+      {open && section === "webhooks" ? <Webhooks connection={connection} /> : null}
       {open && section === "server" ? <Server connection={connection} /> : null}
     </section>
   );

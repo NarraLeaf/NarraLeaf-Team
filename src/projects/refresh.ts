@@ -145,16 +145,22 @@ export class ProjectReadings {
    * history is read by one person looking at one project, and putting it on a
    * loop would make every server pay for every page nobody asked for.
    *
-   * Undefined for a project Team has no checkout of, and for one a pass is
-   * inside of at this moment. Both mean the same thing to whoever asked — Team
-   * has not got this to hand — and neither is worth holding a request open for.
+   * Undefined for a project Team has no checkout of. Waits (briefly) for
+   * another read of the same checkout, as {@link revisionFiles} does: a page
+   * opening a project asks for its files and its history at once, and the
+   * history answering "nothing" because the file tree got there first read as
+   * an empty project.
    */
   async revisions(
     projectId: string,
     page: { readonly limit: number; readonly limitBytes: number; readonly before?: string },
   ): Promise<RevisionPage | undefined> {
-    if (this.inside.has(projectId)) {
-      return undefined;
+    const deadline = Date.now() + REVISION_WAIT_MS;
+    while (this.inside.has(projectId)) {
+      if (Date.now() > deadline) {
+        return undefined;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
     this.inside.add(projectId);
     try {

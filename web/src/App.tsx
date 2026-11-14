@@ -22,7 +22,7 @@ type Route =
   | { readonly screen: "settings" }
   | { readonly screen: "project"; readonly id: string; readonly tab: ProjectTab; readonly revision: string };
 
-const PROJECT_TABS: readonly ProjectTab[] = ["overview", "story", "blueprints", "assets", "todos", "history"];
+const PROJECT_TABS: readonly ProjectTab[] = ["overview", "story", "blueprints", "assets", "todos", "reviews", "history"];
 
 function routeOf(location: Location): Route {
   const rest = location.pathname.replace(/^\/console\/?/, "");

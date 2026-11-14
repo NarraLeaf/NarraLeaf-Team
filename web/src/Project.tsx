@@ -34,16 +34,18 @@ import { Face, Timeline, Todos } from "./Collab";
 import { LineComments, storyLineAnchor, useStoryThreads } from "./Comments";
 import type { ConsoleAccount } from "./api";
 import { t, type Phrase } from "./i18n";
+import { MilestoneTags, Reviews, useMilestones } from "./Production";
 import type { TeamConnection, ConnectionState } from "./socket";
 
-export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "history";
-const TABS: readonly ProjectTab[] = ["overview", "story", "blueprints", "assets", "todos", "history"];
+export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history";
+const TABS: readonly ProjectTab[] = ["overview", "story", "blueprints", "assets", "todos", "reviews", "history"];
 const TAB_PHRASE: Record<ProjectTab, Phrase> = {
   overview: "tabOverview",
   story: "tabStory",
   blueprints: "tabBlueprints",
   assets: "tabAssets",
   todos: "tabTodos",
+  reviews: "tabReviews",
   history: "tabHistory",
 };
 
@@ -151,7 +153,16 @@ export function ProjectPage(props: {
         ))}
       </nav>
       {tab === "history" ? (
-        <History connection={connection} open={open} projectId={projectId} pick={(id) => go("story", id)} />
+        <History
+          connection={connection}
+          open={open}
+          projectId={projectId}
+          pick={(id) => go("story", id)}
+          me={account.username}
+          role={project?.role}
+        />
+      ) : tab === "reviews" ? (
+        <Reviews connection={connection} open={open} projectId={projectId} me={account.username} role={project?.role} viewAt={(id) => go("story", id)} />
       ) : tab === "todos" ? (
         <ProjectTodos account={account} connection={connection} open={open} projectId={projectId} />
       ) : tab === "overview" ? (
@@ -737,7 +748,16 @@ interface Revision {
   readonly message?: string;
 }
 
-function History({ connection, open, projectId, pick }: { connection: TeamConnection; open: boolean; projectId: string; pick: (id: string) => void }) {
+function History(props: {
+  connection: TeamConnection;
+  open: boolean;
+  projectId: string;
+  pick: (id: string) => void;
+  me: string;
+  role: TeamProjectRole | undefined;
+}) {
+  const { connection, open, projectId, pick, me, role } = props;
+  const milestones = useMilestones(connection, open, projectId);
   const [revisions, setRevisions] = useState<readonly Revision[] | undefined>(undefined);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const load = useCallback(
@@ -765,7 +785,16 @@ function History({ connection, open, projectId, pick }: { connection: TeamConnec
             <div className="history-main">
               <div>{revision.message || <span className="muted">—</span>}</div>
               <div className="muted small">
-                {revision.by ?? "?"} · {when(revision.at)} · <code>{revision.id.slice(0, 12)}</code>
+                {revision.by ?? "?"} · {when(revision.at)} · <code>{revision.id.slice(0, 12)}</code>{" "}
+                <MilestoneTags
+                  connection={connection}
+                  projectId={projectId}
+                  revision={revision.id}
+                  milestones={milestones}
+                  canName={role === "owner" || role === "editor"}
+                  me={me}
+                  role={role}
+                />
               </div>
             </div>
             <button className="ghost" onClick={() => pick(revision.id)}>

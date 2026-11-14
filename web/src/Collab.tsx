@@ -17,6 +17,7 @@ import {
   type TeamNotification,
   type TeamProfile,
   type TeamTodo,
+  type TeamTodoKind,
   type TeamTodoStatus,
 } from "@narraleaf/team-protocol";
 
@@ -98,6 +99,8 @@ const ACTIVITY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
   resolve: "aResolve",
   "todo-created": "aTodoCreated",
   "todo-done": "aTodoDone",
+  review: "aReview",
+  milestone: "aMilestone",
 };
 
 export function Timeline({
@@ -190,6 +193,9 @@ export function Todos({
   const [todos, setTodos] = useState<readonly TeamTodo[] | undefined>(undefined);
   const [title, setTitle] = useState("");
   const [shared, setShared] = useState(project !== undefined);
+  const [kind, setKind] = useState<TeamTodoKind>("task");
+  const [locale, setLocale] = useState("");
+  const [only, setOnly] = useState<TeamTodoKind | "all">("all");
   const [error, setError] = useState<string | undefined>(undefined);
 
   const load = useCallback(() => {
@@ -214,7 +220,15 @@ export function Todos({
     try {
       await connection.call("todos.create", {
         title: text,
-        ...(project === undefined ? {} : { project, visibility: shared ? "project" : "private" }),
+        ...(project === undefined
+          ? {}
+          : {
+              project,
+              // Asset, translation and voice to-dos are for somebody else to pick up: always shown.
+              visibility: shared || kind !== "task" ? "project" : "private",
+              kind,
+              ...(kind === "translation" || kind === "voice" ? { locale: locale.trim() } : {}),
+            }),
       });
     } catch (caught) {
       setError(errorText(caught));
@@ -235,7 +249,15 @@ export function Todos({
         {todo.status === "done" ? "✓" : todo.status === "doing" ? "◐" : ""}
       </button>
       <div className="todo-main">
-        <div className="todo-title">{todo.title}</div>
+        <div className="todo-title">
+          {todo.kind !== undefined && todo.kind !== "task" ? (
+            <span className={`badge kind-${todo.kind}`}>
+              {t(KIND_PHRASE[todo.kind])}
+              {todo.locale ? ` · ${todo.locale}` : ""}
+            </span>
+          ) : null}{" "}
+          {todo.title}
+        </div>
         <div className="muted small">
           {todo.visibility === "private" ? t("visibilityPrivate") : t("visibilityProject")}
           {todo.assignee !== undefined ? ` · → ${todo.assignee}` : ""}
@@ -278,6 +300,18 @@ export function Todos({
       <form className="todo-new" onSubmit={(event) => void add(event)}>
         <input value={title} placeholder={t("newTodo")} onChange={(event) => setTitle(event.target.value)} maxLength={300} />
         {project !== undefined ? (
+          <select className="todo-kind" aria-label={t("todoKind")} value={kind} onChange={(event) => setKind(event.target.value as TeamTodoKind)}>
+            {KINDS.map((name) => (
+              <option key={name} value={name}>
+                {t(KIND_PHRASE[name])}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        {project !== undefined && (kind === "translation" || kind === "voice") ? (
+          <input className="todo-locale" value={locale} placeholder={t("todoLocale")} maxLength={35} onChange={(event) => setLocale(event.target.value)} />
+        ) : null}
+        {project !== undefined ? (
           <label className="muted small todo-share">
             <input type="checkbox" checked={shared} onChange={(event) => setShared(event.target.checked)} />
             {t("visibilityProject")}
@@ -294,16 +328,31 @@ export function Todos({
       ) : project === undefined ? (
         <ul className="todo-list">{todos.map(card)}</ul>
       ) : (
+        <>
+        <nav className="kind-filter">
+          {(["all", ...KINDS] as const).map((name) => (
+            <button key={name} className={only === name ? "tab active" : "tab"} onClick={() => setOnly(name)}>
+              {name === "all" ? t("kindAll") : t(KIND_PHRASE[name])} {name === "all" ? todos.length : todos.filter((todo) => (todo.kind ?? "task") === name).length}
+            </button>
+          ))}
+        </nav>
+        {only === "translation" || only === "voice" ? <LocaleProgress todos={todos.filter((todo) => todo.kind === only)} /> : null}
+        {(() => {
+          const shown = only === "all" ? todos : todos.filter((todo) => (todo.kind ?? "task") === only);
+          return (
         <div className="board">
           {(["open", "doing", "done"] as const).map((status) => (
             <section key={status} className="board-column">
               <div className="outline-title">
-                {t(STATUS_PHRASE[status])} {todos.filter((todo) => todo.status === status).length}
+                {t(STATUS_PHRASE[status])} {shown.filter((todo) => todo.status === status).length}
               </div>
-              <ul className="todo-list">{todos.filter((todo) => todo.status === status).map(card)}</ul>
+              <ul className="todo-list">{shown.filter((todo) => todo.status === status).map(card)}</ul>
             </section>
           ))}
         </div>
+          );
+        })()}
+        </>
       )}
     </div>
   );
@@ -356,9 +405,45 @@ export function Home({ connection, state, account }: { connection: TeamConnectio
   );
 }
 
+/** Per language: how many of its translation or voice to-dos are done. */
+function LocaleProgress({ todos }: { todos: readonly TeamTodo[] }) {
+  const byLocale = new Map<string, { done: number; all: number }>();
+  for (const todo of todos) {
+    const key = todo.locale ?? "?";
+    const entry = byLocale.get(key) ?? { done: 0, all: 0 };
+    entry.all += 1;
+    if (todo.status === "done") entry.done += 1;
+    byLocale.set(key, entry);
+  }
+  return (
+    <div className="locale-progress">
+      {[...byLocale.entries()].sort().map(([locale, { done, all }]) => (
+        <div key={locale} className="locale-row">
+          <span className="locale-name">{locale}</span>
+          <span className="meter">
+            <span style={{ width: `${Math.round((done / all) * 100)}%` }} />
+          </span>
+          <span className="muted small">
+            {done}/{all}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------- notifications */
 
-const NOTIFICATION_PHRASE: Record<TeamNotification["kind"], Phrase> = { mention: "nMention", reply: "nReply", assigned: "nAssigned" };
+const NOTIFICATION_PHRASE: Record<TeamNotification["kind"], Phrase> = {
+  mention: "nMention",
+  reply: "nReply",
+  assigned: "nAssigned",
+  "review-requested": "nReviewRequested",
+  "review-answered": "nReviewAnswered",
+};
+
+const KIND_PHRASE: Record<TeamTodoKind, Phrase> = { task: "kindTask", asset: "kindAsset", translation: "kindTranslation", voice: "kindVoice" };
+const KINDS: readonly TeamTodoKind[] = ["task", "asset", "translation", "voice"];
 
 /** The bell: a count of unread notifications, and the list when opened. */
 export function Bell({ connection, state }: { connection: TeamConnection; state: ConnectionState }) {
