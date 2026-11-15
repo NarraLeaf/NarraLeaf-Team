@@ -608,7 +608,7 @@ describe("a session", () => {
         message: "there is no project of that id on this server",
       });
       // And it is still usable afterwards: a refusal is an answer, not an end.
-      expect(await open.call(TEAM_METHODS.projectsList)).toEqual({ projects: [], total: 0 });
+      expect(await open.call(TEAM_METHODS.projectsList)).toEqual({ projects: [], total: 0, mayCreate: true });
     } finally {
       open.close();
     }

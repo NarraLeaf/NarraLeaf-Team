@@ -1261,6 +1261,17 @@ export const TEAM_PROJECT_ROLES = ["owner", "editor", "reviewer", "viewer"] as c
 
 export type TeamProjectRole = (typeof TEAM_PROJECT_ROLES)[number];
 
+/**
+ * The parts of a project an owner may let an editor change separately: the
+ * story (stories, variables, story animations), characters, assets (and audio
+ * tracks), the UI, localization (and voice, and the dictionary), and the game's
+ * configuration (the project file, brand, variants, DLC, save schema, icons and
+ * any file not named elsewhere). Studio's kernel decides which a file is in.
+ */
+export const TEAM_PROJECT_AREAS = ["story", "characters", "assets", "ui", "localization", "config"] as const;
+
+export type TeamProjectArea = (typeof TEAM_PROJECT_AREAS)[number];
+
 /** One account's place in one project. */
 export interface TeamProjectMember {
   readonly username: string;
@@ -1268,6 +1279,12 @@ export interface TeamProjectMember {
   /** Where the account's avatar is, absent for one with none. */
   readonly avatarUrl?: string;
   readonly role: TeamProjectRole;
+  /**
+   * For an editor kept to some areas, which ones; absent for an editor who may
+   * change all of them, and for every other role. Such an editor reads the
+   * project through Team rather than opening its repository.
+   */
+  readonly areas?: readonly TeamProjectArea[];
   /** Who gave them the role, by username; absent when nobody did, as on an upgrade. */
   readonly addedBy?: string;
   readonly addedAt: number;
@@ -1561,6 +1578,7 @@ export type TeamAdminUsersEvent =
   | { readonly kind: "user-disabled"; readonly user: TeamAdminUser }
   | { readonly kind: "user-enabled"; readonly user: TeamAdminUser }
   | { readonly kind: "user-granted-admin"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-creator-set"; readonly user: TeamAdminUser }
   | { readonly kind: "user-revoked-admin"; readonly user: TeamAdminUser }
   | { readonly kind: "user-tokens-revoked"; readonly user: TeamAdminUser };
 
@@ -1646,11 +1664,17 @@ export const TEAM_METHODS = {
   projectsHistory: "projects.history",
   /** Make a project, or register a repository the author already has. */
   projectsCreate: "projects.create",
-  /** Take a project off this server's list, leaving its repository untouched. */
+  /**
+   * Take a project off this server's list, leaving its repository untouched. Its
+   * owners, or the operators alone where `project.delete_by` says so.
+   */
   projectsForget: "projects.forget",
   /** Who belongs to one project, and in which role. Any member may ask. */
   projectsMembersList: "projects.members.list",
-  /** Give an account a role in a project, or change it. Owners only. */
+  /**
+   * Give an account a role in a project, or change it, and for an editor the
+   * areas it may change (`areas`: a list, or null for all). Owners only.
+   */
   projectsMembersSet: "projects.members.set",
   /** Take an account out of a project. Owners only; never the last owner. */
   projectsMembersRemove: "projects.members.remove",
@@ -1816,6 +1840,8 @@ export const TEAM_METHODS = {
   adminUsersRevokeAdmin: "admin.users.revokeAdmin",
   /** Refuse every token an account already holds, without disabling it. */
   adminUsersRevokeTokens: "admin.users.revokeTokens",
+  /** Let an account make projects where `project.create_by` is `creators`, or stop it (`creator`). */
+  adminUsersSetCreator: "admin.users.setCreator",
   /** Mint a sign-in token for an account, without knowing its password. */
   adminTokensMint: "admin.tokens.mint",
   /** Everything this server keeps in its settings, and which of it may be changed. */

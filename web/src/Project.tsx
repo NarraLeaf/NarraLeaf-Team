@@ -70,6 +70,7 @@ interface ProjectSummary {
   readonly history?: { readonly revisions?: number; readonly lastAt?: number; readonly lastBy?: string; readonly lastMessage?: string };
   readonly saveRole?: TeamVersionRole;
   readonly restoreRole?: TeamVersionRole;
+  readonly mayRemove?: boolean;
 }
 
 interface Member {
@@ -273,7 +274,12 @@ export function ProjectPage(props: {
         ))}
       </nav>
       {tab === "settings" && project !== undefined && project.role === "owner" ? (
-        <ProjectSettings connection={connection} project={project} changed={(next) => setProject({ ...project, ...next })} />
+        <ProjectSettings
+          connection={connection}
+          project={project}
+          changed={(next) => setProject({ ...project, ...next })}
+          removed={back}
+        />
       ) : tab === "history" ? (
         <History
           connection={connection}

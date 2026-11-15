@@ -204,6 +204,18 @@ export function isOperator(groups: readonly string[]): boolean {
   return groups.includes(ADMIN_ROLE);
 }
 
+/**
+ * The group of accounts an operator has let make projects, which is what
+ * `project.create_by = creators` asks about. Operators may whether or not they
+ * are in it.
+ */
+export const PROJECT_CREATOR_ROLE = "project-creator";
+
+/** Whether a set of groups includes the project creators' (or an operator's). */
+export function isProjectCreator(groups: readonly string[]): boolean {
+  return isOperator(groups) || groups.includes(PROJECT_CREATOR_ROLE);
+}
+
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{1,31}$/;
 
 const ROLE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -617,6 +629,24 @@ export function setAdmin(
     database
       .prepare("DELETE FROM user_groups WHERE user_id = ? AND group_name = ?")
       .run(user.id, ADMIN_ROLE);
+  }
+  return requireUser(database, user.username);
+}
+
+/** Let an account make projects, or stop it. Doing it twice is doing it once. */
+export function setProjectCreator(database: DatabaseSync, username: string, allowed: boolean): UserRecord {
+  const user = requireUser(database, username);
+  if (allowed) {
+    database
+      .prepare(
+        "INSERT INTO user_groups (user_id, group_name) VALUES (?, ?) " +
+          "ON CONFLICT (user_id, group_name) DO NOTHING",
+      )
+      .run(user.id, PROJECT_CREATOR_ROLE);
+  } else {
+    database
+      .prepare("DELETE FROM user_groups WHERE user_id = ? AND group_name = ?")
+      .run(user.id, PROJECT_CREATOR_ROLE);
   }
   return requireUser(database, user.username);
 }

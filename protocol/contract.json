@@ -112,6 +112,7 @@
     "admin.users.grantAdmin",
     "admin.users.revokeAdmin",
     "admin.users.revokeTokens",
+    "admin.users.setCreator",
     "admin.tokens.mint",
     "admin.settings.list",
     "admin.settings.set",

@@ -58,10 +58,17 @@ import {
   setAdmin,
 } from "../src/identity/users.js";
 import { ProjectReadings } from "../src/projects/refresh.js";
-import { removeProjectMember, setProjectMember } from "../src/projects/members.js";
+import {
+  editableAreas,
+  mayOpenRepository,
+  removeProjectMember,
+  repositoryRefusalOf,
+  setProjectMember,
+} from "../src/projects/members.js";
+import { TEAM_PROJECT_AREAS } from "../protocol/src/index.js";
 import { versionsOf } from "../src/authority/versions.js";
 import { setWebhookFetch } from "../src/collab/webhooks.js";
-import { setProjectCreators } from "../src/identity/settings.js";
+import { setProjectCreators, setProjectDeleters } from "../src/identity/settings.js";
 import { ProjectAuthorities } from "../src/authority/manager.js";
 import {
   approveAuthorization,
@@ -1217,6 +1224,41 @@ describe("changing who belongs to a project over the socket", () => {
     // what that role cannot do.
     const rows = (await editor.value(TEAM_METHODS.projectsList))["projects"] as { role?: string }[];
     expect(rows[0]?.role).toBe("editor");
+  });
+
+  it("lets an owner keep an editor to some areas, and keeps them out of the repository for it", async () => {
+    const { team, project } = await lighthouse();
+    const owner = await team.connect(team.tokenFor("ada"));
+
+    const narrowed = await owner.value(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "bob",
+      role: "editor",
+      areas: ["story", "localization"],
+    });
+    expect(narrowed["member"]).toMatchObject({ username: "bob", role: "editor", areas: ["story", "localization"] });
+    expect(editableAreas(team.database, project.id, requireUser(team.database, "bob"))).toEqual(["story", "localization"]);
+    expect(mayOpenRepository(team.database, project.id, requireUser(team.database, "bob"))).toBe(false);
+    expect(repositoryRefusalOf(team.database, project.id, requireUser(team.database, "bob"))).toBe("areas");
+
+    // Unknown areas are refused rather than dropped.
+    const bad = await owner.call(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "bob",
+      role: "editor",
+      areas: ["story", "music"],
+    });
+    expect(bad.code).toBe("bad-params");
+
+    // Every area again is the same as no list at all.
+    const widened = await owner.value(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "bob",
+      role: "editor",
+      areas: [...TEAM_PROJECT_AREAS],
+    });
+    expect((widened["member"] as { areas?: unknown }).areas).toBeUndefined();
+    expect(mayOpenRepository(team.database, project.id, requireUser(team.database, "bob"))).toBe(true);
   });
 
   it("lets an owner change a role, and refuses everybody else", async () => {
@@ -3530,6 +3572,7 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminUsersEnable,
   TEAM_METHODS.adminUsersGrantAdmin,
   TEAM_METHODS.adminUsersRevokeAdmin,
+  TEAM_METHODS.adminUsersSetCreator,
   TEAM_METHODS.adminUsersRevokeTokens,
   TEAM_METHODS.adminTokensMint,
   TEAM_METHODS.adminSettingsSet,
@@ -3832,6 +3875,7 @@ describe("the settings, as an operator reads them", () => {
       "collaboration",
       "repeat publishes",
       "who makes projects",
+      "who removes projects",
       "edit log kept (days)",
       "sign-in token",
       "repository token",
@@ -5231,6 +5275,37 @@ describe("a team project's documents, with this server as their authority", () =
     expect(refused.code).toBe("refused");
   });
 
+  it("keeps an editor to the areas an owner gave them", async () => {
+    const { bob, project, team } = await withDocuments();
+    const bobId = requireUser(team.database, "bob").id;
+    setProjectMember(team.database, { projectId: project, userId: bobId, role: "editor", areas: ["characters"] });
+    expect(await bob.value(TEAM_METHODS.docHead, { project })).toMatchObject({
+      mayEdit: true,
+      areas: ["characters"],
+    });
+
+    // The story is not theirs to change, and neither is the game's configuration.
+    const story = await bob.call(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect(story.code).toBe("refused");
+    expect(story.message).toMatch(/story/);
+    const config = await bob.call(TEAM_METHODS.docIntent, {
+      project,
+      clientId: "client-config",
+      document: { doc: "file", path: "project.json" },
+      op: { op: "put", value: {} },
+    });
+    expect(config.code).toBe("refused");
+    expect(config.message).toMatch(/config/);
+
+    // Restoring a version changes every area at once.
+    const restore = await bob.call(TEAM_METHODS.docRestore, { project, revision: "rev-1" });
+    expect(restore.code).toBe("refused");
+
+    // Given the story back, the same edit goes through.
+    setProjectMember(team.database, { projectId: project, userId: bobId, role: "editor", areas: ["story", "characters"] });
+    expect(await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"))).toMatchObject({ kind: "effect" });
+  });
+
   it("saves a version on request, with the label an author gave it", async () => {
     const { ada, project, commits } = await withDocuments();
     await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
@@ -5356,6 +5431,38 @@ describe("a team project's documents, with this server as their authority", () =
     const { bob, team } = await withTwo();
     setProjectCreators(team.database, "admins");
     expect((await bob.call(TEAM_METHODS.projectsCreate, { name: "skiff" })).code).toBe("refused");
+    expect((await bob.value(TEAM_METHODS.projectsList))["mayCreate"]).toBe(false);
+  });
+
+  it("lets the accounts an operator named make projects when the server keeps it to them", async () => {
+    const { ada, bob, team } = await withTwo();
+    await account(team.database, "root", { groups: [ADMIN_ROLE] });
+    const root = await team.connect(team.tokenFor("root"));
+    setProjectCreators(team.database, "creators");
+    expect((await bob.call(TEAM_METHODS.projectsCreate, { name: "skiff" })).code).toBe("refused");
+
+    // Only an operator hands the permission out.
+    expect((await ada.call(TEAM_METHODS.adminUsersSetCreator, { username: "bob", creator: true })).code).toBe("refused");
+    const granted = await root.value(TEAM_METHODS.adminUsersSetCreator, { username: "bob", creator: true });
+    expect((granted["user"] as { groups: string[] }).groups).toContain("project-creator");
+    expect((await bob.value(TEAM_METHODS.projectsList))["mayCreate"]).toBe(true);
+    // Past the gate: this harness has no repository to make it in, which is a different answer.
+    expect((await bob.call(TEAM_METHODS.projectsCreate, { name: "skiff" })).code).toBe("unavailable");
+    expect((await ada.call(TEAM_METHODS.projectsCreate, { name: "dinghy" })).code).toBe("refused");
+
+    await root.value(TEAM_METHODS.adminUsersSetCreator, { username: "bob", creator: false });
+    expect((await bob.call(TEAM_METHODS.projectsCreate, { name: "raft" })).code).toBe("refused");
+  });
+
+  it("keeps removing projects to the operators when the server says so", async () => {
+    const { ada, project, team } = await withTwo();
+    await account(team.database, "root", { groups: [ADMIN_ROLE] });
+    const root = await team.connect(team.tokenFor("root"));
+    setProjectDeleters(team.database, "admins");
+    const refused = await ada.call(TEAM_METHODS.projectsForget, { project });
+    expect(refused.code).toBe("refused");
+    expect(refused.message).toMatch(/operators/);
+    expect(await root.value(TEAM_METHODS.projectsForget, { project })).toEqual({});
   });
 
   it("tells an operator how each project's log and versions stand", async () => {

@@ -20,7 +20,9 @@ import {
 } from "../../projects/registry.js";
 import {
   findProjectMember,
+  isProjectArea,
   listProjectMembers,
+  PROJECT_AREAS,
   ownerCount,
   PROJECT_ROLES,
   projectAudience,
@@ -28,14 +30,15 @@ import {
   removeProjectMember,
   setProjectMember,
   visibleProjectIds,
+  type ProjectArea,
 } from "../../projects/members.js";
 import { countUsers, eachUser, findUser, type UserRecord } from "../../identity/users.js";
 import { NOT_READ_YET } from "../../teamview.js";
-import { memberBody, projectBody, projectMemberBody } from "../../projects/answers.js";
+import { mayRemoveProject, memberBody, projectBody, projectMemberBody } from "../../projects/answers.js";
 import { makeOrAdoptProject } from "../../projects/create.js";
 import { setVersionRoles, versionsOf } from "../../authority/versions.js";
-import { storedProjectCreators } from "../../identity/settings.js";
-import { isOperator } from "../../identity/users.js";
+import { storedProjectCreators, storedProjectDeleters } from "../../identity/settings.js";
+import { isOperator, isProjectCreator } from "../../identity/users.js";
 import {
   boundedCount,
   MethodError,
@@ -193,6 +196,41 @@ function requireOwner(context: MethodContext, project: ProjectRecord, doing: str
   }
 }
 
+/** Whether the caller may make a project, as `project.create_by` stands now. */
+function mayCreateProjects(context: MethodContext): boolean {
+  switch (storedProjectCreators(context.options.database)) {
+    case "everyone":
+      return true;
+    case "creators":
+      return isProjectCreator(context.user.groups);
+    case "admins":
+      return isOperator(context.user.groups);
+  }
+}
+
+/** The `areas` of a member call: a list of area names, null for all, or absent to keep them. */
+function areasParam(read: Record<string, unknown>): readonly ProjectArea[] | null | undefined {
+  const value = read["areas"];
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (!Array.isArray(value) || !value.every(isProjectArea)) {
+    throw new MethodError("bad-params", "areas is a list of story, characters, assets, ui, localization and config, or null");
+  }
+  return value;
+}
+
+/** Whether a member's stored areas already say what a call asks for. */
+function sameAreas(stored: readonly ProjectArea[] | undefined, asked: readonly ProjectArea[] | null): boolean {
+  const all = (list: readonly ProjectArea[] | null | undefined) => list === null || list === undefined || new Set(list).size === PROJECT_AREAS.length;
+  if (all(stored) || all(asked)) {
+    return all(stored) && all(asked);
+  }
+  const a = new Set(stored);
+  const b = new Set(asked);
+  return a.size === b.size && [...a].every((area) => b.has(area));
+}
+
 /** The account a member method names, by username. */
 function namedAccount(context: MethodContext, read: Record<string, unknown>): UserRecord {
   const username = requiredText(read, "username", USERNAME_LIMIT);
@@ -253,6 +291,9 @@ export function projectMethods(): TeamMethod[] {
           // shorter than this was cut, and saying so is the whole of what a
           // client is owed in place of a cursor it would have had to learn.
           total: visible.size,
+          // Whether the caller may make one, as `project.create_by` stands now,
+          // so a client offers the button only to somebody it would work for.
+          mayCreate: mayCreateProjects(context),
         };
       },
     },
@@ -336,8 +377,13 @@ export function projectMethods(): TeamMethod[] {
       capability: "session",
       handle: async (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
-        if (storedProjectCreators(context.options.database) === "admins" && !isOperator(context.user.groups)) {
-          throw new MethodError("refused", "on this server, projects are made by its operators");
+        if (!mayCreateProjects(context)) {
+          throw new MethodError(
+            "refused",
+            storedProjectCreators(context.options.database) === "admins"
+              ? "on this server, projects are made by its operators"
+              : "on this server, projects are made by the accounts its operators allow to",
+          );
         }
         const name = requiredText(read, "name", NAME_LIMIT);
         const description = optionalText(read, "description", DESCRIPTION_LIMIT);
@@ -409,7 +455,14 @@ export function projectMethods(): TeamMethod[] {
         }
         // Only an owner (or an operator, who owns every project) may take a
         // project off the list: it takes every member's access with it.
-        requireOwner(context, project, "remove it from the list");
+        if (!mayRemoveProject(context.options, context.user, projectRole(context.options.database, project.id, context.user))) {
+          throw new MethodError(
+            "refused",
+            storedProjectDeleters(context.options.database) === "admins"
+              ? "on this server, projects are removed by its operators"
+              : "only an owner of this project may remove it from the list",
+          );
+        }
         // Read before the row goes, because the member rows go with it.
         const audience = projectAudience(context.options.database, project.id);
         // The row goes; the repository does not. loreserver keeps the store and
@@ -454,9 +507,10 @@ export function projectMethods(): TeamMethod[] {
         requireOwner(context, project, "change who belongs to it");
         const user = namedAccount(context, read);
         const role = oneOf(read, "role", PROJECT_ROLES);
+        const areas = areasParam(read);
         const database = context.options.database;
         const before = findProjectMember(database, project.id, user.id);
-        if (before?.role === role) {
+        if (before?.role === role && (areas === undefined || role !== "editor" || sameAreas(before.areas, areas))) {
           // Already so. Nothing changed, so - like every idempotent write here -
           // nothing is announced.
           return { member: projectMemberBody(context.options, before) };
@@ -469,7 +523,11 @@ export function projectMethods(): TeamMethod[] {
           userId: user.id,
           role,
           addedBy: context.user.id,
+          ...(areas === undefined ? {} : { areas }),
         });
+        // An editor whose areas narrowed may no longer open the repository, and
+        // one whose widened now may: whatever its sessions hold is judged again.
+        context.recheck?.(user.id);
         const body = projectMemberBody(context.options, member);
         if (body !== undefined) {
           announceMembers(context, project, { kind: "member-set", member: body }, user);

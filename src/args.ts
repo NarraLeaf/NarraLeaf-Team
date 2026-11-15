@@ -18,6 +18,9 @@ import {
   PUBLISH_LINEAGE_KEY,
   PROJECT_CREATE_KEY,
   PROJECT_CREATORS,
+  PROJECT_DELETE_KEY,
+  PROJECT_DELETERS,
+  isProjectDeleters,
   DOCUMENT_RETENTION_KEY,
   isProjectCreators,
   readRetentionDays,
@@ -1339,7 +1342,13 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
       if (!isProjectCreators(value)) {
         return error(`${PROJECT_CREATE_KEY} is one of ${PROJECT_CREATORS.join(" or ")}, not ${value}.`);
       }
-      return { kind: "settings-set", target, change: { key, creators: value.trim() as "everyone" | "admins" } };
+      return { kind: "settings-set", target, change: { key, creators: value.trim() as "everyone" | "creators" | "admins" } };
+    }
+    if (key === PROJECT_DELETE_KEY) {
+      if (!isProjectDeleters(value)) {
+        return error(`${PROJECT_DELETE_KEY} is one of ${PROJECT_DELETERS.join(" or ")}, not ${value}.`);
+      }
+      return { kind: "settings-set", target, change: { key, deleters: value.trim() as "owners" | "admins" } };
     }
     if (key === DOCUMENT_RETENTION_KEY) {
       const days = readRetentionDays(value);

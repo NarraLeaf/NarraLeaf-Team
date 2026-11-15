@@ -804,6 +804,16 @@ const MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX chat_messages_by_project ON chat_messages (project_id, id)",
     ],
   },
+  {
+    version: 21,
+    description: "the parts of a project an editor may change",
+    statements: [
+      // A JSON array of area names (story, characters, assets, ui, localization,
+      // config), or NULL for all of them. Read only for editors: an owner
+      // changes everything and a reviewer or viewer nothing.
+      "ALTER TABLE project_members ADD COLUMN areas TEXT",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

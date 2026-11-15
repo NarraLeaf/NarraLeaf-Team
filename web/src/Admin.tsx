@@ -15,12 +15,11 @@ import type {
   TeamAdminSetting,
   TeamAdminStatus,
   TeamAdminUser,
-  TeamProjectMember,
-  TeamProjectRole,
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
 import { Webhooks } from "./Production";
+import { ProjectMembers } from "./Members";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 type Section = "accounts" | "projects" | "documents" | "brand" | "security" | "webhooks" | "server";
@@ -34,7 +33,6 @@ const SECTION_PHRASE: Record<Section, Phrase> = {
   documents: "docsTitle",
   server: "adminServer",
 };
-const ROLES: readonly TeamProjectRole[] = ["owner", "editor", "reviewer", "viewer"];
 
 function errorText(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
@@ -147,6 +145,7 @@ function Accounts({ connection }: { connection: TeamConnection }) {
                 {user.username}
                 {user.operator ? <span className="tag">{t("operator")}</span> : null}
                 {user.serviceAccount ? <span className="tag">service</span> : null}
+                {!user.operator && user.groups.includes("project-creator") ? <span className="tag">{t("mayCreateProjects")}</span> : null}
               </td>
               <td>{user.displayName}</td>
               <td className="muted">{user.disabled ? t("disabledLabel") : t("activeLabel")}</td>
@@ -167,6 +166,22 @@ function Accounts({ connection }: { connection: TeamConnection }) {
                 ) : (
                   <button className="ghost small" onClick={() => act("admin.users.grantAdmin", user.username)}>
                     {t("grantAdmin")}
+                  </button>
+                )}
+                {user.operator ? null : (
+                  <button
+                    className="ghost small"
+                    onClick={() =>
+                      void run(
+                        () =>
+                          connection
+                            .call("admin.users.setCreator", { username: user.username, creator: !user.groups.includes("project-creator") })
+                            .then(load),
+                        t("done"),
+                      )
+                    }
+                  >
+                    {user.groups.includes("project-creator") ? t("disallowCreate") : t("allowCreate")}
                   </button>
                 )}
                 <button className="ghost small" onClick={() => act("admin.users.revokeTokens", user.username)}>
@@ -192,28 +207,12 @@ interface ProjectRow {
 function Projects({ connection }: { connection: TeamConnection }) {
   const [projects, setProjects] = useState<readonly ProjectRow[]>([]);
   const [chosen, setChosen] = useState<string | undefined>(undefined);
-  const [members, setMembers] = useState<readonly TeamProjectMember[]>([]);
-  const [accounts, setAccounts] = useState<readonly { username: string; displayName: string }[]>([]);
-  const [adding, setAdding] = useState({ username: "", role: "editor" as TeamProjectRole });
-  const { run, view } = useAction();
-  const loadProjects = useCallback(() => {
+  useEffect(() => {
     void connection.call<{ projects: ProjectRow[] }>("projects.list").then((answer) => {
       setProjects(answer.projects);
       setChosen((current) => current ?? answer.projects[0]?.id);
     });
-    void connection.call<{ members: { username: string; displayName: string }[] }>("members.list").then((answer) => setAccounts(answer.members));
   }, [connection]);
-  const loadMembers = useCallback(() => {
-    if (chosen === undefined) return;
-    void connection.call<{ members: TeamProjectMember[] }>("projects.members.list", { project: chosen }).then((answer) => setMembers(answer.members));
-  }, [connection, chosen]);
-  useEffect(() => loadProjects(), [loadProjects]);
-  useEffect(() => loadMembers(), [loadMembers]);
-  const setRole = (username: string, role: TeamProjectRole) =>
-    void run(() => connection.call("projects.members.set", { project: chosen, username, role }).then(loadMembers), t("done"));
-  const remove = (username: string) =>
-    void run(() => connection.call("projects.members.remove", { project: chosen, username }).then(loadMembers), t("done"));
-  const outside = accounts.filter((account) => !members.some((member) => member.username === account.username));
   return (
     <div className="admin-section admin-split">
       <ul className="admin-list">
@@ -225,75 +224,9 @@ function Projects({ connection }: { connection: TeamConnection }) {
           </li>
         ))}
       </ul>
-      <div>
-        {view}
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th>{t("members")}</th>
-              <th>{t("role")}</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((member) => (
-              <tr key={member.username}>
-                <td>
-                  {member.displayName || member.username} <span className="muted small">@{member.username}</span>
-                </td>
-                <td>
-                  <select value={member.role} onChange={(event) => setRole(member.username, event.target.value as TeamProjectRole)}>
-                    {ROLES.map((role) => (
-                      <option key={role} value={role}>
-                        {t(roleKey(role))}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="admin-actions">
-                  <button className="ghost small" onClick={() => remove(member.username)}>
-                    {t("removeMember")}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {outside.length > 0 ? (
-          <form
-            className="admin-form-row"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (adding.username !== "") setRole(adding.username, adding.role);
-            }}
-          >
-            <select value={adding.username} onChange={(event) => setAdding({ ...adding, username: event.target.value })}>
-              <option value="">{t("addMember")}</option>
-              {outside.map((account) => (
-                <option key={account.username} value={account.username}>
-                  {account.displayName || account.username}
-                </option>
-              ))}
-            </select>
-            <select value={adding.role} onChange={(event) => setAdding({ ...adding, role: event.target.value as TeamProjectRole })}>
-              {ROLES.map((role) => (
-                <option key={role} value={role}>
-                  {t(roleKey(role))}
-                </option>
-              ))}
-            </select>
-            <button className="primary" type="submit">
-              {t("add")}
-            </button>
-          </form>
-        ) : null}
-      </div>
+      <div>{chosen === undefined ? null : <ProjectMembers key={chosen} connection={connection} projectId={chosen} />}</div>
     </div>
   );
-}
-
-function roleKey(role: TeamProjectRole): Phrase {
-  return ({ owner: "roleOwner", editor: "roleEditor", reviewer: "roleReviewer", viewer: "roleViewer" } as const)[role];
 }
 
 /* ---------------------------------------------------------------- brand */

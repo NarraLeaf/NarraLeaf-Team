@@ -81,6 +81,7 @@ describe("the settings surface", () => {
       "collaboration",
       "repeat publishes",
       "who makes projects",
+      "who removes projects",
       "edit log kept (days)",
       "sign-in token",
       "repository token",

@@ -92,7 +92,7 @@ import {
 import {
   projectAudience,
   projectRole,
-  reachesRepository,
+  repositoryRefusalOf,
   repositoryProjectIds,
   type ProjectRole,
 } from "./members.js";
@@ -104,9 +104,12 @@ import {
  * than through the repository (src/projects/members.ts), and saying so is more
  * use to an operator than "denied".
  */
-function repositoryRefusal(role: ProjectRole | undefined): string {
-  return role === undefined
-    ? "not a member of the project"
+function repositoryRefusal(role: ProjectRole | undefined, why: "no-role" | "role" | "areas"): string {
+  if (why === "no-role" || role === undefined) {
+    return "not a member of the project";
+  }
+  return why === "areas"
+    ? "editor kept to some areas of the project, who edits it through Team rather than the repository"
     : `${role} of the project, which reads it through Team rather than the repository`;
 }
 
@@ -346,9 +349,10 @@ async function checkUserPermission(
       continue;
     }
     const role = projectRole(context.database, project.id, caller.user);
-    if (!reachesRepository(role)) {
+    const refusal = repositoryRefusalOf(context.database, project.id, caller.user);
+    if (refusal !== undefined) {
       denied.push({ resourceId, permission: [] });
-      const why = repositoryRefusal(role);
+      const why = repositoryRefusal(role, refusal);
       decided(context, `auth: check ${caller.user.username} ${forLog(resourceId)}: denied, ${why}`, {
         username: caller.user.username,
         resource: resourceName(context, resourceId),
@@ -602,8 +606,9 @@ function exchangeMultiresourceToken(context: AuthorizationContext, call: GrpcCal
       );
     }
     const role = projectRole(context.database, project.id, caller.user);
-    if (!reachesRepository(role)) {
-      const why = repositoryRefusal(role);
+    const refusal = repositoryRefusalOf(context.database, project.id, caller.user);
+    if (refusal !== undefined) {
+      const why = repositoryRefusal(role, refusal);
       decided(
         context,
         `auth: multiresource ${caller.user.username} ${forLog(resourceId)}: denied, ${why}`,

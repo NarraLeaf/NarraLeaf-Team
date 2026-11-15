@@ -108,6 +108,11 @@ export declare const STORY_LIBRARY_FILE: string;
 export declare function isProjectDocumentPath(path: string): boolean;
 /** Where a document lives, project-relative. Throws for an address that names no document kind. */
 export declare function projectDocumentPath(document: KernelDocument): string;
+/** The parts of a project a team grants editing of separately. */
+export declare const PROJECT_AREAS: readonly ["story", "characters", "assets", "ui", "localization", "config"];
+export type ProjectArea = (typeof PROJECT_AREAS)[number];
+/** Which area a project-relative path belongs to; anything unnamed is the game's configuration. */
+export declare function projectAreaOf(path: string): ProjectArea;
 /** Read one project file (stories migrated, the rest as stored). Throws when it does not parse or a newer Studio wrote it. */
 export declare function parseProjectFile(path: string, text: string): unknown;
 /** One project file as text, the way the editor writes it. */

@@ -762,8 +762,13 @@ nlteam settings set server.collaboration closed --root /srv/team
 A lifetime is written as `30m`, `48h`, `7d`, or a bare number of seconds.
 `server.name` takes the name a person reads in Studio. `server.collaboration`
 takes `open` or `closed`; see [Collaboration](#collaboration).
-`project.create_by` takes `everyone` (the default) or `admins`, and says who may
-make a project. `documents.retain_days` (default 30) is how long a team
+`project.create_by` takes `everyone` (the default), `creators` or `admins`, and
+says who may make a project: everybody, the operators plus the accounts in the
+`project-creator` group (an operator puts somebody there with
+`admin.users.setCreator`, or the "allow creating projects" button in the web
+console's back office), or the operators alone. `project.delete_by` takes
+`owners` (the default) or `admins`, and says who may take a project off the
+list: any owner of it, or the operators alone. `documents.retain_days` (default 30) is how long a team
 project's applied edits are kept once a saved version holds them; a Studio away
 longer starts again from the last version, and its offline edits based on
 anything older come back as conflicts.
@@ -910,7 +915,18 @@ upgraded to this behaves as it did before until somebody narrows a project.
 An owner of a project, or an operator, changes who belongs and in which role over
 the session, with `projects.members.set` and `projects.members.remove`; there is
 no command for it yet. A project always keeps one owner of its own, and taking
-somebody out takes their access at once.
+somebody out takes their access at once. The web console has the same table in a
+project's settings, for its owners, and in the back office, for operators.
+
+**Editors can be kept to some areas.** An owner ticks which parts of the project
+an editor may change: story, characters, assets, UI, localization and game
+config. All six are ticked to begin with. Owners always change everything;
+reviewers and viewers change nothing. Team decides the area of every edit from
+the file it reaches, and anything it does not recognise counts as game config,
+so a new kind of file is guarded rather than left open. An editor kept to some
+areas no longer opens the repository, since the version-control server would let
+them push any file, and edits through Team instead, as Studio does for every
+team project. Restoring a version changes every area, so it needs all six.
 
 To stop somebody everywhere, stop the account: `nlteam user disable`, or
 `nlteam user revoke-tokens` for a token that has been exposed.

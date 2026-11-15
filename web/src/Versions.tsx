@@ -13,6 +13,7 @@ import { projectClientsTopic, type TeamClientInstance, type TeamProjectRole, typ
 import { fetchJson, fetchTree, type Tree } from "./files";
 import { t } from "./i18n";
 import { Webhooks } from "./Production";
+import { ProjectMembers } from "./Members";
 import type { TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -174,6 +175,7 @@ interface ProjectSettingsView {
   readonly saveRole?: TeamVersionRole;
   readonly restoreRole?: TeamVersionRole;
   readonly role?: TeamProjectRole;
+  readonly mayRemove?: boolean;
 }
 
 /** A project's settings, for its owners: description, who may save and restore versions, webhooks. */
@@ -181,8 +183,9 @@ export function ProjectSettings(props: {
   connection: TeamConnection;
   project: ProjectSettingsView;
   changed: (project: ProjectSettingsView) => void;
+  removed: () => void;
 }) {
-  const { connection, project, changed } = props;
+  const { connection, project, changed, removed } = props;
   const [description, setDescription] = useState(project.description);
   const [saveRole, setSaveRole] = useState<TeamVersionRole>(project.saveRole ?? "editor");
   const [restoreRole, setRestoreRole] = useState<TeamVersionRole>(project.restoreRole ?? "editor");
@@ -236,8 +239,28 @@ export function ProjectSettings(props: {
         </button>
         {note !== undefined ? <span className="muted small"> {note}</span> : null}
       </form>
+      <h2>{t("membersTitle")}</h2>
+      <ProjectMembers connection={connection} projectId={project.id} />
       <h2>{t("projectWebhooks")}</h2>
       <Webhooks connection={connection} projectId={project.id} />
+      {project.mayRemove === true ? (
+        <div className="card danger-zone">
+          <h3>{t("removeProjectTitle")}</h3>
+          <p className="muted small">{t("removeProjectLead")}</p>
+          <button
+            className="danger"
+            onClick={() => {
+              if (!window.confirm(t("removeProjectConfirm", { name: project.name }))) return;
+              void connection
+                .call("projects.forget", { project: project.id })
+                .then(removed)
+                .catch((caught: unknown) => setError(errorText(caught)));
+            }}
+          >
+            {t("removeProject")}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

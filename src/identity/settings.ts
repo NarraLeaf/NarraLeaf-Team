@@ -106,10 +106,11 @@ export function isPublishLineageRule(value: string): value is PublishLineageRule
 export const PROJECT_CREATE_KEY = "project.create_by";
 
 /**
- * Who may make a project: every account (`everyone`, a small team's default), or the operators
- * alone (`admins`), for a server where projects are set up for people rather than by them.
+ * Who may make a project: every account (`everyone`, a small team's default), the operators and
+ * the accounts they have let make projects (`creators`, see `PROJECT_CREATOR_GROUP`), or the
+ * operators alone (`admins`), for a server where projects are set up for people rather than by them.
  */
-export const PROJECT_CREATORS = ["everyone", "admins"] as const;
+export const PROJECT_CREATORS = ["everyone", "creators", "admins"] as const;
 export type ProjectCreators = (typeof PROJECT_CREATORS)[number];
 export const DEFAULT_PROJECT_CREATORS: ProjectCreators = "everyone";
 
@@ -122,6 +123,28 @@ export class InvalidProjectCreatorsError extends Error {
 
 export function isProjectCreators(value: string): value is ProjectCreators {
   return PROJECT_CREATORS.some((word) => word === value.trim());
+}
+
+/** The key that says who may take a project off this server. */
+export const PROJECT_DELETE_KEY = "project.delete_by";
+
+/**
+ * Who may take a project off the list: any of its owners (`owners`, the default), or the operators
+ * alone (`admins`), for a server where a project outlives whoever set it up.
+ */
+export const PROJECT_DELETERS = ["owners", "admins"] as const;
+export type ProjectDeleters = (typeof PROJECT_DELETERS)[number];
+export const DEFAULT_PROJECT_DELETERS: ProjectDeleters = "owners";
+
+export class InvalidProjectDeletersError extends Error {
+  constructor(value: string) {
+    super(`${PROJECT_DELETE_KEY} cannot be "${value}". It is one of ${PROJECT_DELETERS.join(" or ")}.`);
+    this.name = "InvalidProjectDeletersError";
+  }
+}
+
+export function isProjectDeleters(value: string): value is ProjectDeleters {
+  return PROJECT_DELETERS.some((word) => word === value.trim());
 }
 
 /** The key that says how long a team project's applied edits are kept once a version holds them. */
@@ -224,6 +247,7 @@ export const SETTING_KEYS = [
   COLLABORATION_KEY,
   PUBLISH_LINEAGE_KEY,
   PROJECT_CREATE_KEY,
+  PROJECT_DELETE_KEY,
   DOCUMENT_RETENTION_KEY,
   SIGN_IN_LIFETIME_KEY,
   REPOSITORY_LIFETIME_KEY,
@@ -269,6 +293,7 @@ export type SettingChange =
   | { readonly key: typeof PUBLISH_LINEAGE_KEY; readonly rule: PublishLineageRule }
   | { readonly key: typeof COLLABORATION_KEY; readonly mode: CollaborationMode }
   | { readonly key: typeof PROJECT_CREATE_KEY; readonly creators: ProjectCreators }
+  | { readonly key: typeof PROJECT_DELETE_KEY; readonly deleters: ProjectDeleters }
   | { readonly key: typeof DOCUMENT_RETENTION_KEY; readonly days: number };
 
 /**
@@ -501,6 +526,19 @@ export function setProjectCreators(database: DatabaseSync, value: string): Proje
   if (!isProjectCreators(value)) throw new InvalidProjectCreatorsError(value);
   const stored = value.trim() as ProjectCreators;
   writeSetting(database, PROJECT_CREATE_KEY, stored);
+  return stored;
+}
+
+/** Who may take a project off the list, as it stands now. An unreadable value is the default. */
+export function storedProjectDeleters(database: DatabaseSync): ProjectDeleters {
+  const stored = readSetting(database, PROJECT_DELETE_KEY);
+  return stored !== undefined && isProjectDeleters(stored) ? (stored.trim() as ProjectDeleters) : DEFAULT_PROJECT_DELETERS;
+}
+
+export function setProjectDeleters(database: DatabaseSync, value: string): ProjectDeleters {
+  if (!isProjectDeleters(value)) throw new InvalidProjectDeletersError(value);
+  const stored = value.trim() as ProjectDeleters;
+  writeSetting(database, PROJECT_DELETE_KEY, stored);
   return stored;
 }
 

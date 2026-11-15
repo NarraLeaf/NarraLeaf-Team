@@ -6637,6 +6637,43 @@ function specFor(path) {
 function isProjectDocumentPath(path) {
   return specFor(path) !== void 0;
 }
+var PROJECT_AREAS = ["story", "characters", "assets", "ui", "localization", "config"];
+var AREA_BY_KIND = {
+  "story": "story",
+  "story-index": "story",
+  "variables": "story",
+  "characters": "characters",
+  "assets-metadata": "assets",
+  "assets-groups": "assets",
+  "asset-sets": "assets",
+  "audio-tracks": "assets",
+  "ui-document": "ui",
+  "ui-graphs": "ui",
+  "localization": "localization",
+  "localization-keys": "localization",
+  "voice": "localization",
+  "dictionary": "localization"
+};
+function projectAreaOf(path) {
+  const kind = specFor(path)?.kind;
+  const byKind = kind === void 0 ? void 0 : AREA_BY_KIND[kind];
+  if (byKind !== void 0) {
+    return byKind;
+  }
+  if (path.startsWith("editor/story/") || path === "editor/transform-presets.json") {
+    return "story";
+  }
+  if (path.startsWith("assets/") || path.startsWith("editor/assets/")) {
+    return "assets";
+  }
+  if (path.startsWith("editor/ui/")) {
+    return "ui";
+  }
+  if (path.startsWith("editor/localization/") || path.startsWith("editor/voice/")) {
+    return "localization";
+  }
+  return "config";
+}
 var ASSET_CONTENT_ROOT = "assets/content";
 function isTeamFilePath(path) {
   if (!isVersioned(path) || path.includes("\\") || path.startsWith("/") || path === ".loreignore") {
@@ -7389,6 +7426,7 @@ var KERNEL_VERSION = 4;
 export {
   ASSET_CONTENT_ROOT,
   KERNEL_VERSION,
+  PROJECT_AREAS,
   STORY_LIBRARY_FILE,
   STORY_LIBRARY_PATH,
   applyProjectOp,
@@ -7406,6 +7444,7 @@ export {
   parseProjectFile,
   parseStoryDocument,
   parseStoryLibrary,
+  projectAreaOf,
   projectDocumentPath,
   projectOpClaimKeys,
   serializeProjectFile,

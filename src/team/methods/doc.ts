@@ -10,16 +10,23 @@
  *
  * Who may do what follows the project roles. Anyone who may see the project
  * may follow it and read what happened; editing, saving a version and
- * restoring one are for the roles that open the repository (owner, editor),
- * because those are the roles whose edits reach the repository either way.
+ * restoring one are for owners and editors. An editor may be kept to some
+ * areas of the project (story, characters, assets, ui, localization, config):
+ * an edit is refused unless the file it reaches is in one of them, and
+ * restoring a version, which changes every area at once, needs all of them.
  */
-import { mayOpenRepository, projectRole } from "../../projects/members.js";
+import { editableAreas, PROJECT_AREAS, projectRole, type ProjectArea } from "../../projects/members.js";
 import { recordActivity, recordEdit } from "../../collab/activity.js";
 import { emitWebhookEvent } from "../../collab/webhooks.js";
 import { versionRoles } from "../../authority/versions.js";
 import type { DocIntent } from "../../authority/manager.js";
 import { ProjectAuthority } from "../../authority/projectAuthority.js";
-import { isProjectDocumentPath, isTeamFilePath } from "../../../studio-kernel/vendor/kernel.js";
+import {
+  isProjectDocumentPath,
+  isTeamFilePath,
+  projectAreaOf,
+  projectDocumentPath,
+} from "../../../studio-kernel/vendor/kernel.js";
 import {
   boundedCount,
   MethodError,
@@ -67,7 +74,8 @@ export function docMethods(): TeamMethod[] {
             : { snapshot: { seq: head.snapshot.seq, revision: head.snapshot.revision, at: head.snapshot.at } }),
           prunedThrough: head.prunedThrough,
           unreadable: authorities.unreadable(projectId),
-          mayEdit: mayOpenRepository(context.options.database, projectId, context.user),
+          mayEdit: editableAreas(context.options.database, projectId, context.user).length > 0,
+          areas: editableAreas(context.options.database, projectId, context.user),
         };
       },
     },
@@ -236,6 +244,7 @@ export function docMethods(): TeamMethod[] {
         if (basedOn !== undefined && (typeof basedOn !== "number" || !Number.isInteger(basedOn) || basedOn < 0)) {
           throw new MethodError("bad-params", "basedOn has to be a whole number, zero or more");
         }
+        requireArea(context, projectId, areaOfEdit(document as DocIntent["document"]));
         const intent: DocIntent = {
           clientId,
           accountId: context.user.id,
@@ -282,6 +291,7 @@ export function docMethods(): TeamMethod[] {
         const read = paramsObject(params);
         const projectId = editableProject(context, read);
         requireVersionRole(context, projectId, "restore");
+        requireAllAreas(context, projectId);
         const revision = requiredText(read, "revision", ANCHOR_FIELD_LIMIT);
         let restored;
         try {
@@ -356,10 +366,37 @@ function visibleProject(context: MethodContext, read: Record<string, unknown>): 
 
 function editableProject(context: MethodContext, read: Record<string, unknown>): string {
   const projectId = visibleProject(context, read);
-  if (!mayOpenRepository(context.options.database, projectId, context.user)) {
+  if (editableAreas(context.options.database, projectId, context.user).length === 0) {
     throw new MethodError("refused", "your role in this project does not edit it");
   }
   return projectId;
+}
+
+/** The area an edit reaches, or undefined when its address names no file (the authority refuses it anyway). */
+function areaOfEdit(document: DocIntent["document"]): ProjectArea | undefined {
+  try {
+    return projectAreaOf(projectDocumentPath(document));
+  } catch {
+    return undefined;
+  }
+}
+
+function requireArea(context: MethodContext, projectId: string, area: ProjectArea | undefined): void {
+  const areas = editableAreas(context.options.database, projectId, context.user);
+  if (area === undefined ? areas.length < PROJECT_AREAS.length : !areas.includes(area)) {
+    throw new MethodError(
+      "refused",
+      area === undefined
+        ? "you may not edit every area of this project"
+        : `you may not edit the ${area} of this project`,
+    );
+  }
+}
+
+function requireAllAreas(context: MethodContext, projectId: string): void {
+  if (editableAreas(context.options.database, projectId, context.user).length < PROJECT_AREAS.length) {
+    throw new MethodError("refused", "restoring a version changes every area, and you may not edit all of them");
+  }
 }
 
 function messageOf(error: unknown): string {

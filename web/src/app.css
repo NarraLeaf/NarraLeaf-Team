@@ -1398,3 +1398,39 @@ button.small {
 
 /* The round trip to the server, beside the connection state. */
 .status .latency { margin-left: 6px; font-variant-numeric: tabular-nums; color: var(--nl-fg-muted); }
+
+/* ------------------------------------------------ member areas */
+
+.area-ticks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.area-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.area-tick input {
+  margin: 0;
+}
+
+.danger-zone {
+  margin-top: 24px;
+  border-color: rgb(var(--nl-danger) / 0.4);
+}
+
+button.danger {
+  background: rgb(var(--nl-danger));
+  color: #fff;
+  font-weight: 600;
+}
+
+button.danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}

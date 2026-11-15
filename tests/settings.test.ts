@@ -269,6 +269,7 @@ describe("nlteam settings list", () => {
         "server.collaboration               open               default\n" +
         "project.publish_lineage            merge              default\n" +
         "project.create_by                  everyone           default\n" +
+        "project.delete_by                  owners             default\n" +
         "documents.retain_days              30                 default\n" +
         "token.sign_in_lifetime_seconds     30 days            default\n" +
         "token.repository_lifetime_seconds  15 minutes         default\n",

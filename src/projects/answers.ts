@@ -25,7 +25,15 @@ import { findUserById, isOperator, type UserRecord } from "../identity/users.js"
 import type { TeamService } from "../team/service.js";
 import type { RevisionView } from "../teamview.js";
 import type { ProjectRecord } from "./registry.js";
-import { projectRole, type ProjectMember, type ProjectRole } from "./members.js";
+import {
+  editableAreas,
+  PROJECT_AREAS,
+  projectRole,
+  type ProjectArea,
+  type ProjectMember,
+  type ProjectRole,
+} from "./members.js";
+import { storedProjectDeleters } from "../identity/settings.js";
 
 /** One project, as a Studio installation reads it. */
 export interface ProjectBody {
@@ -62,6 +70,13 @@ export interface ProjectBody {
    * what that role cannot do. Absent only where nobody in particular asked.
    */
   readonly role?: ProjectRole;
+  /**
+   * The areas the account asking may change: all of them for an owner, its own
+   * for an editor, none for a reviewer or viewer. Absent where nobody asked.
+   */
+  readonly areas?: readonly ProjectArea[];
+  /** Whether the account asking may take the project off the list. Absent where nobody asked. */
+  readonly mayRemove?: boolean;
 }
 
 /**
@@ -129,8 +144,27 @@ export function projectBody(
     ...(history === undefined ? {} : { history }),
     saveRole: roles.save,
     restoreRole: roles.restore,
-    ...(viewer === undefined ? {} : roleField(projectRole(database, project.id, viewer))),
+    ...(viewer === undefined ? {} : viewerFields(options, project, viewer)),
   };
+}
+
+/** What a project body says about the account asking: its role, its areas, and whether it may remove it. */
+function viewerFields(
+  options: TeamService,
+  project: ProjectRecord,
+  viewer: UserRecord,
+): { role?: ProjectRole; areas: readonly ProjectArea[]; mayRemove: boolean } {
+  const role = projectRole(options.database, project.id, viewer);
+  return {
+    ...roleField(role),
+    areas: [...editableAreas(options.database, project.id, viewer)],
+    mayRemove: mayRemoveProject(options, viewer, role),
+  };
+}
+
+/** Whether an account may take a project off the list, as `project.delete_by` stands. */
+export function mayRemoveProject(options: TeamService, user: UserRecord, role: ProjectRole | undefined): boolean {
+  return storedProjectDeleters(options.database) === "admins" ? isOperator(user.groups) : role === "owner";
 }
 
 function roleField(role: ProjectRole | undefined): { role?: ProjectRole } {
@@ -143,6 +177,7 @@ export interface ProjectMemberBody {
   readonly displayName: string;
   readonly avatarUrl?: string;
   readonly role: ProjectRole;
+  readonly areas?: readonly ProjectArea[];
   readonly addedBy?: string;
   readonly addedAt: number;
 }
@@ -164,6 +199,7 @@ export function projectMemberBody(options: TeamService, member: ProjectMember): 
     displayName: user.displayName,
     ...(avatar === undefined ? {} : { avatarUrl: avatar }),
     role: member.role,
+    ...(member.areas === undefined || member.areas.length === PROJECT_AREAS.length ? {} : { areas: [...member.areas] }),
     ...(adder === undefined ? {} : { addedBy: adder.username }),
     addedAt: member.addedAt,
   };

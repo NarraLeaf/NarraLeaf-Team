@@ -67,11 +67,14 @@ import {
   isLifetimeKey,
   PUBLISH_LINEAGE_KEY,
   PROJECT_CREATE_KEY,
+  PROJECT_DELETE_KEY,
   DOCUMENT_RETENTION_KEY,
   setProjectCreators,
+  setProjectDeleters,
   setRetentionDays,
   storedRetentionDays,
   InvalidProjectCreatorsError,
+  InvalidProjectDeletersError,
   InvalidDocumentRetentionError,
   SERVER_NAME_KEY,
   isAccent,
@@ -107,8 +110,10 @@ import {
   InvalidUsernameError,
   isOperator,
   pageUsers,
+  PROJECT_CREATOR_ROLE,
   revokeUserTokens,
   setAdmin,
+  setProjectCreator,
   UsernameTakenError,
   WeakPasswordError,
   type UserRecord,
@@ -619,6 +624,19 @@ export function adminMethods(): TeamMethod[] {
       announceUser(context, { kind: "user-revoked-admin", user: body });
       return { user: body };
     }),
+    administeredWrite(TEAM_METHODS.adminUsersSetCreator, (read, context, repeat) => {
+      const user = namedAccount(context, read);
+      const creator = read["creator"];
+      if (typeof creator !== "boolean") {
+        throw new MethodError("bad-params", "creator has to be true or false");
+      }
+      if (repeat.already !== undefined || user.groups.includes(PROJECT_CREATOR_ROLE) === creator) {
+        return { user: adminUserBody(user) };
+      }
+      const body = adminUserBody(setProjectCreator(context.options.database, user.username, creator));
+      announceUser(context, { kind: "user-creator-set", user: body });
+      return { user: body };
+    }),
     administeredWrite(TEAM_METHODS.adminUsersRevokeTokens, (read, context, repeat) => {
       const user = namedAccount(context, read);
       if (repeat.already !== undefined) {
@@ -735,6 +753,8 @@ export function adminMethods(): TeamMethod[] {
           setPublishLineage(context.options.database, value);
         } else if (key === PROJECT_CREATE_KEY) {
           setProjectCreators(context.options.database, value);
+        } else if (key === PROJECT_DELETE_KEY) {
+          setProjectDeleters(context.options.database, value);
         } else if (key === DOCUMENT_RETENTION_KEY) {
           setRetentionDays(context.options.database, value);
         } else if (key === COLLABORATION_KEY) {
@@ -775,6 +795,7 @@ export function adminMethods(): TeamMethod[] {
           error instanceof InvalidPublishLineageError ||
           error instanceof InvalidCollaborationModeError ||
           error instanceof InvalidProjectCreatorsError ||
+          error instanceof InvalidProjectDeletersError ||
           error instanceof InvalidDocumentRetentionError
         ) {
           // Every way a value can be the wrong value, answered as the caller's
