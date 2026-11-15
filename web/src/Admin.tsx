@@ -20,13 +20,15 @@ import type {
 import { t, type Phrase } from "./i18n";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
+import { AccessRequestsToDecide } from "./Access";
 import type { ConnectionState, TeamConnection } from "./socket";
 
-type Section = "accounts" | "projects" | "documents" | "brand" | "security" | "webhooks" | "server";
-const SECTIONS: readonly Section[] = ["accounts", "projects", "documents", "brand", "security", "webhooks", "server"];
+type Section = "accounts" | "projects" | "requests" | "documents" | "brand" | "security" | "webhooks" | "server";
+const SECTIONS: readonly Section[] = ["accounts", "projects", "requests", "documents", "brand", "security", "webhooks", "server"];
 const SECTION_PHRASE: Record<Section, Phrase> = {
   accounts: "adminAccounts",
   projects: "adminProjects",
+  requests: "reqTitle",
   brand: "adminBrand",
   security: "adminSecurity",
   webhooks: "adminWebhooks",
@@ -71,6 +73,11 @@ export function Admin({ connection, state }: { connection: TeamConnection; state
       {!open ? <p className="muted">{t("connecting")}</p> : null}
       {open && section === "accounts" ? <Accounts connection={connection} /> : null}
       {open && section === "projects" ? <Projects connection={connection} /> : null}
+      {open && section === "requests" ? (
+        <div className="admin-section">
+          <AccessRequestsToDecide connection={connection} all />
+        </div>
+      ) : null}
       {open && section === "brand" ? <Brand connection={connection} /> : null}
       {open && section === "security" ? <Security connection={connection} /> : null}
       {open && section === "webhooks" ? <Webhooks connection={connection} /> : null}

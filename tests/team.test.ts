@@ -63,12 +63,13 @@ import {
   mayOpenRepository,
   removeProjectMember,
   repositoryRefusalOf,
+  seedProjectMembers,
   setProjectMember,
 } from "../src/projects/members.js";
-import { TEAM_PROJECT_AREAS } from "../protocol/src/index.js";
+import { TEAM_PERMISSION_TEMPLATES, TEAM_PROJECT_AREAS, teamTemplateOf } from "../protocol/src/index.js";
 import { versionsOf } from "../src/authority/versions.js";
 import { setWebhookFetch } from "../src/collab/webhooks.js";
-import { setProjectCreators, setProjectDeleters } from "../src/identity/settings.js";
+import { setProjectAccess, setProjectCreators, setProjectDeleters } from "../src/identity/settings.js";
 import { ProjectAuthorities } from "../src/authority/manager.js";
 import {
   approveAuthorization,
@@ -3876,6 +3877,7 @@ describe("the settings, as an operator reads them", () => {
       "repeat publishes",
       "who makes projects",
       "who removes projects",
+      "others in a new project",
       "edit log kept (days)",
       "sign-in token",
       "repository token",
@@ -5486,5 +5488,149 @@ describe("how far away the server is", () => {
     expect(answer["at"] as number).toBeGreaterThanOrEqual(before);
     expect(Object.keys(await ada.value(TEAM_METHODS.serverPing))).toEqual(["at"]);
     expect((await ada.call(TEAM_METHODS.serverPing, { sent: "soon" })).code).toBe("bad-params");
+  });
+});
+
+describe("permission templates and asking for access", () => {
+  it("lets an owner grant a member by template, and refuses one it does not know", async () => {
+    const { ada, project } = await withTwo();
+    const set = await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "writer" });
+    expect(set["member"]).toMatchObject({ username: "bob", role: "editor", areas: ["story", "characters"] });
+    // An editor template naming no areas widens a narrower list rather than keeping it.
+    const widened = await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "editor" });
+    expect((widened["member"] as { areas?: unknown }).areas).toBeUndefined();
+    expect((await ada.call(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "wizard" })).code).toBe("bad-params");
+    expect(
+      (await ada.call(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "viewer", role: "editor" })).code,
+    ).toBe("bad-params");
+  });
+
+  it("names every template's grant exactly once", () => {
+    for (const template of TEAM_PERMISSION_TEMPLATES) {
+      expect(teamTemplateOf(template.role, "areas" in template ? template.areas : undefined)?.id).toBe(template.id);
+    }
+    expect(teamTemplateOf("editor", ["story"])).toBeUndefined();
+    expect(teamTemplateOf("editor", [...TEAM_PROJECT_AREAS])?.id).toBe("editor");
+  });
+
+  it("gives others what project.default_access says, in new accounts and new projects", async () => {
+    const { project, team } = await withTwo();
+    setProjectAccess(team.database, "viewer");
+    await account(team.database, "vic");
+    const vic = requireUser(team.database, "vic").id;
+    expect(team.database.prepare("SELECT role FROM project_members WHERE project_id = ? AND user_id = ?").get(project, vic)).toEqual({ role: "viewer" });
+    setProjectAccess(team.database, "none");
+    await account(team.database, "nell");
+    const nell = requireUser(team.database, "nell").id;
+    expect(team.database.prepare("SELECT role FROM project_members WHERE user_id = ?").all(nell)).toEqual([]);
+    // A project made now starts with its maker alone.
+    team.database.prepare("DELETE FROM project_members WHERE project_id = ?").run(project);
+    seedProjectMembers(team.database, project, requireUser(team.database, "ada").id);
+    const roles = team.database.prepare("SELECT user_id, role FROM project_members WHERE project_id = ?").all(project);
+    expect(roles).toEqual([{ user_id: requireUser(team.database, "ada").id, role: "owner" }]);
+    expect(() => setProjectAccess(team.database, "everyone")).toThrow();
+  });
+
+  it("lets a newcomer find a project, ask to join it, and be let in by its owner", async () => {
+    const { ada, project, team } = await withTwo();
+    setProjectAccess(team.database, "none");
+    await account(team.database, "nora");
+    const nora = await team.connect(team.tokenFor("nora"));
+    await nora.send("subscribe", { topic: TOPIC_PROJECTS });
+    await ada.send("subscribe", { topic: `account:${requireUser(team.database, "ada").id}/notifications` });
+
+    const found = (await nora.value(TEAM_METHODS.projectsDiscover))["projects"] as { id: string; name: string }[];
+    expect(found).toEqual([{ id: project, name: "lighthouse" }]);
+    // A member is not offered what it is already in.
+    expect((await ada.value(TEAM_METHODS.projectsDiscover))["projects"]).toEqual([]);
+
+    const asked = await nora.value(TEAM_METHODS.accessRequestsCreate, { project, template: "translator", message: "I speak Japanese" });
+    expect(asked["request"]).toMatchObject({
+      kind: "project",
+      project,
+      projectName: "lighthouse",
+      requester: "nora",
+      role: "editor",
+      areas: ["localization"],
+      template: "translator",
+      status: "pending",
+    });
+    const id = (asked["request"] as { id: number }).id;
+    // Asking again replaces the first question rather than adding a second.
+    const again = await nora.value(TEAM_METHODS.accessRequestsCreate, { project, template: "writer" });
+    expect((again["request"] as { id: number }).id).toBe(id);
+
+    await ada.until(() => ada.events.some((event) => (event.payload as { kind?: string }).kind === "notification"));
+    const listed = await ada.value(TEAM_METHODS.accessRequestsList);
+    expect((listed["toDecide"] as { id: number; template: string }[]).map((r) => [r.id, r.template])).toEqual([[id, "writer"]]);
+    expect((await nora.value(TEAM_METHODS.accessRequestsList))["mine"]).toHaveLength(1);
+
+    // Bob is an editor, not an owner, and decides nothing.
+    const bob = await team.connect(team.tokenFor("bob"));
+    expect((await bob.value(TEAM_METHODS.accessRequestsList))["toDecide"]).toEqual([]);
+    expect((await bob.call(TEAM_METHODS.accessRequestsDecide, { id, approve: true })).code).toBe("not-found");
+
+    const decided = await ada.value(TEAM_METHODS.accessRequestsDecide, { id, approve: true, note: "welcome" });
+    expect(decided["request"]).toMatchObject({ status: "approved", decidedBy: "ada", note: "welcome", grantedRole: "editor", grantedAreas: ["story", "characters"] });
+    expect(editableAreas(team.database, project, requireUser(team.database, "nora"))).toEqual(["story", "characters"]);
+    expect((await ada.call(TEAM_METHODS.accessRequestsDecide, { id, approve: false })).code).toBe("conflict");
+
+    await nora.until(() => nora.events.some((event) => (event.payload as { kind?: string }).kind === "project-access-changed"));
+    expect(nora.events.map((event) => (event.payload as { kind: string }).kind)).toContain("access-request");
+    expect(((await nora.value(TEAM_METHODS.projectsList))["projects"] as unknown[]).length).toBe(1);
+    const notes = (await nora.value(TEAM_METHODS.notificationsList))["notifications"] as { kind: string; project?: string }[];
+    expect(notes[0]).toMatchObject({ kind: "access-decided", project });
+  });
+
+  it("lets an owner grant something other than what was asked, or say no", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", role: "viewer" });
+    const asked = await bob.value(TEAM_METHODS.accessRequestsCreate, { project, role: "owner" });
+    const id = (asked["request"] as { id: number }).id;
+    expect(asked["request"]).toMatchObject({ currentRole: "viewer", role: "owner" });
+    const decided = await ada.value(TEAM_METHODS.accessRequestsDecide, { id, approve: true, template: "reviewer" });
+    expect(decided["request"]).toMatchObject({ status: "approved", grantedRole: "reviewer" });
+
+    const second = await bob.value(TEAM_METHODS.accessRequestsCreate, { project, role: "editor", areas: ["assets"] });
+    const denied = await ada.value(TEAM_METHODS.accessRequestsDecide, { id: (second["request"] as { id: number }).id, approve: false, note: "not now" });
+    expect(denied["request"]).toMatchObject({ status: "denied", note: "not now" });
+    expect((await bob.value(TEAM_METHODS.projectsMembersList, { project }))["role"]).toBe("reviewer");
+  });
+
+  it("refuses asking for what one already has, and lets the asker withdraw", async () => {
+    const { ada, bob, project, team } = await withTwo();
+    expect((await ada.call(TEAM_METHODS.accessRequestsCreate, { project, role: "editor" })).code).toBe("conflict");
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { project, role: "reviewer" })).code).toBe("conflict");
+    await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "writer" });
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { project, role: "editor", areas: ["story"] })).code).toBe("conflict");
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { project, role: "editor", areas: [] })).code).toBe("bad-params");
+    const asked = await bob.value(TEAM_METHODS.accessRequestsCreate, { project, role: "editor", areas: ["story", "ui"] });
+    const id = (asked["request"] as { id: number }).id;
+    expect((await ada.call(TEAM_METHODS.accessRequestsWithdraw, { id })).code).toBe("refused");
+    expect(await bob.value(TEAM_METHODS.accessRequestsWithdraw, { id })).toMatchObject({ request: { status: "withdrawn" } });
+    expect((await ada.value(TEAM_METHODS.accessRequestsList))["toDecide"]).toEqual([]);
+    expect((await ada.value(TEAM_METHODS.accessRequestsList, { all: true }))["toDecide"]).toHaveLength(1);
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { project: "nowhere", role: "viewer" })).code).toBe("not-found");
+    void team;
+  });
+
+  it("lets somebody ask the operators to make projects, where the server keeps it to the creators", async () => {
+    const { ada, bob, team } = await withTwo();
+    await account(team.database, "root", { groups: [ADMIN_ROLE] });
+    const root = await team.connect(team.tokenFor("root"));
+    // Everybody may already.
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { kind: "creator" })).code).toBe("conflict");
+    setProjectCreators(team.database, "admins");
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { kind: "creator" })).code).toBe("refused");
+    setProjectCreators(team.database, "creators");
+
+    const asked = await bob.value(TEAM_METHODS.accessRequestsCreate, { kind: "creator", message: "a side project" });
+    const id = (asked["request"] as { id: number }).id;
+    expect((await ada.value(TEAM_METHODS.accessRequestsList))["toDecide"]).toEqual([]);
+    expect((await ada.call(TEAM_METHODS.accessRequestsDecide, { id, approve: true })).code).toBe("not-found");
+    expect(((await root.value(TEAM_METHODS.accessRequestsList))["toDecide"] as unknown[]).length).toBe(1);
+    await root.value(TEAM_METHODS.accessRequestsDecide, { id, approve: true });
+    expect((await bob.value(TEAM_METHODS.projectsList))["mayCreate"]).toBe(true);
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { kind: "creator" })).code).toBe("conflict");
   });
 });

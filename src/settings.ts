@@ -42,12 +42,15 @@ import {
   PUBLISH_LINEAGE_KEY,
   PROJECT_CREATE_KEY,
   PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
   DOCUMENT_RETENTION_KEY,
   storedProjectCreators,
   storedProjectDeleters,
+  storedProjectAccess,
   storedRetentionDays,
   setProjectCreators,
   setProjectDeleters,
+  setProjectAccess,
   setRetentionDays,
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
@@ -151,6 +154,8 @@ function settingValue(database: DatabaseSync, key: SettingKey): string {
       return storedProjectCreators(database);
     case PROJECT_DELETE_KEY:
       return storedProjectDeleters(database);
+    case PROJECT_ACCESS_KEY:
+      return storedProjectAccess(database);
     case DOCUMENT_RETENTION_KEY:
       return String(storedRetentionDays(database));
     case SIGN_IN_LIFETIME_KEY:
@@ -346,6 +351,10 @@ function renderSettingChange(
     stdout("The next project somebody asks to take off the list is judged by this.\n");
     return;
   }
+  if (key === PROJECT_ACCESS_KEY) {
+    stdout("Applies to the next project made and the next account made; nobody's place in a project made already changes.\n");
+    return;
+  }
   if (key === DOCUMENT_RETENTION_KEY) {
     stdout("Applied in the next pass over the projects this server holds, within a minute.\n");
     return;
@@ -394,6 +403,8 @@ function writtenValue(database: DatabaseSync, change: SettingChange): string {
       return setProjectCreators(database, change.creators);
     case PROJECT_DELETE_KEY:
       return setProjectDeleters(database, change.deleters);
+    case PROJECT_ACCESS_KEY:
+      return setProjectAccess(database, change.access);
     case DOCUMENT_RETENTION_KEY:
       return String(setRetentionDays(database, String(change.days)));
     case SIGN_IN_LIFETIME_KEY:
@@ -457,6 +468,8 @@ function sentValue(change: SettingChange): string {
       return change.creators;
     case PROJECT_DELETE_KEY:
       return change.deleters;
+    case PROJECT_ACCESS_KEY:
+      return change.access;
     case DOCUMENT_RETENTION_KEY:
       return String(change.days);
     case SIGN_IN_LIFETIME_KEY:

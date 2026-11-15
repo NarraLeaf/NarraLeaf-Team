@@ -10,10 +10,13 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   TEAM_PROJECT_AREAS,
+  teamTemplateOf,
+  type TeamPermissionTemplateId,
   type TeamProjectArea,
   type TeamProjectMember,
   type TeamProjectRole,
 } from "@narraleaf/team-protocol";
+import { TemplateSelect } from "./Access";
 import { t, type Phrase } from "./i18n";
 import type { TeamConnection } from "./socket";
 
@@ -39,7 +42,7 @@ function errorText(caught: unknown): string {
 export function ProjectMembers({ connection, projectId }: { connection: TeamConnection; projectId: string }) {
   const [members, setMembers] = useState<readonly TeamProjectMember[]>([]);
   const [accounts, setAccounts] = useState<readonly { username: string; displayName: string }[]>([]);
-  const [adding, setAdding] = useState({ username: "", role: "editor" as TeamProjectRole });
+  const [adding, setAdding] = useState({ username: "", template: "editor" as TeamPermissionTemplateId });
   const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | undefined>(undefined);
 
   const load = useCallback(() => {
@@ -66,6 +69,8 @@ export function ProjectMembers({ connection, projectId }: { connection: TeamConn
   };
   const setRole = (username: string, role: TeamProjectRole) =>
     run(() => connection.call("projects.members.set", { project: projectId, username, role }));
+  const setTemplate = (username: string, template: TeamPermissionTemplateId) =>
+    run(() => connection.call("projects.members.set", { project: projectId, username, template }));
   const setAreas = (member: TeamProjectMember, areas: readonly TeamProjectArea[]) =>
     run(() =>
       connection.call("projects.members.set", { project: projectId, username: member.username, role: member.role, areas }),
@@ -80,6 +85,7 @@ export function ProjectMembers({ connection, projectId }: { connection: TeamConn
         <thead>
           <tr>
             <th>{t("members")}</th>
+            <th>{t("tplLabel")}</th>
             <th>{t("role")}</th>
             <th>{t("areasLabel")}</th>
             <th />
@@ -90,6 +96,15 @@ export function ProjectMembers({ connection, projectId }: { connection: TeamConn
             <tr key={member.username}>
               <td>
                 {member.displayName || member.username} <span className="muted small">@{member.username}</span>
+              </td>
+              <td>
+                <TemplateSelect
+                  value={teamTemplateOf(member.role, member.areas)?.id}
+                  change={(template) => {
+                    // The "custom" entry carries no template; picking it changes nothing.
+                    if ((template as string) !== "") setTemplate(member.username, template);
+                  }}
+                />
               </td>
               <td>
                 <select value={member.role} onChange={(event) => setRole(member.username, event.target.value as TeamProjectRole)}>
@@ -118,7 +133,7 @@ export function ProjectMembers({ connection, projectId }: { connection: TeamConn
           className="admin-form-row"
           onSubmit={(event) => {
             event.preventDefault();
-            if (adding.username !== "") setRole(adding.username, adding.role);
+            if (adding.username !== "") setTemplate(adding.username, adding.template);
           }}
         >
           <select value={adding.username} onChange={(event) => setAdding({ ...adding, username: event.target.value })}>
@@ -129,13 +144,7 @@ export function ProjectMembers({ connection, projectId }: { connection: TeamConn
               </option>
             ))}
           </select>
-          <select value={adding.role} onChange={(event) => setAdding({ ...adding, role: event.target.value as TeamProjectRole })}>
-            {ROLES.map((role) => (
-              <option key={role} value={role}>
-                {t(roleKey(role))}
-              </option>
-            ))}
-          </select>
+          <TemplateSelect value={adding.template} change={(template) => setAdding({ ...adding, template })} />
           <button className="primary" type="submit">
             {t("add")}
           </button>

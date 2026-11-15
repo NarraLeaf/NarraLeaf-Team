@@ -147,6 +147,32 @@ export function isProjectDeleters(value: string): value is ProjectDeleters {
   return PROJECT_DELETERS.some((word) => word === value.trim());
 }
 
+/** The key that says what everybody else is given in a project they did not make. */
+export const PROJECT_ACCESS_KEY = "project.default_access";
+
+/**
+ * What an account is given in a project it was not put in by hand — every other
+ * account when a project is made, and every project when an account is made:
+ * an editor of all of it (`editor`, a small team's default and how Team behaved
+ * before this setting), a viewer (`viewer`), or nothing (`none`), so that people
+ * join a project by being added or by asking. The maker of a project owns it
+ * whatever this says. Changing it changes nobody's place in a project made already.
+ */
+export const PROJECT_ACCESSES = ["editor", "viewer", "none"] as const;
+export type ProjectAccess = (typeof PROJECT_ACCESSES)[number];
+export const DEFAULT_PROJECT_ACCESS: ProjectAccess = "editor";
+
+export class InvalidProjectAccessError extends Error {
+  constructor(value: string) {
+    super(`${PROJECT_ACCESS_KEY} cannot be "${value}". It is one of ${PROJECT_ACCESSES.join(" or ")}.`);
+    this.name = "InvalidProjectAccessError";
+  }
+}
+
+export function isProjectAccess(value: string): value is ProjectAccess {
+  return PROJECT_ACCESSES.some((word) => word === value.trim());
+}
+
 /** The key that says how long a team project's applied edits are kept once a version holds them. */
 export const DOCUMENT_RETENTION_KEY = "documents.retain_days";
 
@@ -248,6 +274,7 @@ export const SETTING_KEYS = [
   PUBLISH_LINEAGE_KEY,
   PROJECT_CREATE_KEY,
   PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
   DOCUMENT_RETENTION_KEY,
   SIGN_IN_LIFETIME_KEY,
   REPOSITORY_LIFETIME_KEY,
@@ -294,6 +321,7 @@ export type SettingChange =
   | { readonly key: typeof COLLABORATION_KEY; readonly mode: CollaborationMode }
   | { readonly key: typeof PROJECT_CREATE_KEY; readonly creators: ProjectCreators }
   | { readonly key: typeof PROJECT_DELETE_KEY; readonly deleters: ProjectDeleters }
+  | { readonly key: typeof PROJECT_ACCESS_KEY; readonly access: ProjectAccess }
   | { readonly key: typeof DOCUMENT_RETENTION_KEY; readonly days: number };
 
 /**
@@ -539,6 +567,19 @@ export function setProjectDeleters(database: DatabaseSync, value: string): Proje
   if (!isProjectDeleters(value)) throw new InvalidProjectDeletersError(value);
   const stored = value.trim() as ProjectDeleters;
   writeSetting(database, PROJECT_DELETE_KEY, stored);
+  return stored;
+}
+
+/** What everybody else is given in a new project, as it stands now. An unreadable value is the default. */
+export function storedProjectAccess(database: DatabaseSync): ProjectAccess {
+  const stored = readSetting(database, PROJECT_ACCESS_KEY);
+  return stored !== undefined && isProjectAccess(stored) ? (stored.trim() as ProjectAccess) : DEFAULT_PROJECT_ACCESS;
+}
+
+export function setProjectAccess(database: DatabaseSync, value: string): ProjectAccess {
+  if (!isProjectAccess(value)) throw new InvalidProjectAccessError(value);
+  const stored = value.trim() as ProjectAccess;
+  writeSetting(database, PROJECT_ACCESS_KEY, stored);
   return stored;
 }
 

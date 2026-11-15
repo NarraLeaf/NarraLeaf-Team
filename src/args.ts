@@ -19,6 +19,9 @@ import {
   PROJECT_CREATE_KEY,
   PROJECT_CREATORS,
   PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
+  PROJECT_ACCESSES,
+  isProjectAccess,
   PROJECT_DELETERS,
   isProjectDeleters,
   DOCUMENT_RETENTION_KEY,
@@ -1349,6 +1352,12 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
         return error(`${PROJECT_DELETE_KEY} is one of ${PROJECT_DELETERS.join(" or ")}, not ${value}.`);
       }
       return { kind: "settings-set", target, change: { key, deleters: value.trim() as "owners" | "admins" } };
+    }
+    if (key === PROJECT_ACCESS_KEY) {
+      if (!isProjectAccess(value)) {
+        return error(`${PROJECT_ACCESS_KEY} is one of ${PROJECT_ACCESSES.join(" or ")}, not ${value}.`);
+      }
+      return { kind: "settings-set", target, change: { key, access: value.trim() as "editor" | "viewer" | "none" } };
     }
     if (key === DOCUMENT_RETENTION_KEY) {
       const days = readRetentionDays(value);

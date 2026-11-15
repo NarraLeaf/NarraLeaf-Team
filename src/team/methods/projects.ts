@@ -31,6 +31,7 @@ import {
   setProjectMember,
   visibleProjectIds,
   type ProjectArea,
+  type ProjectRole,
 } from "../../projects/members.js";
 import { countUsers, eachUser, findUser, type UserRecord } from "../../identity/users.js";
 import { NOT_READ_YET } from "../../teamview.js";
@@ -55,6 +56,8 @@ import {
   projectMembersTopic,
   projectTopic,
   TEAM_METHODS,
+  TEAM_PERMISSION_TEMPLATES,
+  teamPermissionTemplate,
   TOPIC_PROJECTS,
   type TeamProjectMembersEvent,
   type TeamProjectsEvent,
@@ -72,6 +75,8 @@ const DESCRIPTION_LIMIT = 4 * 1024;
 
 /** The most a username may be, which is more than the username pattern admits. */
 const USERNAME_LIMIT = 64;
+
+const TEMPLATE_LIMIT = 64;
 
 /** The most a client id may be. Long enough for a UUID and a word, short of a payload. */
 const CLIENT_ID_LIMIT = 128;
@@ -190,7 +195,7 @@ function visibleProject(context: MethodContext, reference: string): ProjectRecor
 }
 
 /** Refuse anybody who is not an owner of the project (operators are owners of every one). */
-function requireOwner(context: MethodContext, project: ProjectRecord, doing: string): void {
+export function requireOwner(context: MethodContext, project: ProjectRecord, doing: string): void {
   if (projectRole(context.options.database, project.id, context.user) !== "owner") {
     throw new MethodError("refused", `only an owner of this project may ${doing}`);
   }
@@ -209,7 +214,7 @@ function mayCreateProjects(context: MethodContext): boolean {
 }
 
 /** The `areas` of a member call: a list of area names, null for all, or absent to keep them. */
-function areasParam(read: Record<string, unknown>): readonly ProjectArea[] | null | undefined {
+export function areasParam(read: Record<string, unknown>): readonly ProjectArea[] | null | undefined {
   const value = read["areas"];
   if (value === undefined || value === null) {
     return value;
@@ -218,6 +223,35 @@ function areasParam(read: Record<string, unknown>): readonly ProjectArea[] | nul
     throw new MethodError("bad-params", "areas is a list of story, characters, assets, ui, localization and config, or null");
   }
   return value;
+}
+
+/**
+ * What a call grants: a permission `template`, or a `role` and its `areas`
+ * (see {@link areasParam}). Never both, so a call cannot say two things.
+ */
+export function grantParam(
+  read: Record<string, unknown>,
+  fallbackRole?: ProjectRole,
+): { role: ProjectRole; areas: readonly ProjectArea[] | null | undefined; template?: string } {
+  const id = optionalText(read, "template", TEMPLATE_LIMIT);
+  if (id === undefined) {
+    return { role: oneOf(read, "role", PROJECT_ROLES, fallbackRole), areas: areasParam(read) };
+  }
+  if (read["role"] !== undefined || read["areas"] !== undefined) {
+    throw new MethodError("bad-params", "name a template, or a role and areas, and not both");
+  }
+  const template = teamPermissionTemplate(id);
+  if (template === undefined) {
+    const known = TEAM_PERMISSION_TEMPLATES.map((entry) => entry.id).join(", ");
+    throw new MethodError("bad-params", `${id} is not a permission template; it is one of ${known}`);
+  }
+  return {
+    role: template.role,
+    // An editor template naming no areas is every area, said as null so a
+    // narrower list held before is widened rather than kept.
+    areas: template.role === "editor" ? (template.areas ?? null) : undefined,
+    template: template.id,
+  };
 }
 
 /** Whether a member's stored areas already say what a call asks for. */
@@ -232,7 +266,7 @@ function sameAreas(stored: readonly ProjectArea[] | undefined, asked: readonly P
 }
 
 /** The account a member method names, by username. */
-function namedAccount(context: MethodContext, read: Record<string, unknown>): UserRecord {
+export function namedAccount(context: MethodContext, read: Record<string, unknown>): UserRecord {
   const username = requiredText(read, "username", USERNAME_LIMIT);
   const user = findUser(context.options.database, username);
   if (user === undefined) {
@@ -249,7 +283,7 @@ function namedAccount(context: MethodContext, read: Record<string, unknown>): Us
  * to put it right, and refusing here costs the owner one call to promote
  * somebody first.
  */
-function keepAnOwner(context: MethodContext, project: ProjectRecord, user: UserRecord): void {
+export function keepAnOwner(context: MethodContext, project: ProjectRecord, user: UserRecord): void {
   const current = findProjectMember(context.options.database, project.id, user.id);
   if (current?.role === "owner" && ownerCount(context.options.database, project.id) <= 1) {
     throw new MethodError(
@@ -260,7 +294,7 @@ function keepAnOwner(context: MethodContext, project: ProjectRecord, user: UserR
 }
 
 /** Say who belongs changed: on the project's members topic, and to the account it is about. */
-function announceMembers(
+export function announceMembers(
   context: MethodContext,
   project: ProjectRecord,
   event: TeamProjectMembersEvent,
@@ -506,8 +540,7 @@ export function projectMethods(): TeamMethod[] {
         const project = visibleProject(context, requiredText(read, "project", ID_LIMIT));
         requireOwner(context, project, "change who belongs to it");
         const user = namedAccount(context, read);
-        const role = oneOf(read, "role", PROJECT_ROLES);
-        const areas = areasParam(read);
+        const { role, areas } = grantParam(read);
         const database = context.options.database;
         const before = findProjectMember(database, project.id, user.id);
         if (before?.role === role && (areas === undefined || role !== "editor" || sameAreas(before.areas, areas))) {

@@ -814,6 +814,38 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE project_members ADD COLUMN areas TEXT",
     ],
   },
+  {
+    version: 22,
+    description: "requests for access: a place in a project, or leave to make projects",
+    statements: [
+      // kind is 'project' or 'creator'; project_id is NULL for 'creator'.
+      // role and areas are what was asked (areas a JSON array, NULL for all);
+      // granted_role and granted_areas what an approval gave, which an owner
+      // may have changed. status is pending, approved, denied or withdrawn.
+      `CREATE TABLE access_requests (
+         id             INTEGER PRIMARY KEY AUTOINCREMENT,
+         kind           TEXT    NOT NULL,
+         project_id     TEXT    REFERENCES projects(id) ON DELETE CASCADE,
+         user_id        TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         role           TEXT,
+         areas          TEXT,
+         template       TEXT,
+         message        TEXT,
+         status         TEXT    NOT NULL DEFAULT 'pending',
+         at             INTEGER NOT NULL,
+         decided_by     TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         decided_at     INTEGER,
+         note           TEXT,
+         granted_role   TEXT,
+         granted_areas  TEXT
+       ) STRICT`,
+      // One pending request per account and project (and one to make projects).
+      `CREATE UNIQUE INDEX access_requests_one_pending
+         ON access_requests (user_id, kind, COALESCE(project_id, ''))
+         WHERE status = 'pending'`,
+      "CREATE INDEX access_requests_by_project ON access_requests (project_id, status)",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

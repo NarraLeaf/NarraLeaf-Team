@@ -22,6 +22,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { integerColumn, textColumn, type Row } from "../identity/database.js";
+import { storedProjectAccess } from "../identity/settings.js";
 import { isOperator, type UserRecord } from "../identity/users.js";
 import {
   TEAM_PROJECT_AREAS,
@@ -344,18 +345,20 @@ export function removeProjectMember(database: DatabaseSync, projectId: string, u
 }
 
 /**
- * Make a new project's creator its owner, and every other account an editor.
- *
- * The second half keeps a new project as reachable as one made before roles
- * existed; an owner narrows it afterwards. A setting that makes new projects
- * start with their creator alone is planned beside the console.
+ * Make a new project's creator its owner, and give every other account what
+ * project.default_access says: an editor by default, which keeps a new project
+ * as reachable as one made before roles existed; a viewer; or nothing, so the
+ * project starts with its creator alone and others join by being added or asking.
  */
 export function seedProjectMembers(database: DatabaseSync, projectId: string, createdBy: string): void {
   const now = Date.now();
+  // Everybody else gets what project.default_access says; its maker owns it regardless.
+  const access = storedProjectAccess(database);
   database
     .prepare(
       `INSERT OR IGNORE INTO project_members (project_id, user_id, role, added_by, added_at)
-       SELECT ?, id, CASE WHEN id = ? THEN 'owner' ELSE 'editor' END, ?, ? FROM users`,
+       SELECT ?, id, CASE WHEN id = ? THEN 'owner' ELSE ? END, ?, ? FROM users
+       WHERE id = ? OR ? <> 'none'`,
     )
-    .run(projectId, createdBy, createdBy, now);
+    .run(projectId, createdBy, access, createdBy, now, createdBy, access);
 }

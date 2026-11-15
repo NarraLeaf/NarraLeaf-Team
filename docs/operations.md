@@ -768,7 +768,14 @@ says who may make a project: everybody, the operators plus the accounts in the
 `admin.users.setCreator`, or the "allow creating projects" button in the web
 console's back office), or the operators alone. `project.delete_by` takes
 `owners` (the default) or `admins`, and says who may take a project off the
-list: any owner of it, or the operators alone. `documents.retain_days` (default 30) is how long a team
+list: any owner of it, or the operators alone. `project.default_access` takes
+`editor` (the default), `viewer` or `none`, and says what everybody else is
+given in a project they were not put in by hand: when a project is made (its
+maker always owns it), and in every project when an account is made. With
+`none` a project starts with its maker alone, and others join by being added
+or by asking (`access.requests.create`; the web console's "join other
+projects"), which its owners or an operator answer. Changing it moves nobody
+already in a project. `documents.retain_days` (default 30) is how long a team
 project's applied edits are kept once a saved version holds them; a Studio away
 longer starts again from the last version, and its offline edits based on
 anything older come back as conflicts.

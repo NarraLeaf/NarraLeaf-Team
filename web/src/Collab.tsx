@@ -587,6 +587,8 @@ const NOTIFICATION_PHRASE: Record<TeamNotification["kind"], Phrase> = {
   assigned: "nAssigned",
   "review-requested": "nReviewRequested",
   "review-answered": "nReviewAnswered",
+  "access-requested": "nAccessRequested",
+  "access-decided": "nAccessDecided",
 };
 
 const KIND_PHRASE: Record<TeamTodoKind, Phrase> = { task: "kindTask", asset: "kindAsset", translation: "kindTranslation", voice: "kindVoice" };
@@ -625,6 +627,9 @@ export function notificationTarget(n: TeamNotification): NotificationTarget {
   if (n.ref?.startsWith("chat:") === true) return { ...(n.project === undefined ? {} : { project: n.project }), tab: "story", chat: true };
   if (n.kind === "assigned") return { ...(n.project === undefined ? {} : { project: n.project }), tab: n.project === undefined ? "me" : "todos" };
   if (n.kind === "review-requested" || n.kind === "review-answered") return { ...(n.project === undefined ? {} : { project: n.project }), tab: "reviews" };
+  // A request waits in its project's settings, or the back office for leave to make projects; an answer lands on the project or the project list.
+  if (n.kind === "access-requested") return n.project === undefined ? { tab: "admin" } : { project: n.project, tab: "settings" };
+  if (n.kind === "access-decided") return n.project === undefined ? { tab: "projects" } : { project: n.project, tab: "overview" };
   return { ...(n.project === undefined ? {} : { project: n.project }), tab: "story" };
 }
 

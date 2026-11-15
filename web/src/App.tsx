@@ -15,6 +15,7 @@ import { Authorize, Device } from "./OAuth";
 import { ProjectPage, WORKBENCH_TABS, type ProjectTab } from "./Project";
 import { Bell, Face, Notifications, Profile, Settings, setFaceSource, useNotifications, type NotificationTarget } from "./Collab";
 import { Admin } from "./Admin";
+import { JoinProjects } from "./Access";
 import { Icon } from "./Icon";
 import { useLook, type TeamLook } from "./look";
 import { Setup, SignIn, TeamMark } from "./SignIn";
@@ -236,7 +237,8 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
       }
     }
     if (target.project !== undefined) openProject(target.project, target.tab);
-    else go({ screen: target.tab === "me" ? "me" : "home" });
+    else if (target.tab === "admin" && account.operator) go({ screen: "admin" });
+    else go({ screen: target.tab === "me" ? "me" : target.tab === "projects" ? "projects" : "home" });
   };
   const name = account.displayName || account.username;
   const workbench = route.screen === "project" && WORKBENCH_TABS.includes(route.tab);
@@ -286,7 +288,7 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
       {route.screen === "me" ? <Profile connection={connection} state={state} account={account} /> : null}
       {route.screen === "notifications" ? <Notifications connection={connection} state={state} open={followNotification} /> : null}
       {route.screen === "settings" ? <Settings connection={connection} state={state} /> : null}
-      {route.screen === "projects" ? <Projects connection={connection} state={state} open={(id) => openProject(id)} /> : null}
+      {route.screen === "projects" ? <Projects connection={connection} state={state} operator={account.operator} open={(id) => openProject(id)} /> : null}
       {route.screen === "project" ? (
         <ProjectPage
           account={account}
@@ -484,16 +486,28 @@ const ROLE_PHRASE: Record<TeamProjectRole, Phrase> = {
   viewer: "roleViewer",
 };
 
-function Projects({ connection, state, open: openProject }: { connection: TeamConnection; state: ConnectionState; open: (id: string) => void }) {
+function Projects({
+  connection,
+  state,
+  operator,
+  open: openProject,
+}: {
+  connection: TeamConnection;
+  state: ConnectionState;
+  operator: boolean;
+  open: (id: string) => void;
+}) {
   const [rows, setRows] = useState<readonly ProjectRow[] | undefined>(undefined);
+  const [mayCreate, setMayCreate] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
   const open = state.kind === "open";
 
   const load = useCallback(() => {
     connection
-      .call<{ projects: ProjectRow[] }>("projects.list")
+      .call<{ projects: ProjectRow[]; mayCreate?: boolean }>("projects.list")
       .then((answer) => {
         setRows(answer.projects);
+        setMayCreate(answer.mayCreate !== false);
         setError(undefined);
       })
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)));
@@ -537,6 +551,7 @@ function Projects({ connection, state, open: openProject }: { connection: TeamCo
           ))}
         </div>
       )}
+      {open ? <JoinProjects connection={connection} operator={operator} mayCreate={mayCreate} /> : null}
     </section>
   );
 }

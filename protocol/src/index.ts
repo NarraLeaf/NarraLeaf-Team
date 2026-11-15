@@ -976,7 +976,13 @@ export type TeamProjectsEvent =
    * taken out. Told to that account alone: read the list again, and the
    * project is on it with its new role, or is not on it any more.
    */
-  | { readonly kind: "project-access-changed"; readonly project: string };
+  | { readonly kind: "project-access-changed"; readonly project: string }
+  /**
+   * An access request was made, answered or withdrawn. Told to whoever asked
+   * and to whoever decides it (the project's owners and the operators, or the
+   * operators alone for leave to make projects): read the requests again.
+   */
+  | { readonly kind: "access-request"; readonly request: TeamAccessRequest };
 
 /* ----------------------------------------------------------- own devices */
 
@@ -1092,7 +1098,16 @@ export type TeamTodosEvent =
 
 /* -------------------------------------------------------- notifications */
 
-export type TeamNotificationKind = "mention" | "reply" | "assigned" | "review-requested" | "review-answered";
+export type TeamNotificationKind =
+  | "mention"
+  | "reply"
+  | "assigned"
+  | "review-requested"
+  | "review-answered"
+  /** Somebody asked for access this account decides on; `ref` is `access:{id}`. */
+  | "access-requested"
+  /** An access request this account made was answered; `ref` is `access:{id}`. */
+  | "access-decided";
 
 /* -------------------------------------------------------------- reviews */
 
@@ -1294,6 +1309,120 @@ export interface TeamProjectMember {
 export type TeamProjectMembersEvent =
   | { readonly kind: "member-set"; readonly member: TeamProjectMember }
   | { readonly kind: "member-removed"; readonly username: string };
+
+/* --------------------------------------------------- permission templates */
+
+/**
+ * A named grant: a role, and for an editor the areas it may change. What an
+ * owner picks instead of ticking boxes one by one, and what somebody asking for
+ * access names. A template is only a shorthand: what is stored is the role and
+ * the areas it stands for, and changing the list later changes nobody's grant.
+ */
+export interface TeamPermissionTemplate {
+  readonly id: string;
+  readonly role: TeamProjectRole;
+  /** For an editor kept to some areas, which ones; absent for all of them. */
+  readonly areas?: readonly TeamProjectArea[];
+}
+
+/**
+ * The templates every Team and every Studio offers, in the order a picker shows
+ * them. Their names are the clients' to translate, by `id`.
+ */
+export const TEAM_PERMISSION_TEMPLATES = [
+  { id: "owner", role: "owner" },
+  { id: "editor", role: "editor" },
+  { id: "writer", role: "editor", areas: ["story", "characters"] },
+  { id: "artist", role: "editor", areas: ["characters", "assets", "ui"] },
+  { id: "translator", role: "editor", areas: ["localization"] },
+  { id: "engineer", role: "editor", areas: ["ui", "config"] },
+  { id: "reviewer", role: "reviewer" },
+  { id: "viewer", role: "viewer" },
+] as const satisfies readonly TeamPermissionTemplate[];
+
+export type TeamPermissionTemplateId = (typeof TEAM_PERMISSION_TEMPLATES)[number]["id"];
+
+/** The template of an id, or undefined for one this build does not know. */
+export function teamPermissionTemplate(id: string): TeamPermissionTemplate | undefined {
+  return (TEAM_PERMISSION_TEMPLATES as readonly TeamPermissionTemplate[]).find((template) => template.id === id);
+}
+
+/**
+ * The template a grant is exactly, or undefined when it is none of them. An
+ * editor's areas are compared as a set; a list naming every area is all of them.
+ */
+export function teamTemplateOf(
+  role: TeamProjectRole,
+  areas?: readonly TeamProjectArea[],
+): (TeamPermissionTemplate & { readonly id: TeamPermissionTemplateId }) | undefined {
+  const all = (list?: readonly TeamProjectArea[]) => list === undefined || TEAM_PROJECT_AREAS.every((area) => list.includes(area));
+  return (TEAM_PERMISSION_TEMPLATES as readonly (TeamPermissionTemplate & { readonly id: TeamPermissionTemplateId })[]).find((template) => {
+    if (template.role !== role) return false;
+    if (role !== "editor") return true;
+    if (all(template.areas) || all(areas)) return all(template.areas) && all(areas);
+    const mine = new Set(areas);
+    return template.areas?.length === mine.size && template.areas.every((area) => mine.has(area));
+  });
+}
+
+/* -------------------------------------------------------- access requests */
+
+/**
+ * What somebody may ask for: a place in a project, or more of one (`project`),
+ * which that project's owners decide; or leave to make projects (`creator`),
+ * which the operators decide, and which is only asked for where
+ * `project.create_by` is `creators`.
+ */
+export const TEAM_ACCESS_REQUEST_KINDS = ["project", "creator"] as const;
+export type TeamAccessRequestKind = (typeof TEAM_ACCESS_REQUEST_KINDS)[number];
+
+/**
+ * `pending` waits on whoever decides; `approved` and `denied` are their answer;
+ * `withdrawn` is the person who asked taking it back. Only a pending request
+ * changes, and an account has at most one pending request per project (and one
+ * to make projects): asking again replaces what it asked before.
+ */
+export const TEAM_ACCESS_REQUEST_STATUSES = ["pending", "approved", "denied", "withdrawn"] as const;
+export type TeamAccessRequestStatus = (typeof TEAM_ACCESS_REQUEST_STATUSES)[number];
+
+/** The longest message a request, or an answer to one, carries, in bytes. */
+export const ACCESS_REQUEST_MESSAGE_LIMIT = 1000;
+
+export interface TeamAccessRequest {
+  readonly id: number;
+  readonly kind: TeamAccessRequestKind;
+  /** The project asked about, for a `project` request. */
+  readonly project?: string;
+  /** Its name, so somebody who cannot see it yet still reads what they asked for. */
+  readonly projectName?: string;
+  /** Who asked, by username. */
+  readonly requester: string;
+  readonly requesterName?: string;
+  /** For a `project` request: the role asked for, and for an editor its areas (absent for all). */
+  readonly role?: TeamProjectRole;
+  readonly areas?: readonly TeamProjectArea[];
+  /** The template it was asked by, when it was. */
+  readonly template?: string;
+  /** The role the requester holds now, for a `project` request; absent for none. */
+  readonly currentRole?: TeamProjectRole;
+  readonly message?: string;
+  readonly status: TeamAccessRequestStatus;
+  readonly at: number;
+  /** Who answered, by username, and when, and what they said. */
+  readonly decidedBy?: string;
+  readonly decidedAt?: number;
+  readonly note?: string;
+  /** For an approved `project` request: what was granted, which an owner may have changed. */
+  readonly grantedRole?: TeamProjectRole;
+  readonly grantedAreas?: readonly TeamProjectArea[];
+}
+
+/** A project somebody has no role in, as much as they need to ask to join it. */
+export interface TeamDiscoverableProject {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+}
 
 /* ------------------------------------------------------- administration */
 
@@ -1673,11 +1802,34 @@ export const TEAM_METHODS = {
   projectsMembersList: "projects.members.list",
   /**
    * Give an account a role in a project, or change it, and for an editor the
-   * areas it may change (`areas`: a list, or null for all). Owners only.
+   * areas it may change (`areas`: a list, or null for all), or both at once by
+   * a permission `template`. Owners only.
    */
   projectsMembersSet: "projects.members.set",
   /** Take an account out of a project. Owners only; never the last owner. */
   projectsMembersRemove: "projects.members.remove",
+  /**
+   * The projects the caller has no role in, by name, so it can ask to join one.
+   */
+  projectsDiscover: "projects.discover",
+  /**
+   * The caller's own access requests, and those it decides on (a project's
+   * owners its requests; the operators every one). Pending ones unless `all`.
+   */
+  accessRequestsList: "access.requests.list",
+  /**
+   * Ask for a place in a project or more of one (`kind: "project"`, by
+   * `template` or `role` and `areas`), or for leave to make projects
+   * (`kind: "creator"`). Replaces the caller's own pending request for the same.
+   */
+  accessRequestsCreate: "access.requests.create",
+  /**
+   * Approve or deny a pending request, with a `note`. A project's owner may
+   * grant something other than what was asked, by `template` or `role` and `areas`.
+   */
+  accessRequestsDecide: "access.requests.decide",
+  /** Take back one's own pending request. */
+  accessRequestsWithdraw: "access.requests.withdraw",
   /** Change a project's name, description, or who may save and restore its versions. Owners only. */
   projectsUpdate: "projects.update",
   /** The webhooks that post one project's events. Its owners. */
@@ -1902,6 +2054,7 @@ export const CONTRACT = {
     adminKeys: TOPIC_ADMIN_KEYS,
     adminRefusals: TOPIC_ADMIN_REFUSALS,
   },
+  permissionTemplates: TEAM_PERMISSION_TEMPLATES,
   frames: {
     fromServer: TEAM_SERVER_FRAME_KINDS,
     fromClient: TEAM_CLIENT_FRAME_KINDS,
@@ -1910,6 +2063,7 @@ export const CONTRACT = {
     anchorField: ANCHOR_FIELD_LIMIT,
     commentBody: COMMENT_BODY_LIMIT,
     chatBody: CHAT_BODY_LIMIT,
+    accessRequestMessage: ACCESS_REQUEST_MESSAGE_LIMIT,
     suggestion: SUGGESTION_LIMIT,
     overlayBody: OVERLAY_BODY_LIMIT,
     livePayload: LIVE_PAYLOAD_LIMIT,

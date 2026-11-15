@@ -114,6 +114,7 @@ describe("migrate", () => {
       database.exec("DROP TABLE oauth_codes");
       database.exec("DROP TABLE oauth_devices");
       database.exec("DROP TABLE web_sessions");
+      database.exec("DROP TABLE access_requests");
       database.exec("DROP TABLE project_members");
       // Back to before project roles (migration 12), whatever came after.
       database.prepare("DELETE FROM schema_version WHERE version >= ?").run(12);

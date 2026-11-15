@@ -68,13 +68,16 @@ import {
   PUBLISH_LINEAGE_KEY,
   PROJECT_CREATE_KEY,
   PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
   DOCUMENT_RETENTION_KEY,
   setProjectCreators,
   setProjectDeleters,
+  setProjectAccess,
   setRetentionDays,
   storedRetentionDays,
   InvalidProjectCreatorsError,
   InvalidProjectDeletersError,
+  InvalidProjectAccessError,
   InvalidDocumentRetentionError,
   SERVER_NAME_KEY,
   isAccent,
@@ -755,6 +758,8 @@ export function adminMethods(): TeamMethod[] {
           setProjectCreators(context.options.database, value);
         } else if (key === PROJECT_DELETE_KEY) {
           setProjectDeleters(context.options.database, value);
+        } else if (key === PROJECT_ACCESS_KEY) {
+          setProjectAccess(context.options.database, value);
         } else if (key === DOCUMENT_RETENTION_KEY) {
           setRetentionDays(context.options.database, value);
         } else if (key === COLLABORATION_KEY) {
@@ -796,6 +801,7 @@ export function adminMethods(): TeamMethod[] {
           error instanceof InvalidCollaborationModeError ||
           error instanceof InvalidProjectCreatorsError ||
           error instanceof InvalidProjectDeletersError ||
+          error instanceof InvalidProjectAccessError ||
           error instanceof InvalidDocumentRetentionError
         ) {
           // Every way a value can be the wrong value, answered as the caller's

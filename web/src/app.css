@@ -1434,3 +1434,115 @@ button.danger {
 button.danger:hover:not(:disabled) {
   filter: brightness(1.08);
 }
+
+/* ---------------------------------------------------- access requests */
+
+.request-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.request-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--nl-control-border);
+  border-radius: var(--nl-radius);
+}
+
+.request-row.settled {
+  opacity: 0.8;
+}
+
+.request-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  flex: 1;
+}
+
+.request-message {
+  margin: 4px 0 0;
+  font-style: italic;
+}
+
+.request-actions,
+.ask-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.request-actions input,
+.request-actions select,
+.ask-form select,
+.ask-form textarea,
+.project-members select {
+  padding: 5px 8px;
+  border-radius: var(--nl-radius);
+  border: 1px solid var(--nl-control-border);
+  background: var(--nl-control-fill);
+  color: rgb(var(--nl-fg));
+  font: inherit;
+}
+
+.request-note {
+  min-width: 160px;
+}
+
+.ask-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 260px;
+  max-width: 420px;
+}
+
+.ask-form textarea {
+  resize: vertical;
+}
+
+.ask-popover {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: calc(100% + 6px);
+  padding: 12px;
+}
+
+.project-actions {
+  position: relative;
+}
+
+.join-projects {
+  margin-top: 28px;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.req-status {
+  font-weight: 600;
+}
+
+.req-approved {
+  color: rgb(46 160 90);
+}
+
+.req-denied {
+  color: rgb(210 70 70);
+}

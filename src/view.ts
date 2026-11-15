@@ -28,9 +28,11 @@ import {
   PUBLISH_LINEAGE_KEY,
   PROJECT_CREATE_KEY,
   PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
   DOCUMENT_RETENTION_KEY,
   storedProjectCreators,
   storedProjectDeleters,
+  storedProjectAccess,
   storedRetentionDays,
   SERVER_NAME_KEY,
   storedCollaboration,
@@ -80,6 +82,7 @@ export const COLLABORATION_SETTING = "collaboration";
 export const PUBLISH_LINEAGE_SETTING = "repeat publishes";
 export const PROJECT_CREATE_SETTING = "who makes projects";
 export const PROJECT_DELETE_SETTING = "who removes projects";
+export const PROJECT_ACCESS_SETTING = "others in a new project";
 export const DOCUMENT_RETENTION_SETTING = "edit log kept (days)";
 export const SIGN_IN_SETTING = "sign-in token";
 export const REPOSITORY_SETTING = "repository token";
@@ -106,6 +109,8 @@ export function settingKeyOf(label: string): SettingKey | undefined {
       return PROJECT_CREATE_KEY;
     case PROJECT_DELETE_SETTING:
       return PROJECT_DELETE_KEY;
+    case PROJECT_ACCESS_SETTING:
+      return PROJECT_ACCESS_KEY;
     case DOCUMENT_RETENTION_SETTING:
       return DOCUMENT_RETENTION_KEY;
     case SIGN_IN_SETTING:
@@ -231,6 +236,14 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       // A project's own owners, or the operators alone.
       value: storedProjectDeleters(database),
       stored: isSettingStored(database, PROJECT_DELETE_KEY),
+      editable: true,
+    },
+    {
+      group: "server",
+      label: PROJECT_ACCESS_SETTING,
+      // What everybody but its maker is given in a new project: editor, viewer or none.
+      value: storedProjectAccess(database),
+      stored: isSettingStored(database, PROJECT_ACCESS_KEY),
       editable: true,
     },
     {

@@ -14,6 +14,7 @@ import { fetchJson, fetchTree, type Tree } from "./files";
 import { t } from "./i18n";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
+import { AccessRequestsToDecide } from "./Access";
 import type { TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -239,6 +240,8 @@ export function ProjectSettings(props: {
         </button>
         {note !== undefined ? <span className="muted small"> {note}</span> : null}
       </form>
+      <h2>{t("reqTitle")}</h2>
+      <AccessRequestsToDecide connection={connection} project={project.id} />
       <h2>{t("membersTitle")}</h2>
       <ProjectMembers connection={connection} projectId={project.id} />
       <h2>{t("projectWebhooks")}</h2>

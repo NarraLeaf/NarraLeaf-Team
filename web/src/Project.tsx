@@ -41,6 +41,7 @@ import type { ConsoleAccount } from "./api";
 import { language, t, type Phrase } from "./i18n";
 import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, type Revision } from "./Production";
 import { CompareWithNow, OnlineNow, ProjectSettings } from "./Versions";
+import { AskForMore } from "./Access";
 import type { TeamConnection, ConnectionState } from "./socket";
 
 export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "settings";
@@ -240,6 +241,7 @@ export function ProjectPage(props: {
           {project?.role === undefined ? null : <span className={`role role-${project.role}`}>{t(roleKey(project.role))}</span>}
         </div>
         <div className="project-actions">
+          {project === undefined ? null : <AskForMore connection={connection} project={projectId} role={project.role} />}
           <button className="button-outline studio-button" onClick={() => void openInStudio(projectId)}>
             <Icon name="external" />
             <span>{t("openInStudio")}</span>

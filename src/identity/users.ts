@@ -19,6 +19,7 @@ import {
   type Row,
 } from "./database.js";
 import { MalformedPasswordHashError, type PasswordHasher } from "./passwords.js";
+import { storedProjectAccess } from "./settings.js";
 
 /** One account. */
 export interface UserRecord {
@@ -500,16 +501,20 @@ export function insertUser(database: DatabaseSync, prepared: PreparedUser): void
     for (const group of prepared.groups) {
       addGroup.run(prepared.id, group);
     }
-    // An editor of every project, so a new account reaches what an account made
-    // before project roles did. Written here rather than through
-    // src/projects/members.ts, which reads this module, and inside the same
-    // statement group so the account and its memberships arrive together.
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO project_members (project_id, user_id, role, added_by, added_at)
-         SELECT id, ?, 'editor', NULL, ? FROM projects`,
-      )
-      .run(prepared.id, prepared.createdAt);
+    // What project.default_access gives: an editor of every project by
+    // default, so a new account reaches what an account made before project
+    // roles did; a viewer; or nothing, to join by asking. Written here rather
+    // than through src/projects/members.ts, which reads this module, and inside
+    // the same statement group so the account and its memberships arrive together.
+    const access = storedProjectAccess(database);
+    if (access !== "none") {
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO project_members (project_id, user_id, role, added_by, added_at)
+           SELECT id, ?, ?, NULL, ? FROM projects`,
+        )
+        .run(prepared.id, access, prepared.createdAt);
+    }
   } catch (error) {
     // SQLite reports the collision as a constraint failure naming the column.
     // Turning it into a sentence here keeps the caller from having to read
