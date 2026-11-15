@@ -4,7 +4,8 @@
  * What is stored and who may change it is decided in src/collab/; this file
  * reads parameters, asks, announces, notifies and tells the webhooks.
  */
-import { notify } from "../../collab/notifications.js";
+import { ChatRefusal, deleteChat, listChat, sendChat } from "../../collab/chat.js";
+import { mentionedAccounts, notify } from "../../collab/notifications.js";
 import { recordActivity } from "../../collab/activity.js";
 import {
   createMilestone,
@@ -41,11 +42,13 @@ import {
 import {
   accountNotificationsTopic,
   ANCHOR_FIELD_LIMIT,
+  projectChatTopic,
   projectMilestonesTopic,
   projectReviewsTopic,
   TEAM_METHODS,
   TEAM_WEBHOOK_EVENTS,
   TEAM_WEBHOOK_FORMATS,
+  type TeamChatEvent,
   type TeamMilestonesEvent,
   type TeamNotification,
   type TeamReviewsEvent,
@@ -73,7 +76,7 @@ function accountNamed(context: MethodContext, username: string): UserRecord {
 }
 
 function refused(error: unknown): never {
-  if (error instanceof ReviewRefusal || error instanceof MilestoneRefusal || error instanceof WebhookRefusal) {
+  if (error instanceof ReviewRefusal || error instanceof MilestoneRefusal || error instanceof WebhookRefusal || error instanceof ChatRefusal) {
     throw new MethodError(error.code, error.message);
   }
   throw error;
@@ -91,6 +94,74 @@ function requireOperator(context: MethodContext): void {
 
 export function productionMethods(): TeamMethod[] {
   return [
+    {
+      name: TEAM_METHODS.chatList,
+      capability: "chat",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
+        const before = read["cursor"];
+        if (before !== undefined && (typeof before !== "number" || !Number.isInteger(before))) {
+          throw new MethodError("bad-params", "cursor has to be the number a page answered with");
+        }
+        const limit = read["limit"];
+        const count = typeof limit === "number" && Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 200) : 50;
+        try {
+          return listChat(context.options.database, context.user, projectId, { ...(before === undefined ? {} : { before: before as number }), limit: count });
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.chatSend,
+      capability: "chat",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
+        const body = read["body"];
+        if (typeof body !== "string") throw new MethodError("bad-params", "a message has a body");
+        let message;
+        try {
+          message = sendChat(context.options.database, context.user, projectId, body);
+        } catch (error) {
+          refused(error);
+        }
+        context.publish(projectChatTopic(projectId), { kind: "chat-message", message } satisfies TeamChatEvent);
+        // Somebody named in a message hears about it, as in a comment.
+        const named = mentionedAccounts(context.options.database, message.body).map((user) => user.id);
+        if (named.length > 0) {
+          tellAccounts(
+            context,
+            notify(context.options.database, named, {
+              kind: "mention",
+              projectId,
+              ref: `chat:${message.id}`,
+              actorId: context.user.id,
+              summary: message.body,
+            }),
+          );
+        }
+        return { message };
+      },
+    },
+    {
+      name: TEAM_METHODS.chatDelete,
+      capability: "chat",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const id = read["message"];
+        if (typeof id !== "number" || !Number.isInteger(id)) throw new MethodError("bad-params", "message is a message's id");
+        let record;
+        try {
+          record = deleteChat(context.options.database, context.user, id);
+        } catch (error) {
+          refused(error);
+        }
+        context.publish(projectChatTopic(record.projectId), { kind: "chat-deleted", id, project: record.projectId } satisfies TeamChatEvent);
+        return {};
+      },
+    },
     {
       name: TEAM_METHODS.reviewsList,
       capability: "reviews",

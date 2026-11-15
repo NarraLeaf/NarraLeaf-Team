@@ -5,7 +5,9 @@
  * Every step announces itself, because the first one can take a minute on a
  * slow connection and a silent program is indistinguishable from a stuck one.
  */
+import { createServer, type IncomingMessage, type RequestListener, type Server } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
+import type { Duplex } from "node:stream";
 
 import type { WriteText } from "./cli.js";
 import type { GrpcServer } from "./grpc/server.js";
@@ -25,6 +27,7 @@ import { discoveryDocument, type DiscoverySource } from "./identity/discovery.js
 import { KeyStore } from "./identity/keys.js";
 import { identityLayout } from "./identity/layout.js";
 import { storedRetentionDays, namedTokenLifetimes, persistIdentity } from "./identity/settings.js";
+import { issueSetupCode } from "./identity/settings.js";
 import { countUsers } from "./identity/users.js";
 import { prepareLoreEnvironment } from "./lore/environment.js";
 import {
@@ -188,6 +191,7 @@ export async function up(
   let supervisor: Supervisor | undefined;
   let endpoint: IdentityEndpoint | undefined;
   let authorizationTls: GrpcServer | undefined;
+  let devConsole: Server | undefined;
   let database: DatabaseSync | undefined;
   let readings: ProjectReadings | undefined;
   let projectAuthorities: ProjectAuthorities | undefined;
@@ -486,6 +490,20 @@ export async function up(
       version: VERSION,
     };
 
+    const pages = webHandler(() => discoveryDocument(discovery), {
+      identity: identityRoutes,
+      studio,
+      blobs: { store: blobStore, presence: socket.presence, service: studio },
+      console: { service: studio, root: consoleRoot() },
+    });
+    const upgradeTeam = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+      if (team?.handleUpgrade(request, socket, head) === true) {
+        return;
+      }
+      // Still speaking HTTP at this point, so this is a status and a sentence
+      // rather than a dropped socket. See src/team/endpoint.ts.
+      refuseUpgrade(socket, 404, "nothing at that address accepts a WebSocket");
+    };
     authorizationTls = await startAuthorizationService({
       ...service,
       port: config.authTlsPort,
@@ -501,21 +519,10 @@ export async function up(
           ? {}
           : { forNames: { cert: supplied.certPem, key: supplied.keyPem } }),
       },
-      http1: webHandler(() => discoveryDocument(discovery), {
-        identity: identityRoutes,
-        studio,
-        blobs: { store: blobStore, presence: socket.presence, service: studio },
-        console: { service: studio, root: consoleRoot() },
-      }),
-      upgrade: (request, socket, head) => {
-        if (team?.handleUpgrade(request, socket, head) === true) {
-          return;
-        }
-        // Still speaking HTTP at this point, so this is a status and a sentence
-        // rather than a dropped socket. See src/team/endpoint.ts.
-        refuseUpgrade(socket, 404, "nothing at that address accepts a WebSocket");
-      },
+      http1: pages,
+      upgrade: upgradeTeam,
     });
+    devConsole = await startDevConsole(process.env, pages, upgradeTeam, stdout);
     stdout(
       `auth endpoint on port ${config.authTlsPort} of every interface, over TLS, ` +
         `reached as ${authUrl(config)}\n`,
@@ -675,7 +682,7 @@ export async function up(
 
     // Last, so that it is the thing left on the screen rather than something
     // scrolled away by a download.
-    printFirstAccountNotice(database, identity.root, stdout);
+    printFirstAccountNotice(database, identity.root, authUrl(config), stdout);
 
     stdout("press Ctrl-C to stop\n");
 
@@ -715,6 +722,10 @@ export async function up(
     if (endpoint !== undefined) {
       await endpoint.close();
     }
+    if (devConsole !== undefined) {
+      devConsole.closeAllConnections();
+      await new Promise<void>((resolve) => devConsole?.close(() => resolve()));
+    }
     if (authorizationTls !== undefined) {
       await authorizationTls.close();
     }
@@ -744,15 +755,56 @@ export async function up(
 function printFirstAccountNotice(
   database: DatabaseSync,
   root: string,
+  url: string,
   stdout: WriteText,
 ): void {
   if (countUsers(database) > 0) {
     return;
   }
+  // A fresh code on every start: one printed by an earlier run, scrolled away
+  // in some other terminal, should not stay good for ever.
+  const code = issueSetupCode(database);
   stdout("\n");
-  stdout("This server has no accounts. Make the first one, from another terminal:\n");
+  stdout("This server has no accounts. Set it up in a browser:\n");
+  stdout("\n");
+  stdout(`    ${url}/console/setup    setup code: ${code}\n`);
+  stdout("\n");
+  stdout("or make the first account from another terminal:\n");
   stdout("\n");
   stdout(`    nlteam init <username> --root ${root}\n`);
   stdout("\n");
-  stdout("It joins the admin group, and reads its password from standard input.\n");
+  stdout("Either way it joins the admin group.\n");
+}
+
+/**
+ * A plain-HTTP copy of the console on the loopback, for working on the page.
+ *
+ * Only when `NLTEAM_DEV_CONSOLE_PORT` names a port, and only on 127.0.0.1: a
+ * browser on this machine can then open the console without trusting this
+ * server's own certificate authority first. It serves exactly what the TLS
+ * listener serves - the same handler, the same socket - so nothing behaves
+ * differently there; browsers treat the loopback as a secure origin, so the
+ * session cookie still works.
+ */
+async function startDevConsole(
+  env: NodeJS.ProcessEnv,
+  pages: RequestListener,
+  upgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => void,
+  stdout: WriteText,
+): Promise<Server | undefined> {
+  const named = env["NLTEAM_DEV_CONSOLE_PORT"];
+  if (named === undefined || named === "") return undefined;
+  const port = Number(named);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    stdout(`NLTEAM_DEV_CONSOLE_PORT is not a port (${named}); no development console\n`);
+    return undefined;
+  }
+  const server = createServer(pages);
+  server.on("upgrade", upgrade);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => resolve());
+  });
+  stdout(`development console on http://127.0.0.1:${port}/console/ (loopback only, plain HTTP)\n`);
+  return server;
 }

@@ -459,6 +459,7 @@ describe("opening a session", () => {
     expect([...(client.hello?.capabilities ?? [])].sort()).toEqual([
       "activity",
       "admin",
+      "chat",
       "clients",
       "comments",
       "live",

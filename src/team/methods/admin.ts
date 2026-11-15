@@ -76,6 +76,12 @@ import {
   SERVER_NAME_KEY,
   isAccent,
   setBrandAccent,
+  isSigninLayout,
+  setSigninLayout,
+  setWatermark,
+  storedSigninLook,
+  storedWatermark,
+  WATERMARK_TEXT_LIMIT,
   storedBrand,
   setCollaboration,
   setPublishLineage,
@@ -967,7 +973,35 @@ export function adminMethods(): TeamMethod[] {
         }
         setBrandAccent(context.options.database, accent as string | null);
       }
-      return { brand: storedBrand(context.options.database) };
+      const layout = read["signinLayout"];
+      if (layout !== undefined) {
+        if (typeof layout !== "string" || !isSigninLayout(layout)) {
+          throw new MethodError("bad-params", "signinLayout is center, left or right");
+        }
+        setSigninLayout(context.options.database, layout);
+      }
+      const watermark = read["watermark"];
+      if (watermark !== undefined) {
+        if (typeof watermark !== "object" || watermark === null || Array.isArray(watermark)) {
+          throw new MethodError("bad-params", "watermark is an object of enabled and text");
+        }
+        const change = watermark as Record<string, unknown>;
+        if (change["enabled"] !== undefined && typeof change["enabled"] !== "boolean") {
+          throw new MethodError("bad-params", "watermark.enabled is true or false");
+        }
+        if (change["text"] !== undefined && (typeof change["text"] !== "string" || [...change["text"]].length > WATERMARK_TEXT_LIMIT)) {
+          throw new MethodError("bad-params", `watermark.text is at most ${WATERMARK_TEXT_LIMIT} characters`);
+        }
+        setWatermark(context.options.database, {
+          ...(change["enabled"] === undefined ? {} : { enabled: change["enabled"] as boolean }),
+          ...(change["text"] === undefined ? {} : { text: change["text"] as string }),
+        });
+      }
+      return {
+        brand: storedBrand(context.options.database),
+        signin: storedSigninLook(context.options.database),
+        watermark: storedWatermark(context.options.database),
+      };
     }),
   ];
 }

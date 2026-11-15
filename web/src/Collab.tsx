@@ -22,14 +22,18 @@ import {
 } from "@narraleaf/team-protocol";
 
 import type { ConsoleAccount } from "./api";
-import { t, type Phrase } from "./i18n";
+import { AvatarCropper } from "./Cropper";
+import { Icon } from "./Icon";
+import { studioConnectLink } from "./studioLink";
+import { chooseLanguage, chosenLanguage, t, type Language, type Phrase } from "./i18n";
+import { chooseTheme, chosenTheme, type ThemeChoice } from "./theme";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
 }
 
-function ago(at: number): string {
+export function ago(at: number): string {
   const seconds = Math.round((Date.now() - at) / 1000);
   const format = new Intl.RelativeTimeFormat(navigator.language, { numeric: "auto" });
   if (seconds < 60) return format.format(-seconds, "second");
@@ -39,10 +43,64 @@ function ago(at: number): string {
   return new Date(at).toLocaleDateString();
 }
 
+/*
+ * Faces by username. Most places only know who did something, not where their
+ * picture is, so a face asks for the profile once per username and every face
+ * of that person shares the answer.
+ */
+let faceSource: TeamConnection | undefined;
+const faceAsked = new Set<string>();
+const faceKnown = new Map<string, string | undefined>();
+const faceListeners = new Set<() => void>();
+
+/** The socket faces ask through; the shell sets it once it has one. */
+export function setFaceSource(connection: TeamConnection): void {
+  if (faceSource === connection) return;
+  faceSource = connection;
+  faceAsked.clear();
+  faceKnown.clear();
+}
+
+/** Ask again for a username's picture, as after it changes. */
+export function forgetFace(username: string): void {
+  faceAsked.delete(username);
+  faceKnown.delete(username);
+  for (const listener of faceListeners) listener();
+}
+
+function useAvatarOf(username: string | undefined): string | undefined {
+  const [, redraw] = useState(0);
+  useEffect(() => {
+    const listener = () => redraw((n) => n + 1);
+    faceListeners.add(listener);
+    return () => void faceListeners.delete(listener);
+  }, []);
+  useEffect(() => {
+    if (username === undefined || faceSource === undefined || faceAsked.has(username)) return;
+    faceAsked.add(username);
+    faceSource
+      .call<{ profile: TeamProfile }>("account.profile.get", { username })
+      .then(
+        (answer) => {
+          faceKnown.set(username, answer.profile.avatarUrl);
+          for (const listener of faceListeners) listener();
+        },
+        (caught: unknown) => {
+          // Not connected yet: ask again on a later draw. Anything else is an answer.
+          if (caught instanceof Error && caught.message === "not connected") faceAsked.delete(username);
+          else faceKnown.set(username, undefined);
+        },
+      );
+  });
+  return username === undefined ? undefined : faceKnown.get(username);
+}
+
 /** A face: the account's picture, or a letter in the name's own colour. */
-export function Face({ name, url, size = 26 }: { name: string; url?: string | undefined; size?: number }) {
-  if (url !== undefined) {
-    return <img className="avatar" src={url} alt="" width={size} height={size} style={{ width: size, height: size }} />;
+export function Face({ name, url, user, size = 26 }: { name: string; url?: string | undefined; user?: string | undefined; size?: number }) {
+  const looked = useAvatarOf(url === undefined ? user : undefined);
+  const picture = url ?? looked;
+  if (picture !== undefined) {
+    return <img className="avatar" src={picture} alt="" width={size} height={size} style={{ width: size, height: size }} />;
   }
   let hash = 0;
   for (const char of name) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) % 360;
@@ -92,7 +150,7 @@ function Heatmap({ days }: { days: readonly TeamActivityDay[] }) {
 
 /* -------------------------------------------------------------- timeline */
 
-const ACTIVITY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
+export const ACTIVITY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
   commit: "aCommit",
   thread: "aThread",
   comment: "aComment",
@@ -240,8 +298,29 @@ export function Todos({
     connection.call("todos.update", { todo: todo.id, ...fields }).catch((caught: unknown) => setError(errorText(caught)));
   const remove = (todo: TeamTodo) => connection.call("todos.delete", { todo: todo.id }).catch((caught: unknown) => setError(errorText(caught)));
 
+  const [dragging, setDragging] = useState<string | undefined>(undefined);
+  const [over, setOver] = useState<TeamTodoStatus | undefined>(undefined);
+  const dropOn = (status: TeamTodoStatus) => {
+    const todo = todos?.find((one) => one.id === dragging);
+    setDragging(undefined);
+    setOver(undefined);
+    if (todo !== undefined && todo.status !== status) void update(todo, { status });
+  };
   const card = (todo: TeamTodo) => (
-    <li key={todo.id} className={`todo status-${todo.status}`}>
+    <li
+      key={todo.id}
+      className={`todo status-${todo.status}${dragging === todo.id ? " dragging" : ""}`}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", todo.id);
+        setDragging(todo.id);
+      }}
+      onDragEnd={() => {
+        setDragging(undefined);
+        setOver(undefined);
+      }}
+    >
       <button
         className="todo-check"
         title={t(STATUS_PHRASE[NEXT_STATUS[todo.status]])}
@@ -328,7 +407,7 @@ export function Todos({
       ) : todos.length === 0 ? (
         <p className="placeholder-card">{t("noTodos")}</p>
       ) : project === undefined ? (
-        <ul className="todo-list">{todos.map(card)}</ul>
+        <Board todos={todos} card={card} over={over} setOver={setOver} dropOn={dropOn} />
       ) : (
         <>
         <nav className="kind-filter">
@@ -342,16 +421,7 @@ export function Todos({
         {(() => {
           const shown = only === "all" ? todos : todos.filter((todo) => (todo.kind ?? "task") === only);
           return (
-        <div className="board">
-          {(["open", "doing", "done"] as const).map((status) => (
-            <section key={status} className="board-column">
-              <div className="outline-title">
-                {t(STATUS_PHRASE[status])} {shown.filter((todo) => todo.status === status).length}
-              </div>
-              <ul className="todo-list">{shown.filter((todo) => todo.status === status).map(card)}</ul>
-            </section>
-          ))}
-        </div>
+        <Board todos={shown} card={card} over={over} setOver={setOver} dropOn={dropOn} />
           );
         })()}
         </>
@@ -360,9 +430,53 @@ export function Todos({
   );
 }
 
+/** Three columns a card can be dragged between, or moved with its check button. */
+function Board({
+  todos,
+  card,
+  over,
+  setOver,
+  dropOn,
+}: {
+  todos: readonly TeamTodo[];
+  card: (todo: TeamTodo) => React.ReactNode;
+  over: TeamTodoStatus | undefined;
+  setOver: (status: TeamTodoStatus | undefined) => void;
+  dropOn: (status: TeamTodoStatus) => void;
+}) {
+  return (
+    <div className="board">
+      {(["open", "doing", "done"] as const).map((status) => (
+        <section
+          key={status}
+          className={over === status ? "board-column drop-here" : "board-column"}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            if (over !== status) setOver(status);
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(undefined);
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            dropOn(status);
+          }}
+        >
+          <div className="board-head">
+            <span>{t(STATUS_PHRASE[status])}</span>
+            <span className="muted small">{todos.filter((todo) => todo.status === status).length}</span>
+          </div>
+          <ul className="todo-list">{todos.filter((todo) => todo.status === status).map(card)}</ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------- home */
 
-export function Home({ connection, state, account }: { connection: TeamConnection; state: ConnectionState; account: ConsoleAccount }) {
+export function Profile({ connection, state, account }: { connection: TeamConnection; state: ConnectionState; account: ConsoleAccount }) {
   const open = state.kind === "open";
   const accountId = state.kind === "open" ? state.hello.account.id : undefined;
   const [days, setDays] = useState<readonly TeamActivityDay[]>([]);
@@ -383,25 +497,56 @@ export function Home({ connection, state, account }: { connection: TeamConnectio
       .then((answer) => setNames(new Map(answer.projects.map((p) => [p.id, p.name]))))
       .catch(() => undefined);
   }, [open, connection]);
+  const name = account.displayName || account.username;
   return (
-    <section className="home">
-      <header className="home-head">
-        <Face name={account.displayName || account.username} url={profile?.avatarUrl} size={56} />
-        <div>
-          <h1>{t("welcome", { name: account.displayName || account.username })}</h1>
-          {profile?.bio ? <p className="muted">{profile.bio}</p> : <p className="muted">@{account.username}</p>}
+    <section className="profile-page">
+      <aside className="profile-card">
+        <Face name={name} url={profile?.avatarUrl} size={112} />
+        <div className="profile-names">
+          <h1>{name}</h1>
+          <span className="muted">@{account.username}</span>
         </div>
-      </header>
-      <Heatmap days={days} />
-      <div className="home-columns">
-        <div>
-          <h2>{t("timeline")}</h2>
-          <Timeline connection={connection} open={open} account={account.username} projectNames={names} />
-        </div>
-        <div>
+        {profile?.bio ? <p className="profile-bio">{profile.bio}</p> : null}
+        <a className="button-outline" href="/console/settings" onClick={(event) => {
+          event.preventDefault();
+          window.history.pushState(null, "", "/console/settings");
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        }}>
+          {t("editProfile")}
+        </a>
+        {names.size > 0 ? (
+          <div className="profile-projects">
+            <h2 className="muted small">{t("myProjects")}</h2>
+            {[...names.entries()].map(([id, projectName]) => (
+              <a
+                key={id}
+                className="profile-project"
+                href={`/console/p/${encodeURIComponent(id)}/overview`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  window.history.pushState(null, "", `/console/p/${encodeURIComponent(id)}/overview`);
+                  window.dispatchEvent(new PopStateEvent("popstate"));
+                }}
+              >
+                {projectName}
+              </a>
+            ))}
+          </div>
+        ) : null}
+      </aside>
+      <div className="profile-main">
+        <section>
+          <h2>{t("contributionsTitle")}</h2>
+          <Heatmap days={days} />
+        </section>
+        <section>
           <h2>{t("myTodos")}</h2>
           <Todos connection={connection} open={open} account={{ ...account, ...(accountId === undefined ? {} : { id: accountId }) }} />
-        </div>
+        </section>
+        <section>
+          <h2>{t("timeline")}</h2>
+          <Timeline connection={connection} open={open} account={account.username} projectNames={names} />
+        </section>
       </div>
     </section>
   );
@@ -447,11 +592,14 @@ const NOTIFICATION_PHRASE: Record<TeamNotification["kind"], Phrase> = {
 const KIND_PHRASE: Record<TeamTodoKind, Phrase> = { task: "kindTask", asset: "kindAsset", translation: "kindTranslation", voice: "kindVoice" };
 const KINDS: readonly TeamTodoKind[] = ["task", "asset", "translation", "voice"];
 
-/** The bell: a count of unread notifications, and the list when opened. */
-export function Bell({ connection, state }: { connection: TeamConnection; state: ConnectionState }) {
+/** The caller's notifications and how many are unread, kept current by their topic. */
+export function useNotifications(connection: TeamConnection, state: ConnectionState): {
+  unread: number;
+  list: readonly TeamNotification[] | undefined;
+  readAll: () => void;
+} {
   const [unread, setUnread] = useState(0);
   const [list, setList] = useState<readonly TeamNotification[] | undefined>(undefined);
-  const [shown, setShown] = useState(false);
   const accountId = state.kind === "open" ? state.hello.account.id : undefined;
   const load = useCallback(() => {
     connection
@@ -467,34 +615,135 @@ export function Bell({ connection, state }: { connection: TeamConnection; state:
     load();
     return connection.subscribe(accountNotificationsTopic(accountId), () => load());
   }, [accountId, connection, load]);
+  return { unread, list, readAll: () => void connection.call("notifications.read", { all: true }).catch(() => undefined) };
+}
+
+/** Where a notification leads, as the shell routes it. */
+export type NotificationTarget = { readonly project?: string; readonly tab: string; readonly chat?: boolean };
+
+export function notificationTarget(n: TeamNotification): NotificationTarget {
+  if (n.ref?.startsWith("chat:") === true) return { ...(n.project === undefined ? {} : { project: n.project }), tab: "story", chat: true };
+  if (n.kind === "assigned") return { ...(n.project === undefined ? {} : { project: n.project }), tab: n.project === undefined ? "me" : "todos" };
+  if (n.kind === "review-requested" || n.kind === "review-answered") return { ...(n.project === undefined ? {} : { project: n.project }), tab: "reviews" };
+  return { ...(n.project === undefined ? {} : { project: n.project }), tab: "story" };
+}
+
+export function NotificationList({
+  list,
+  connection,
+  open,
+}: {
+  list: readonly TeamNotification[] | undefined;
+  connection?: TeamConnection;
+  open?: (target: NotificationTarget) => void;
+}) {
+  if (list === undefined || list.length === 0) return <p className="muted">{t("noNotifications")}</p>;
   return (
-    <div className="bell">
-      <button className="ghost bell-button" aria-label={t("notifications")} onClick={() => setShown((value) => !value)}>
-        🔔{unread > 0 ? <span className="badge">{unread > 99 ? "99+" : unread}</span> : null}
+    <ul className="bell-list">
+      {list.map((n) => (
+        <li key={n.id} className={n.readAt === undefined ? "unread" : ""}>
+          <button
+            className="bell-item"
+            onClick={() => {
+              if (n.readAt === undefined) void connection?.call("notifications.read", { ids: [n.id] }).catch(() => undefined);
+              open?.(notificationTarget(n));
+            }}
+          >
+            <Face name={n.actor ?? "?"} user={n.actor} size={26} />
+            <span className="bell-item-text">
+              <span>{t(NOTIFICATION_PHRASE[n.kind], { who: n.actor ?? "?" })}</span>
+              {n.summary ? <span className="muted small bell-summary">{n.summary}</span> : null}
+              <span className="muted small">{ago(n.at)}</span>
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The notifications as a page of their own, for a phone. */
+export function Notifications({ connection, state, open }: { connection: TeamConnection; state: ConnectionState; open?: (target: NotificationTarget) => void }) {
+  const { unread, list, readAll } = useNotifications(connection, state);
+  return (
+    <section className="page-narrow">
+      <header className="page-head">
+        <h1>{t("notifications")}</h1>
+        {unread > 0 ? (
+          <button className="ghost small" onClick={readAll}>
+            {t("markAllRead")}
+          </button>
+        ) : null}
+      </header>
+      <NotificationList list={list} connection={connection} {...(open === undefined ? {} : { open })} />
+    </section>
+  );
+}
+
+/** The bell: a count of unread notifications, and the list when opened. */
+export function Bell({
+  connection,
+  state,
+  label,
+  open,
+}: {
+  connection: TeamConnection;
+  state: ConnectionState;
+  label?: boolean;
+  open?: (target: NotificationTarget) => void;
+}) {
+  const { unread, list, readAll } = useNotifications(connection, state);
+  const [shown, setShown] = useState(false);
+  const [place, setPlace] = useState<{ left: number; top: number } | undefined>(undefined);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!shown) return undefined;
+    const away = (event: MouseEvent) => {
+      if (root.current !== null && !root.current.contains(event.target as Node)) setShown(false);
+    };
+    const key = (event: KeyboardEvent) => event.key === "Escape" && setShown(false);
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", key);
+    };
+  }, [shown]);
+  return (
+    <div className="bell" ref={root}>
+      <button
+        className={label === true ? "side-link bell-button" : "ghost bell-button"}
+        aria-label={t("notifications")}
+        aria-expanded={shown}
+        onClick={(event) => {
+          // In the side bar the panel sits beside it, fixed, so the bar's own scrolling cannot clip it.
+          const box = event.currentTarget.getBoundingClientRect();
+          setPlace(label === true ? { left: box.right + 12, top: Math.max(8, Math.min(box.top, window.innerHeight - 420)) } : undefined);
+          setShown((value) => !value);
+        }}
+      >
+        <Icon name="bell" />
+        {label === true ? <span className="side-link-text">{t("notifications")}</span> : null}
+        {unread > 0 ? <span className="badge">{unread > 99 ? "99+" : unread}</span> : null}
       </button>
       {shown ? (
-        <div className="bell-panel card">
+        <div className="bell-panel card" style={place === undefined ? undefined : { position: "fixed", left: place.left, top: place.top }}>
           <div className="bell-head">
             <strong>{t("notifications")}</strong>
             {unread > 0 ? (
-              <button className="ghost small" onClick={() => void connection.call("notifications.read", { all: true })}>
+              <button className="ghost small" onClick={readAll}>
                 {t("markAllRead")}
               </button>
             ) : null}
           </div>
-          {list === undefined || list.length === 0 ? (
-            <p className="muted">{t("noNotifications")}</p>
-          ) : (
-            <ul className="bell-list">
-              {list.map((n) => (
-                <li key={n.id} className={n.readAt === undefined ? "unread" : ""}>
-                  <div>{t(NOTIFICATION_PHRASE[n.kind], { who: n.actor ?? "?" })}</div>
-                  {n.summary ? <div className="muted small">{n.summary}</div> : null}
-                  <div className="muted small">{ago(n.at)}</div>
-                </li>
-              ))}
-            </ul>
-          )}
+          <NotificationList
+            list={list}
+            connection={connection}
+            open={(target) => {
+              setShown(false);
+              open?.(target);
+            }}
+          />
         </div>
       ) : null}
     </div>
@@ -503,18 +752,47 @@ export function Bell({ connection, state }: { connection: TeamConnection; state:
 
 /* --------------------------------------------------------------- settings */
 
-/** Crop a picked image to a centred square and re-encode it as a 256px WebP, which drops its metadata. */
-async function squareWebp(file: File): Promise<Blob> {
-  const bitmap = await createImageBitmap(file);
-  const side = Math.min(bitmap.width, bitmap.height);
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 256;
-  const context = canvas.getContext("2d");
-  if (context === null) throw new Error("this browser cannot draw");
-  context.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 256, 256);
-  return await new Promise<Blob>((resolve, reject) =>
-    canvas.toBlob((blob) => (blob === null ? reject(new Error("could not encode")) : resolve(blob)), "image/webp", 0.88),
+/** This browser's look and language: kept here, not on the account. */
+function Appearance() {
+  const [theme, setTheme] = useState<ThemeChoice>(() => chosenTheme());
+  return (
+    <div className="card settings-block">
+      <h2>{t("appearance")}</h2>
+      <div className="setting-row">
+        <span>{t("theme")}</span>
+        <div className="segmented" role="group" aria-label={t("theme")}>
+          {(["system", "light", "dark"] as const).map((choice) => (
+            <button
+              key={choice}
+              aria-pressed={theme === choice}
+              className={theme === choice ? "active" : undefined}
+              onClick={() => {
+                chooseTheme(choice);
+                setTheme(choice);
+              }}
+            >
+              {t(choice === "system" ? "themeSystem" : choice === "light" ? "themeLight" : "themeDark")}
+            </button>
+          ))}
+        </div>
+      </div>
+      <LanguagePicker />
+      <p className="muted small">{t("appearanceLead")}</p>
+    </div>
+  );
+}
+
+export function LanguagePicker() {
+  const current = chosenLanguage();
+  return (
+    <label className="setting-row">
+      <span>{t("languageLabel")}</span>
+      <select value={current ?? ""} onChange={(event) => chooseLanguage(event.target.value === "" ? undefined : (event.target.value as Language))}>
+        <option value="">{t("languageAuto")}</option>
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+      </select>
+    </label>
   );
 }
 
@@ -526,6 +804,7 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
   const [note, setNote] = useState<string | undefined>(undefined);
   const [devices, setDevices] = useState<readonly TeamAccountDevice[]>([]);
   const picker = useRef<HTMLInputElement>(null);
+  const [cropping, setCropping] = useState<File | undefined>(undefined);
 
   const load = useCallback(() => {
     connection
@@ -555,13 +834,13 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
       setNote(errorText(caught));
     }
   };
-  const upload = async (file: File | undefined) => {
-    if (file === undefined) return;
+  const upload = async (body: Blob | undefined) => {
+    if (body === undefined) return;
     try {
-      const body = await squareWebp(file);
       const response = await fetch("/api/console/v1/avatar", { method: "PUT", credentials: "same-origin", headers: { "content-type": "image/webp" }, body });
       if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? response.statusText);
       load();
+      if (profile !== undefined) forgetFace(profile.username);
     } catch (caught) {
       setNote(errorText(caught));
     }
@@ -569,12 +848,17 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
   const removeAvatar = async () => {
     await fetch("/api/console/v1/avatar", { method: "DELETE", credentials: "same-origin" });
     load();
+    if (profile !== undefined) forgetFace(profile.username);
   };
-  const connectLink = `narraleaf://team/connect?server=${encodeURIComponent(window.location.origin)}`;
+  const [connectLink, setConnectLink] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    void studioConnectLink().then(setConnectLink);
+  }, []);
 
   return (
     <section className="settings">
       <h1>{t("settings")}</h1>
+      <Appearance />
       <div className="card settings-block">
         <h2>{t("profile")}</h2>
         <div className="avatar-row">
@@ -587,8 +871,27 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
               {t("removeAvatar")}
             </button>
           ) : null}
-          <input ref={picker} type="file" accept="image/*" hidden onChange={(event) => void upload(event.target.files?.[0])} />
+          <input
+            ref={picker}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(event) => {
+              setCropping(event.target.files?.[0]);
+              event.target.value = "";
+            }}
+          />
         </div>
+        {cropping !== undefined ? (
+          <AvatarCropper
+            file={cropping}
+            cancel={() => setCropping(undefined)}
+            done={(blob) => {
+              setCropping(undefined);
+              void upload(blob);
+            }}
+          />
+        ) : null}
         <form className="stack" onSubmit={(event) => void save(event)}>
           <label>
             <span className="muted small">{t("displayName")}</span>

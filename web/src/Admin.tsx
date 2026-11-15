@@ -303,12 +303,26 @@ interface Discovery {
   readonly brand?: { readonly accent?: string; readonly logoUrl?: string };
 }
 
+interface BrandState {
+  readonly signin: { readonly image?: string; readonly layout: "center" | "left" | "right" };
+  readonly watermark: { readonly enabled: boolean; readonly text?: string };
+}
+
+interface Look {
+  readonly signinImageUrl?: string;
+}
+
 function Brand({ connection }: { connection: TeamConnection }) {
   const [discovery, setDiscovery] = useState<Discovery | undefined>(undefined);
+  const [look, setLook] = useState<Look>({});
   const [name, setName] = useState("");
   const [accent, setAccent] = useState("#40a8c4");
+  const [layout, setLayout] = useState<"center" | "left" | "right">("center");
+  const [watermarkOn, setWatermarkOn] = useState(false);
+  const [watermarkText, setWatermarkText] = useState("");
   const [settings, setSettings] = useState<readonly TeamAdminSetting[]>([]);
   const picker = useRef<HTMLInputElement>(null);
+  const picturePicker = useRef<HTMLInputElement>(null);
   const { run, view } = useAction();
   const load = useCallback(() => {
     void fetch("/.well-known/nlteam")
@@ -318,6 +332,14 @@ function Brand({ connection }: { connection: TeamConnection }) {
         setName(document.name);
         setAccent(document.brand?.accent ?? "#40a8c4");
       });
+    void fetch("/api/console/v1/look")
+      .then((response) => response.json() as Promise<Look>)
+      .then(setLook);
+    void connection.call<BrandState>("admin.brand.set", {}).then((answer) => {
+      setLayout(answer.signin.layout);
+      setWatermarkOn(answer.watermark.enabled);
+      setWatermarkText(answer.watermark.text ?? "");
+    });
     void connection.call<{ settings: TeamAdminSetting[] }>("admin.settings.list").then((answer) => setSettings(answer.settings));
   }, [connection]);
   useEffect(() => load(), [load]);
@@ -328,22 +350,34 @@ function Brand({ connection }: { connection: TeamConnection }) {
       if (nameLabel !== undefined && name.trim() !== discovery?.name) {
         await connection.call("admin.settings.set", { label: nameLabel, value: name.trim() });
       }
-      await connection.call("admin.brand.set", { accent });
+      await connection.call("admin.brand.set", {
+        accent,
+        signinLayout: layout,
+        watermark: { enabled: watermarkOn, text: watermarkText },
+      });
       document.documentElement.style.setProperty("--nl-primary", hexChannels(accent));
       load();
     }, t("saved"));
   };
-  const uploadLogo = async (file: File | undefined) => {
+  const upload = async (path: string, file: File | undefined) => {
     if (file === undefined) return;
     await run(async () => {
-      const response = await fetch("/api/console/v1/brand/logo", { method: "PUT", credentials: "same-origin", headers: { "content-type": file.type }, body: file });
+      const response = await fetch(path, { method: "PUT", credentials: "same-origin", headers: { "content-type": file.type }, body: file });
       if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? response.statusText);
+      load();
+    }, t("saved"));
+  };
+  const removePicture = async () => {
+    await run(async () => {
+      const response = await fetch("/api/console/v1/brand/signin-image", { method: "DELETE", credentials: "same-origin" });
+      if (!response.ok) throw new Error(response.statusText);
       load();
     }, t("saved"));
   };
   return (
     <div className="admin-section">
       <form className="card settings-block" onSubmit={(event) => void save(event)}>
+        <strong>{t("brandLook")}</strong>
         <label className="admin-field">
           <span className="muted small">{t("teamName")}</span>
           <input value={name} onChange={(event) => setName(event.target.value)} maxLength={64} />
@@ -362,9 +396,57 @@ function Brand({ connection }: { connection: TeamConnection }) {
             <button type="button" className="ghost" onClick={() => picker.current?.click()}>
               {t("changeLogo")}
             </button>
-            <input ref={picker} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void uploadLogo(event.target.files?.[0])} />
+            <input ref={picker} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void upload("/api/console/v1/brand/logo", event.target.files?.[0])} />
           </span>
         </div>
+
+        <strong className="admin-subhead">{t("signinPage")}</strong>
+        <div className="admin-field">
+          <span className="muted small">{t("signinPicture")}</span>
+          <span className="admin-form-row">
+            {look.signinImageUrl !== undefined ? <img className="signin-thumb" src={look.signinImageUrl} alt="" /> : <span className="muted small">{t("signinNoPicture")}</span>}
+            <button type="button" className="ghost" onClick={() => picturePicker.current?.click()}>
+              {t("signinChoosePicture")}
+            </button>
+            {look.signinImageUrl !== undefined ? (
+              <button type="button" className="ghost" onClick={() => void removePicture()}>
+                {t("remove")}
+              </button>
+            ) : null}
+            <input
+              ref={picturePicker}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              hidden
+              onChange={(event) => void upload("/api/console/v1/brand/signin-image", event.target.files?.[0])}
+            />
+          </span>
+        </div>
+        <fieldset className="admin-field layout-choice" disabled={look.signinImageUrl === undefined}>
+          <legend className="muted small">{t("signinLayout")}</legend>
+          {(["center", "left", "right"] as const).map((value) => (
+            <label key={value} className={layout === value ? "layout-option active" : "layout-option"}>
+              <input type="radio" name="signin-layout" value={value} checked={layout === value} onChange={() => setLayout(value)} />
+              <span className={`layout-sketch layout-sketch-${value}`} aria-hidden="true">
+                <span className="sketch-picture" />
+                <span className="sketch-form" />
+              </span>
+              <span>{t(value === "center" ? "signinLayoutCenter" : value === "left" ? "signinLayoutLeft" : "signinLayoutRight")}</span>
+            </label>
+          ))}
+          {look.signinImageUrl === undefined ? <span className="muted small">{t("signinLayoutNeedsPicture")}</span> : null}
+        </fieldset>
+
+        <strong className="admin-subhead">{t("watermark")}</strong>
+        <label className="admin-check">
+          <input type="checkbox" checked={watermarkOn} onChange={(event) => setWatermarkOn(event.target.checked)} />
+          <span>{t("watermarkOn")}</span>
+        </label>
+        <label className="admin-field">
+          <span className="muted small">{t("watermarkText")}</span>
+          <input value={watermarkText} onChange={(event) => setWatermarkText(event.target.value)} maxLength={64} placeholder={t("watermarkTextHint")} />
+        </label>
+        <span className="muted small">{t("watermarkLead")}</span>
         {view}
         <div className="actions">
           <button className="primary" type="submit">

@@ -1,23 +1,31 @@
 /**
- * The console's shell: sign-in, then a top bar, a navigation rail and the
- * screen the address names. Screens beyond the project list arrive phase by
- * phase (docs/refactor-plan.zh.md §7); the rail already has their places.
+ * The console's shell: setting up or signing in, then a quiet side menu, the
+ * screen the address names, and a tab bar instead of the menu on a phone. The
+ * project workbench (story, blueprints, assets, to-dos) takes the whole window,
+ * the way Studio's does.
  */
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { TOPIC_PROJECTS, type TeamProjectRole } from "@narraleaf/team-protocol";
 
-import { currentAccount, signIn, signOut, SignInError, type ConsoleAccount } from "./api";
+import { currentSession, signOut, type ConsoleAccount, type Watermark } from "./api";
 import { t, type Phrase } from "./i18n";
 import { TeamConnection, type ConnectionState } from "./socket";
 import { Authorize, Device } from "./OAuth";
-import { ProjectPage, type ProjectTab } from "./Project";
-import { Bell, Home, Settings } from "./Collab";
-import { Admin, hexChannels } from "./Admin";
+import { ProjectPage, WORKBENCH_TABS, type ProjectTab } from "./Project";
+import { Bell, Face, Notifications, Profile, Settings, setFaceSource, useNotifications, type NotificationTarget } from "./Collab";
+import { Admin } from "./Admin";
+import { Icon } from "./Icon";
+import { useLook, type TeamLook } from "./look";
+import { Setup, SignIn, TeamMark } from "./SignIn";
+import { projectHue, TeamHome } from "./TeamHome";
+import { Palette, type PaletteItem } from "./Palette";
 
 type Route =
   | { readonly screen: "home" }
   | { readonly screen: "projects" }
+  | { readonly screen: "me" }
+  | { readonly screen: "notifications" }
   | { readonly screen: "admin" }
   | { readonly screen: "settings" }
   | { readonly screen: "project"; readonly id: string; readonly tab: ProjectTab; readonly revision: string };
@@ -35,6 +43,8 @@ function routeOf(location: Location): Route {
   if (rest.startsWith("projects")) return { screen: "projects" };
   if (rest.startsWith("admin")) return { screen: "admin" };
   if (rest.startsWith("settings")) return { screen: "settings" };
+  if (rest.startsWith("me")) return { screen: "me" };
+  if (rest.startsWith("notifications")) return { screen: "notifications" };
   return { screen: "home" };
 }
 
@@ -46,141 +56,118 @@ function pathOf(route: Route): string {
   return route.screen === "home" ? "/console/" : `/console/${route.screen}`;
 }
 
-/** The team's look, from the discovery document: applied before anything is drawn. */
-function useBrand(): { logo?: string; name?: string } {
-  const [brand, setBrand] = useState<{ logo?: string; name?: string }>({});
-  useEffect(() => {
-    fetch("/.well-known/nlteam")
-      .then((response) => response.json() as Promise<{ name?: string; brand?: { accent?: string; logoUrl?: string } }>)
-      .then((document) => {
-        if (document.brand?.accent !== undefined) {
-          window.document.documentElement.style.setProperty("--nl-primary", hexChannels(document.brand.accent));
-        }
-        setBrand({
-          ...(document.brand?.logoUrl === undefined ? {} : { logo: new URL(document.brand.logoUrl).pathname }),
-          ...(document.name === undefined ? {} : { name: document.name }),
-        });
-      })
-      .catch(() => undefined);
-  }, []);
-  return brand;
-}
-
-/** The team's mark: its logo where it has one, the leaf square otherwise. */
+/** The team's mark, as the older screens ask for it. */
 export function BrandMark({ logo }: { logo?: string | undefined }) {
   return logo === undefined ? <span className="brand-mark" aria-hidden="true" /> : <img className="brand-logo-mark" src={logo} alt="" />;
 }
 
 export function App() {
-  const [account, setAccount] = useState<ConsoleAccount | null | undefined>(undefined);
-  const brand = useBrand();
+  const [session, setSession] = useState<{ account: ConsoleAccount; watermark: Watermark } | null | undefined>(undefined);
+  const look = useLook();
 
-  useEffect(() => {
-    currentAccount()
-      .then((found) => setAccount(found ?? null))
-      .catch(() => setAccount(null));
+  const refresh = useCallback(() => {
+    currentSession()
+      .then((found) => setSession(found ?? null))
+      .catch(() => setSession(null));
   }, []);
+  useEffect(() => refresh(), [refresh]);
 
-  if (account === undefined) {
+  if (session === undefined || look === undefined) {
     return <div className="splash" aria-busy="true" />;
   }
   const path = window.location.pathname;
   const standalone = path.startsWith("/console/oauth/authorize") ? "authorize" : path.startsWith("/console/device") ? "device" : undefined;
-  if (account === null) {
-    return <SignIn onSignedIn={setAccount} brand={brand} hint={standalone === undefined ? undefined : t("notSignedInHint")} />;
+  if (session === null) {
+    if (look.setupNeeded) {
+      return (
+        <Setup
+          look={look}
+          onDone={() => {
+            window.history.replaceState(null, "", "/console/");
+            refresh();
+          }}
+        />
+      );
+    }
+    if (path.startsWith("/console/setup")) window.history.replaceState(null, "", "/console/");
+    return <SignIn look={look} onSignedIn={() => refresh()} hint={standalone === undefined ? undefined : t("notSignedInHint")} />;
   }
+  if (path.startsWith("/console/setup")) window.history.replaceState(null, "", "/console/");
+  const mark = <WatermarkLayer watermark={session.watermark} account={session.account} />;
   if (standalone === "authorize") {
-    return <Authorize account={account} />;
+    return (
+      <>
+        <Authorize account={session.account} look={look} />
+        {mark}
+      </>
+    );
   }
   if (standalone === "device") {
-    return <Device />;
+    return (
+      <>
+        <Device />
+        {mark}
+      </>
+    );
   }
-  return <Shell account={account} brand={brand} onSignedOut={() => setAccount(null)} />;
-}
-
-function SignIn({
-  onSignedIn,
-  hint,
-  brand,
-}: {
-  onSignedIn: (account: ConsoleAccount) => void;
-  hint?: string | undefined;
-  brand: { logo?: string; name?: string };
-}) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError(undefined);
-    try {
-      onSignedIn(await signIn(username.trim(), password));
-    } catch (caught) {
-      setError(caught instanceof SignInError ? caught.message : String(caught));
-      setPassword("");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
-    <main className="signin">
-      <form className="signin-card" onSubmit={(event) => void submit(event)}>
-        <div className="brand">
-          <BrandMark logo={brand.logo} />
-          <span>{brand.name ?? t("appName")}</span>
-        </div>
-        <h1>{t("signInTitle")}</h1>
-        <p className="muted">{hint ?? t("signInLead")}</p>
-        <label>
-          <span>{t("username")}</span>
-          <input
-            autoComplete="username"
-            autoCapitalize="none"
-            spellCheck={false}
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            required
-          />
-        </label>
-        <label>
-          <span>{t("password")}</span>
-          <input
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-          />
-        </label>
-        {error === undefined ? null : (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        <button className="primary" type="submit" disabled={busy}>
-          {busy ? t("signingIn") : t("signIn")}
-        </button>
-      </form>
-    </main>
+    <>
+      <Shell account={session.account} look={look} onSignedOut={() => setSession(null)} />
+      {mark}
+    </>
   );
 }
 
-function Shell({
-  account,
-  brand,
-  onSignedOut,
-}: {
-  account: ConsoleAccount;
-  brand: { logo?: string; name?: string };
-  onSignedOut: () => void;
-}) {
+/**
+ * The username of whoever is looking, across every page, when an operator has
+ * turned it on: a photograph of a screen then says whose screen it was. Drawn
+ * as a tiled picture under nothing - it takes no clicks and no layout.
+ */
+function WatermarkLayer({ watermark, account }: { watermark: Watermark; account: ConsoleAccount }) {
+  const image = useMemo(() => {
+    if (!watermark.enabled) return undefined;
+    // The username, which is unique and does not change, unlike a display name.
+    const lines = [account.username, watermark.text ?? ""];
+    const escape = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="220">` +
+      `<g transform="rotate(-24 180 110)" fill="rgb(128,128,128)" fill-opacity="0.14" font-family="sans-serif" font-size="15" text-anchor="middle">` +
+      `<text x="180" y="104">${escape(lines[0] ?? "")}</text><text x="180" y="126" font-size="12">${escape(lines[1] ?? "")}</text></g></svg>`;
+    return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
+  }, [watermark, account]);
+  if (image === undefined) return null;
+  return <div className="watermark" aria-hidden="true" style={{ backgroundImage: image }} />;
+}
+
+interface SideProject {
+  readonly id: string;
+  readonly name: string;
+}
+
+function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: TeamLook; onSignedOut: () => void }) {
   const connection = useMemo(() => new TeamConnection(), []);
+  setFaceSource(connection);
   const [state, setState] = useState<ConnectionState>(connection.state);
   const [route, setRoute] = useState<Route>(() => routeOf(window.location));
+  const [projects, setProjects] = useState<readonly SideProject[]>([]);
+  const [palette, setPalette] = useState(false);
+  const open = state.kind === "open";
+
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPalette((value) => !value);
+      }
+    };
+    const ask = () => setPalette(true);
+    window.addEventListener("keydown", key);
+    window.addEventListener("nlteam:palette", ask);
+    return () => {
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("nlteam:palette", ask);
+    };
+  }, []);
 
   useEffect(() => {
     const off = connection.onState((next) => {
@@ -188,10 +175,9 @@ function Shell({
       if (next.kind === "closed") {
         // A refused handshake reaches a page as a bare close; asking whether
         // the session still stands is how the page tells "signed out" from
-        // "server restarting".
-        // A server that is down answers nothing at all; that is "restarting",
-        // and the socket's own retry deals with it.
-        void currentAccount()
+        // "server restarting". A server that is down answers nothing at all;
+        // that is "restarting", and the socket's own retry deals with it.
+        void currentSession()
           .then((still) => {
             if (still === undefined) {
               connection.stop();
@@ -209,6 +195,23 @@ function Shell({
   }, [connection, onSignedOut]);
 
   useEffect(() => {
+    if (!open) return undefined;
+    // A layout picked while setting up waits for the first socket to send it.
+    const layout = sessionStorage.getItem("nlteam.setupLayout");
+    if (layout !== null) {
+      sessionStorage.removeItem("nlteam.setupLayout");
+      void connection.call("admin.brand.set", { signinLayout: layout }).catch(() => undefined);
+    }
+    const load = () =>
+      connection
+        .call<{ projects: SideProject[] }>("projects.list")
+        .then((answer) => setProjects(answer.projects))
+        .catch(() => undefined);
+    void load();
+    return connection.subscribe(TOPIC_PROJECTS, () => void load());
+  }, [open, connection]);
+
+  useEffect(() => {
     const back = () => setRoute(routeOf(window.location));
     window.addEventListener("popstate", back);
     return () => window.removeEventListener("popstate", back);
@@ -217,76 +220,182 @@ function Shell({
   const go = useCallback((next: Route) => {
     window.history.pushState(null, "", pathOf(next));
     setRoute(next);
+    window.scrollTo(0, 0);
   }, []);
 
-  const serverName = state.kind === "open" ? state.hello.server.name : t("appName");
+  const serverName = state.kind === "open" ? state.hello.server.name : look.name;
+  const openProject = (id: string, tab?: string) =>
+    go({ screen: "project", id, tab: PROJECT_TABS.find((key) => key === tab) ?? "overview", revision: "head" });
+  const followNotification = (target: NotificationTarget) => {
+    if (target.chat === true) {
+      try {
+        localStorage.setItem("nlteam.chatOpen", "1");
+        localStorage.setItem("nlteam.chatTab", "channel");
+      } catch {
+        /* nothing to remember with */
+      }
+    }
+    if (target.project !== undefined) openProject(target.project, target.tab);
+    else go({ screen: target.tab === "me" ? "me" : "home" });
+  };
+  const name = account.displayName || account.username;
+  const workbench = route.screen === "project" && WORKBENCH_TABS.includes(route.tab);
+  const signOutNow = () => {
+    connection.stop();
+    void signOut().then(onSignedOut);
+  };
+
+  const currentProject = route.screen === "project" ? projects.find((project) => project.id === route.id) : undefined;
+  const paletteItems: PaletteItem[] = [
+    { id: "home", icon: "home", label: t("home"), run: () => go({ screen: "home" }) },
+    { id: "notifications", icon: "bell", label: t("notifications"), run: () => go({ screen: "notifications" }) },
+    { id: "me", icon: "check", label: t("myTodos"), run: () => go({ screen: "me" }) },
+    { id: "settings", icon: "gear", label: t("settings"), run: () => go({ screen: "settings" }) },
+    ...(account.operator ? [{ id: "admin", icon: "shield" as const, label: t("admin"), run: () => go({ screen: "admin" }) }] : []),
+    ...projects.flatMap((project) => [
+      { id: `p:${project.id}`, icon: "folder" as const, label: project.name, hint: t("projects"), run: () => openProject(project.id) },
+      { id: `w:${project.id}`, icon: "workbench" as const, label: `${project.name} · ${t("enterWorkbench")}`, run: () => openProject(project.id, "story") },
+    ]),
+  ];
+  const openLine = (project: string, scene: string) => {
+    go({ screen: "project", id: project, tab: "story", revision: "head" });
+    window.history.replaceState(null, "", `${window.location.pathname}?scene=${encodeURIComponent(scene)}`);
+    window.dispatchEvent(new CustomEvent("nlteam:scene", { detail: scene }));
+  };
+  const paletteView = palette ? (
+    <Palette
+      items={paletteItems}
+      project={currentProject === undefined ? undefined : { id: currentProject.id, name: currentProject.name }}
+      openLine={openLine}
+      close={() => setPalette(false)}
+    />
+  ) : null;
+
+  const content = (
+    <>
+      {route.screen === "home" ? (
+        <TeamHome
+          connection={connection}
+          state={state}
+          account={account}
+          openProject={openProject}
+          openNotifications={() => go({ screen: "notifications" })}
+          openProfile={() => go({ screen: "me" })}
+        />
+      ) : null}
+      {route.screen === "me" ? <Profile connection={connection} state={state} account={account} /> : null}
+      {route.screen === "notifications" ? <Notifications connection={connection} state={state} open={followNotification} /> : null}
+      {route.screen === "settings" ? <Settings connection={connection} state={state} /> : null}
+      {route.screen === "projects" ? <Projects connection={connection} state={state} open={(id) => openProject(id)} /> : null}
+      {route.screen === "project" ? (
+        <ProjectPage
+          account={account}
+          connection={connection}
+          state={state}
+          projectId={route.id}
+          tab={route.tab}
+          revision={route.revision}
+          go={(tab, revision) => go({ screen: "project", id: route.id, tab, revision })}
+          back={() => go({ screen: "home" })}
+        />
+      ) : null}
+      {route.screen === "admin" ? <Admin connection={connection} state={state} /> : null}
+    </>
+  );
+
+  if (workbench) {
+    return (
+      <div className="app app-workbench">
+        {content}
+        {paletteView}
+      </div>
+    );
+  }
 
   return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <BrandMark logo={brand.logo} />
-          <span>{serverName}</span>
+    <div className="app">
+      <nav className="side" aria-label={t("mainNav")}>
+        <div className="side-brand">
+          <TeamMark look={look} size={24} />
+          <span className="side-brand-name">{serverName}</span>
         </div>
-        <ConnectionBadge state={state} connection={connection} />
-        <div className="spacer" />
-        <Bell connection={connection} state={state} />
-        <div className="who">
-          <Avatar name={account.displayName || account.username} />
-          <span className="who-name">{account.displayName || account.username}</span>
-          {account.operator ? <span className="tag">{t("operator")}</span> : null}
-        </div>
-        <button
-          className="ghost"
-          onClick={() => {
-            connection.stop();
-            void signOut().then(onSignedOut);
-          }}
-        >
-          {t("signOut")}
+        <button className="side-search" onClick={() => setPalette(true)}>
+          <Icon name="search" />
+          <span className="side-link-text">{t("searchHint")}</span>
+          <kbd>⌘K</kbd>
         </button>
-      </header>
-      <nav className="rail">
-        <RailLink active={route.screen === "home"} onClick={() => go({ screen: "home" })} label="home" />
-        <RailLink
-          active={route.screen === "projects" || route.screen === "project"}
-          onClick={() => go({ screen: "projects" })}
-          label="projects"
-        />
-        <RailLink active={route.screen === "settings"} onClick={() => go({ screen: "settings" })} label="settings" />
-        {account.operator ? (
-          <RailLink active={route.screen === "admin"} onClick={() => go({ screen: "admin" })} label="admin" />
-        ) : null}
+        <div className="side-group">
+          <SideLink icon="home" label="home" active={route.screen === "home"} onClick={() => go({ screen: "home" })} />
+          <Bell connection={connection} state={state} label open={followNotification} />
+          <SideLink icon="check" label="myTodos" active={route.screen === "me"} onClick={() => go({ screen: "me" })} />
+        </div>
+        <div className="side-group">
+          <button className="side-heading" onClick={() => go({ screen: "projects" })}>
+            {t("projects")}
+          </button>
+          {projects.map((project) => (
+            <button
+              key={project.id}
+              className={route.screen === "project" && route.id === project.id ? "side-link active" : "side-link"}
+              aria-current={route.screen === "project" && route.id === project.id ? "page" : undefined}
+              onClick={() => openProject(project.id)}
+            >
+              <span className="project-dot" style={{ background: projectHue(project.id) }} />
+              <span className="side-link-text">{project.name}</span>
+            </button>
+          ))}
+        </div>
+        <div className="side-foot">
+          {account.operator ? <SideLink icon="shield" label="admin" active={route.screen === "admin"} onClick={() => go({ screen: "admin" })} /> : null}
+          <SideLink icon="gear" label="settings" active={route.screen === "settings"} onClick={() => go({ screen: "settings" })} />
+          <ConnectionBadge state={state} connection={connection} />
+          <div className="side-user">
+            <button className="side-user-main" onClick={() => go({ screen: "me" })}>
+              <Face name={name} user={account.username} size={28} />
+              <span className="side-link-text">{name}</span>
+            </button>
+            <button className="ghost icon-button" onClick={signOutNow} aria-label={t("signOut")} title={t("signOut")}>
+              <Icon name="out" />
+            </button>
+          </div>
+        </div>
       </nav>
-      <main className="content">
-        {route.screen === "home" ? <Home connection={connection} state={state} account={account} /> : null}
-        {route.screen === "settings" ? <Settings connection={connection} state={state} /> : null}
-        {route.screen === "projects" ? (
-          <Projects connection={connection} state={state} open={(id) => go({ screen: "project", id, tab: "overview", revision: "head" })} />
-        ) : null}
-        {route.screen === "project" ? (
-          <ProjectPage
-            account={account}
-            connection={connection}
-            state={state}
-            projectId={route.id}
-            tab={route.tab}
-            revision={route.revision}
-            go={(tab, revision) => go({ screen: "project", id: route.id, tab, revision })}
-            back={() => go({ screen: "projects" })}
-          />
-        ) : null}
-        {route.screen === "admin" ? <Admin connection={connection} state={state} /> : null}
-      </main>
+      <main className="main">{content}</main>
+      {paletteView}
+      <TabBar route={route} go={go} connection={connection} state={state} name={name} user={account.username} />
     </div>
   );
 }
 
-function RailLink({ active, onClick, label }: { active: boolean; onClick: () => void; label: Phrase }) {
+function SideLink({ icon, label, active, onClick }: { icon: Parameters<typeof Icon>[0]["name"]; label: Phrase; active: boolean; onClick: () => void }) {
   return (
-    <button className={active ? "rail-link active" : "rail-link"} aria-current={active ? "page" : undefined} onClick={onClick}>
-      {t(label)}
+    <button className={active ? "side-link active" : "side-link"} aria-current={active ? "page" : undefined} onClick={onClick}>
+      <Icon name={icon} />
+      <span className="side-link-text">{t(label)}</span>
     </button>
+  );
+}
+
+/** The phone's navigation: four places at the bottom, where a thumb is. */
+function TabBar({ route, go, connection, state, name, user }: { route: Route; go: (route: Route) => void; connection: TeamConnection; state: ConnectionState; name: string; user: string }) {
+  const { unread } = useNotifications(connection, state);
+  const tab = (screen: "home" | "projects" | "notifications" | "me", icon: Parameters<typeof Icon>[0]["name"] | undefined, label: Phrase) => {
+    const active = route.screen === screen || (screen === "projects" && route.screen === "project");
+    return (
+      <button className={active ? "tab-item active" : "tab-item"} aria-current={active ? "page" : undefined} onClick={() => go({ screen })}>
+        {icon === undefined ? <Face name={name} user={user} size={22} /> : <Icon name={icon} size={22} />}
+        <span>{t(label)}</span>
+        {screen === "notifications" && unread > 0 ? <span className="badge">{unread > 99 ? "99+" : unread}</span> : null}
+      </button>
+    );
+  };
+  return (
+    <nav className="tabbar" aria-label={t("mainNav")}>
+      {tab("home", "home", "home")}
+      {tab("projects", "folder", "projects")}
+      {tab("notifications", "bell", "notifications")}
+      {tab("me", undefined, "me")}
+    </nav>
   );
 }
 
@@ -359,17 +468,6 @@ function ConnectionBadge({ state, connection }: { state: ConnectionState; connec
   );
 }
 
-function Avatar({ name }: { name: string }) {
-  // A letter until avatars land (plan §4.5); the hue is the name's, so a person
-  // is the same colour everywhere.
-  let hash = 0;
-  for (const char of name) hash = (hash * 31 + char.codePointAt(0)!) % 360;
-  return (
-    <span className="avatar" style={{ background: `hsl(${hash} 42% 46%)` }} aria-hidden="true">
-      {Array.from(name)[0]?.toUpperCase()}
-    </span>
-  );
-}
 
 interface ProjectRow {
   readonly id: string;
@@ -409,23 +507,35 @@ function Projects({ connection, state, open: openProject }: { connection: TeamCo
 
   return (
     <section>
-      <h1>{t("projects")}</h1>
-      <p className="muted">{t("projectsLead")}</p>
+      <header className="page-head">
+        <div>
+          <h1 className="page-title">{t("projects")}</h1>
+          <p className="muted">{t("projectsLead")}</p>
+        </div>
+      </header>
       {error !== undefined ? <p className="error">{t("loadFailed", { reason: error })}</p> : null}
-      {rows === undefined ? null : rows.length === 0 ? (
+      {rows === undefined ? (
+        <p className="muted">{t("loading")}</p>
+      ) : rows.length === 0 ? (
         <div className="placeholder-card">{t("noProjects")}</div>
       ) : (
-        <ul className="project-list">
+        <div className="project-grid">
           {rows.map((row) => (
-            <li key={row.id} className="project-row clickable" onClick={() => openProject(row.id)}>
-              <div className="project-main">
-                <span className="project-name">{row.name}</span>
-                {row.description === "" ? null : <span className="muted">{row.description}</span>}
-              </div>
-              {row.role === undefined ? null : <span className={`role role-${row.role}`}>{t(ROLE_PHRASE[row.role])}</span>}
-            </li>
+            <button key={row.id} className="project-tile" onClick={() => openProject(row.id)}>
+              <span className="project-tile-head">
+                <span className="project-tile-mark" style={{ background: projectHue(row.id) }}>
+                  {Array.from(row.name)[0]?.toUpperCase()}
+                </span>
+                <span className="project-tile-name">{row.name}</span>
+                {row.role === undefined ? null : <span className={`role role-${row.role}`}>{t(ROLE_PHRASE[row.role])}</span>}
+              </span>
+              <span className="muted small project-tile-desc">{row.description === "" ? t("noDescription") : row.description}</span>
+              <span className="muted small">
+                {row.history?.head?.at === undefined ? t("noChangesYet") : t("lastChangeShort", { when: new Date(row.history.head.at).toLocaleString() })}
+              </span>
+            </button>
           ))}
-        </ul>
+        </div>
       )}
     </section>
   );

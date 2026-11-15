@@ -1,0 +1,14 @@
+{
+  "name": "NarraLeaf Team",
+  "short_name": "NarraLeaf",
+  "description": "Your team's NarraLeaf projects: what changed, what is waiting on you, and the story as it stands.",
+  "start_url": "/console/",
+  "scope": "/console/",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#0b0d12",
+  "icons": [
+    { "src": "/console/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/console/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

@@ -4,7 +4,7 @@
 // page of this size needs nothing it lacks. React is bundled in, so the server's
 // runtime dependencies stay what they were. Asset names carry a content hash,
 // which is what lets src/web/console.ts serve them as immutable.
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -46,4 +46,6 @@ await writeFile(
   join(outdir, "index.html"),
   template.replace("%JS%", basename(js)).replace("%CSS%", basename(css)),
 );
+// The files that keep their names: the install manifest and its icons.
+await cp(join(root, "web", "public"), outdir, { recursive: true });
 console.log(`wrote ${outdir}`);

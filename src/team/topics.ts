@@ -56,6 +56,7 @@ const PROJECT_SUFFIXES: readonly string[] = [
   "/todos",
   "/reviews",
   "/milestones",
+  "/chat",
   "/doc",
 ];
 

@@ -8,6 +8,8 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type { ConsoleAccount } from "./api";
 import { t } from "./i18n";
+import type { TeamLook } from "./look";
+import { TeamMark } from "./SignIn";
 
 async function json<T>(response: Response): Promise<T> {
   const body = (await response.json()) as T & { error?: string; description?: string };
@@ -17,21 +19,23 @@ async function json<T>(response: Response): Promise<T> {
   return body;
 }
 
-function Card({ children }: { children: React.ReactNode }) {
+function Card({ children, look }: { children: React.ReactNode; look?: TeamLook | undefined }) {
   return (
-    <main className="signin">
-      <div className="signin-card">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true" />
-          <span>{t("appName")}</span>
+    <main className="gate gate-plain">
+      <div className="gate-side">
+        <div className="gate-card">
+          <div className="gate-brand">
+            <TeamMark look={look} />
+            <span>{look?.name ?? t("appName")}</span>
+          </div>
+          {children}
         </div>
-        {children}
       </div>
     </main>
   );
 }
 
-export function Authorize({ account }: { account: ConsoleAccount }) {
+export function Authorize({ account, look }: { account: ConsoleAccount; look?: TeamLook | undefined }) {
   const query = window.location.search.slice(1);
   const [ask, setAsk] = useState<{ clientName: string; deviceName: string } | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -66,26 +70,53 @@ export function Authorize({ account }: { account: ConsoleAccount }) {
   };
 
   return (
-    <Card>
-      <h1>{t("authorizeTitle")}</h1>
-      {error !== undefined ? <p className="error">{error}</p> : null}
-      {done === "approved" ? <p className="muted">{t("authorizeDone")}</p> : null}
-      {done === "denied" ? <p className="muted">{t("authorizeDenied")}</p> : null}
-      {ask !== undefined && done === undefined ? (
-        <>
-          <p>{t("authorizeLead", { client: ask.clientName, server: window.location.host })}</p>
-          <p className="muted">{t("authorizeDevice", { device: ask.deviceName })}</p>
-          <p className="muted">{t("authorizeAs", { name: account.displayName || account.username })}</p>
-          <div className="actions">
-            <button className="ghost" disabled={busy} onClick={() => void decide(false)}>
-              {t("deny")}
-            </button>
-            <button className="primary" disabled={busy} onClick={() => void decide(true)}>
-              {t("approve")}
-            </button>
-          </div>
-        </>
-      ) : null}
+    <Card look={look}>
+      <div className="authorize">
+        <div className="authorize-link" aria-hidden="true">
+          <span className="authorize-app">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 19c8 0 14-6 14-14-8 0-14 6-14 14zM5 19l7-7" />
+            </svg>
+          </span>
+          <span className="authorize-dots">
+            <i />
+            <i />
+            <i />
+          </span>
+          <TeamMark look={look} size={48} />
+        </div>
+        <h1>{t("authorizeTitle")}</h1>
+        {error !== undefined ? <p className="error">{error}</p> : null}
+        {done === "approved" ? (
+          <p className="authorize-done">
+            <span className="authorize-tick" aria-hidden="true">
+              ✓
+            </span>
+            {t("authorizeDone")}
+          </p>
+        ) : null}
+        {done === "denied" ? <p className="muted">{t("authorizeDenied")}</p> : null}
+        {ask !== undefined && done === undefined ? (
+          <>
+            <p>{t("authorizeLead", { client: ask.clientName, server: window.location.host })}</p>
+            <dl className="authorize-facts">
+              <dt>{t("authorizeDeviceLabel")}</dt>
+              <dd>{ask.deviceName}</dd>
+              <dt>{t("authorizeAccountLabel")}</dt>
+              <dd>{account.displayName || account.username}</dd>
+            </dl>
+            <p className="muted small">{t("authorizeRevokeHint")}</p>
+            <div className="actions authorize-actions">
+              <button className="ghost outline" disabled={busy} onClick={() => void decide(false)}>
+                {t("deny")}
+              </button>
+              <button className="primary" disabled={busy} onClick={() => void decide(true)}>
+                {t("approve")}
+              </button>
+            </div>
+          </>
+        ) : null}
+      </div>
     </Card>
   );
 }

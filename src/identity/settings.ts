@@ -19,6 +19,7 @@
  * server's own host for the name. The comment on migration 3 in ./database.ts
  * says why nothing writes those defaults in.
  */
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import { DEFAULT_IDENTITY, type IdentityConfig } from "./config.js";
@@ -858,4 +859,130 @@ export function setBrandLogo(database: DatabaseSync, logo: string | null): void 
     return;
   }
   writeSetting(database, BRAND_LOGO_KEY, logo);
+}
+
+/* ------------------------------------------------------------- sign-in look */
+
+/** The picture on the console's sign-in page: the file name under brand/ (`<sha256>.<ext>`). */
+export const BRAND_SIGNIN_IMAGE_KEY = "brand.signinImage";
+/** Where that picture goes: behind a centred form, or beside it on the left or right. */
+export const BRAND_SIGNIN_LAYOUT_KEY = "brand.signinLayout";
+
+export type SigninLayout = "center" | "left" | "right";
+
+export function isSigninLayout(value: string): value is SigninLayout {
+  return value === "center" || value === "left" || value === "right";
+}
+
+/** The sign-in page's picture and where it goes; without a picture the form is centred whatever is stored. */
+export interface SigninLook {
+  readonly image?: string;
+  readonly layout: SigninLayout;
+}
+
+export function storedSigninLook(database: DatabaseSync): SigninLook {
+  const image = readSetting(database, BRAND_SIGNIN_IMAGE_KEY);
+  const layout = readSetting(database, BRAND_SIGNIN_LAYOUT_KEY);
+  return {
+    ...(image !== undefined && /^[0-9a-f]{64}\.(png|jpg|webp)$/.test(image) ? { image } : {}),
+    layout: layout !== undefined && isSigninLayout(layout) ? layout : "center",
+  };
+}
+
+/** Set or clear (`null`) the sign-in picture's file name. */
+export function setSigninImage(database: DatabaseSync, image: string | null): void {
+  if (image === null) {
+    database.prepare("DELETE FROM settings WHERE key = ?").run(BRAND_SIGNIN_IMAGE_KEY);
+    return;
+  }
+  writeSetting(database, BRAND_SIGNIN_IMAGE_KEY, image);
+}
+
+export function setSigninLayout(database: DatabaseSync, layout: string): SigninLayout {
+  if (!isSigninLayout(layout)) {
+    throw new Error(`"${layout}" is not a sign-in layout; it is center, left or right`);
+  }
+  writeSetting(database, BRAND_SIGNIN_LAYOUT_KEY, layout);
+  return layout;
+}
+
+/* -------------------------------------------------------------- watermark */
+
+/** Whether every console page carries the viewer's name across it. Off until an operator turns it on. */
+export const WATERMARK_ENABLED_KEY = "watermark.enabled";
+/** Extra words drawn with the name, such as the team's or "confidential". */
+export const WATERMARK_TEXT_KEY = "watermark.text";
+
+/** The longest extra text a watermark carries. */
+export const WATERMARK_TEXT_LIMIT = 64;
+
+export interface Watermark {
+  readonly enabled: boolean;
+  readonly text?: string;
+}
+
+export function storedWatermark(database: DatabaseSync): Watermark {
+  const enabled = readSetting(database, WATERMARK_ENABLED_KEY) === "1";
+  const text = readSetting(database, WATERMARK_TEXT_KEY);
+  return { enabled, ...(text === undefined || text === "" ? {} : { text }) };
+}
+
+/** Change either half; the one left undefined stays as it is. An empty text clears it. */
+export function setWatermark(database: DatabaseSync, change: { enabled?: boolean; text?: string }): Watermark {
+  if (change.text !== undefined && [...change.text].length > WATERMARK_TEXT_LIMIT) {
+    throw new Error(`a watermark's text is at most ${WATERMARK_TEXT_LIMIT} characters`);
+  }
+  inTransaction(database, () => {
+    if (change.enabled !== undefined) {
+      writeSetting(database, WATERMARK_ENABLED_KEY, change.enabled ? "1" : "0");
+    }
+    if (change.text !== undefined) {
+      if (change.text.trim() === "") {
+        database.prepare("DELETE FROM settings WHERE key = ?").run(WATERMARK_TEXT_KEY);
+      } else {
+        writeSetting(database, WATERMARK_TEXT_KEY, change.text.trim());
+      }
+    }
+  });
+  return storedWatermark(database);
+}
+
+/* ------------------------------------------------------------- first setup */
+
+/**
+ * The code that lets a browser make this server's first account.
+ *
+ * `up` makes one while there are no accounts and prints it to the terminal it
+ * runs in, so only somebody who can read that terminal can claim the server -
+ * the same person who could have typed `nlteam init`. Kept as a hash, used
+ * once: the first account written removes it.
+ */
+export const SETUP_CODE_KEY = "setup.codeHash";
+
+const SETUP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function setupHash(code: string): string {
+  return createHash("sha256").update(code.replace(/[^A-Z0-9]/gi, "").toUpperCase()).digest("hex");
+}
+
+/** A fresh code, stored as its hash in place of any earlier one. Shown as XXXX-XXXX. */
+export function issueSetupCode(database: DatabaseSync): string {
+  const bytes = randomBytes(8);
+  let code = "";
+  for (const byte of bytes) code += SETUP_ALPHABET[byte % SETUP_ALPHABET.length];
+  writeSetting(database, SETUP_CODE_KEY, setupHash(code));
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
+/** Whether a code typed into the browser is the one `up` printed. */
+export function setupCodeMatches(database: DatabaseSync, code: string): boolean {
+  const stored = readSetting(database, SETUP_CODE_KEY);
+  if (stored === undefined) return false;
+  const given = Buffer.from(setupHash(code), "hex");
+  const held = Buffer.from(stored, "hex");
+  return given.length === held.length && timingSafeEqual(given, held);
+}
+
+export function clearSetupCode(database: DatabaseSync): void {
+  database.prepare("DELETE FROM settings WHERE key = ?").run(SETUP_CODE_KEY);
 }

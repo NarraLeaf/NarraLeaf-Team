@@ -1,0 +1,60 @@
+/**
+ * How the team looks before anybody signs in: its name, accent, logo, the
+ * sign-in picture and where it goes, and whether the server still needs
+ * setting up. One read per page load, shared by every screen that asks.
+ */
+import { useEffect, useState } from "react";
+
+
+export type SigninLayout = "center" | "left" | "right";
+
+export interface TeamLook {
+  readonly name: string;
+  readonly accent?: string;
+  readonly logoUrl?: string;
+  readonly signinImageUrl?: string;
+  readonly signinLayout: SigninLayout;
+  readonly setupNeeded: boolean;
+}
+
+/** `#40a8c4` as the `64 168 196` the design tokens write colours in. */
+function hexChannels(hex: string): string {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `${(value >> 16) & 255} ${(value >> 8) & 255} ${value & 255}`;
+}
+
+let pending: Promise<TeamLook> | undefined;
+
+export function fetchLook(fresh = false): Promise<TeamLook> {
+  if (pending === undefined || fresh) {
+    pending = fetch("/api/console/v1/look", { credentials: "same-origin" })
+      .then((response) => response.json() as Promise<TeamLook>)
+      .then((look) => {
+        if (look.accent !== undefined) {
+          document.documentElement.style.setProperty("--nl-primary", hexChannels(look.accent));
+        }
+        if (look.name !== "") document.title = look.name;
+        return look;
+      });
+  }
+  return pending;
+}
+
+/** The look, or undefined until it has arrived. */
+export function useLook(): TeamLook | undefined {
+  const [look, setLook] = useState<TeamLook | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    fetchLook()
+      .then((found) => {
+        if (alive) setLook(found);
+      })
+      .catch(() => {
+        if (alive) setLook({ name: "NarraLeaf Team", signinLayout: "center", setupNeeded: false });
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return look;
+}

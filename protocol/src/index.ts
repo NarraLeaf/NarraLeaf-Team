@@ -145,6 +145,12 @@ export const TEAM_CAPABILITIES = [
   "reviews",
   /** Names on revisions — "Demo 1" — that a project can be read at. */
   "milestones",
+  /**
+   * A project's own channel: messages its members write to each other, kept,
+   * in order, and read back a page at a time - unlike a live session's chat,
+   * which only the people in the room at that moment ever see.
+   */
+  "chat",
   /** Operators may have this server post its events to a chat or another service. */
   "webhooks",
   /** A project's revisions may be read a page at a time. */
@@ -387,6 +393,11 @@ export function projectReviewsTopic(projectId: string): string {
   return `project:${projectId}/reviews`;
 }
 
+/** One project's channel. Its members may hold it. */
+export function projectChatTopic(projectId: string): string {
+  return `project:${projectId}/chat`;
+}
+
 /** One project's milestones. Its members may hold it. */
 export function projectMilestonesTopic(projectId: string): string {
   return `project:${projectId}/milestones`;
@@ -491,6 +502,8 @@ export const ANCHOR_FIELD_LIMIT = 512;
 
 /** The most a comment may be. Long enough for a paragraph of notes, short of a document. */
 export const COMMENT_BODY_LIMIT = 8 * 1024;
+/** The longest message a project's channel keeps, in UTF-8 bytes. */
+export const CHAT_BODY_LIMIT = 4 * 1024;
 
 /**
  * The most a suggestion may carry.
@@ -1112,6 +1125,24 @@ export interface TeamReview {
 
 export type TeamReviewsEvent = { readonly kind: "review-set"; readonly review: TeamReview };
 
+/* ----------------------------------------------------------------- chat */
+
+/** One message in a project's channel. */
+export interface TeamChatMessage {
+  readonly id: number;
+  readonly project: string;
+  /** Who wrote it, by username; absent once that account is gone. */
+  readonly author?: string;
+  readonly body: string;
+  readonly at: number;
+  /** Set when its author took it back; the body is then empty. */
+  readonly deletedAt?: number;
+}
+
+export type TeamChatEvent =
+  | { readonly kind: "chat-message"; readonly message: TeamChatMessage }
+  | { readonly kind: "chat-deleted"; readonly id: number; readonly project: string };
+
 /* ----------------------------------------------------------- milestones */
 
 /** A name on one revision of a project. Unique per project. */
@@ -1655,6 +1686,12 @@ export const TEAM_METHODS = {
   reviewsCreate: "reviews.create",
   /** Give a verdict (the reviewer), or withdraw (the requester). */
   reviewsUpdate: "reviews.update",
+  /** A page of a project's channel, newest first. */
+  chatList: "chat.list",
+  /** Write in a project's channel. Members who may comment. */
+  chatSend: "chat.send",
+  /** Take back one's own message. */
+  chatDelete: "chat.delete",
   /** A project's milestones, newest first. */
   milestonesList: "milestones.list",
   /** Put a name on a revision. Owners and editors. */
@@ -1829,6 +1866,7 @@ export const CONTRACT = {
     projectTodos: "project:{project}/todos",
     projectReviews: "project:{project}/reviews",
     projectMilestones: "project:{project}/milestones",
+    projectChat: "project:{project}/chat",
     projectDoc: "project:{project}/doc",
     accountTodos: "account:{account}/todos",
     accountNotifications: "account:{account}/notifications",
@@ -1845,6 +1883,7 @@ export const CONTRACT = {
   limits: {
     anchorField: ANCHOR_FIELD_LIMIT,
     commentBody: COMMENT_BODY_LIMIT,
+    chatBody: CHAT_BODY_LIMIT,
     suggestion: SUGGESTION_LIMIT,
     overlayBody: OVERLAY_BODY_LIMIT,
     livePayload: LIVE_PAYLOAD_LIMIT,

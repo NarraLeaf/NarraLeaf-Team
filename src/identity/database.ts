@@ -787,6 +787,23 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE projects ADD COLUMN restore_role TEXT NOT NULL DEFAULT 'editor'",
     ],
   },
+  {
+    version: 20,
+    description: "a channel per project: messages its members write to each other",
+    statements: [
+      // Kept in the order written. A message its author takes back keeps its
+      // row, emptied, so the conversation keeps its shape.
+      `CREATE TABLE chat_messages (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         author_id   TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         body        TEXT    NOT NULL,
+         at          INTEGER NOT NULL,
+         deleted_at  INTEGER
+       ) STRICT`,
+      "CREATE INDEX chat_messages_by_project ON chat_messages (project_id, id)",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

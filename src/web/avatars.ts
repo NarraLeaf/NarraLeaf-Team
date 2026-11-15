@@ -4,6 +4,8 @@
  *     PUT    /api/console/v1/avatar                       the signed-in account's new image (body: the bytes)
  *     DELETE /api/console/v1/avatar                       take it away
  *     GET    /api/team/v1/avatars/{username}/{file}       one account's current image
+ *     PUT    /api/console/v1/brand/signin-image          an operator sets the sign-in page's picture
+ *     GET    /api/team/v1/brand/signin-image/{file}      that picture, to anybody
  *
  * The console crops and re-encodes a picture in the browser before it sends it
  * (a canvas re-encode drops whatever metadata the original carried); this
@@ -21,7 +23,7 @@ import { join } from "node:path";
 
 import { identifyCaller } from "../identity/bearer.js";
 import { findUser, isOperator, type UserRecord } from "../identity/users.js";
-import { setBrandLogo, storedBrand } from "../identity/settings.js";
+import { setBrandLogo, setSigninImage, storedBrand, storedSigninLook } from "../identity/settings.js";
 import { identifyWebSession, webSessionCookie } from "../identity/websessions.js";
 import type { TeamService } from "../team/service.js";
 import { sameOrigin } from "./origin.js";
@@ -31,6 +33,11 @@ export const AVATAR_PATH = "/api/console/v1/avatar";
 const SERVE_PREFIX = "/api/team/v1/avatars/";
 export const LOGO_PATH = "/api/console/v1/brand/logo";
 export const LOGO_SERVE_PREFIX = "/api/team/v1/brand/logo/";
+export const SIGNIN_IMAGE_PATH = "/api/console/v1/brand/signin-image";
+export const SIGNIN_IMAGE_SERVE_PREFIX = "/api/team/v1/brand/signin-image/";
+
+/** The largest sign-in picture: a wide photograph, re-encoded by the console first. */
+export const SIGNIN_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 
 /** The largest image accepted: a re-encoded square, not a photograph. */
 export const AVATAR_MAX_BYTES = 512 * 1024;
@@ -86,6 +93,14 @@ export function serveAvatars(service: TeamService, request: IncomingMessage, res
   }
   if (path.startsWith(LOGO_SERVE_PREFIX)) {
     answering(service, response, serveLogo(service, request, response, path.slice(LOGO_SERVE_PREFIX.length)));
+    return true;
+  }
+  if (path === SIGNIN_IMAGE_PATH) {
+    answering(service, response, changeSigninImage(service, request, response));
+    return true;
+  }
+  if (path.startsWith(SIGNIN_IMAGE_SERVE_PREFIX)) {
+    answering(service, response, serveSigninImage(service, request, response, path.slice(SIGNIN_IMAGE_SERVE_PREFIX.length)));
     return true;
   }
   if (path === AVATAR_PATH) {
@@ -247,6 +262,76 @@ async function serveLogo(service: TeamService, request: IncomingMessage, respons
   const bytes = await readFile(join(brandDir(service), file)).catch(() => undefined);
   if (bytes === undefined) {
     refuse(response, 404, "there is no such logo");
+    return;
+  }
+  response.writeHead(200, {
+    "content-type": TYPES[file.split(".").pop() ?? ""] ?? "application/octet-stream",
+    "content-length": bytes.length,
+    "cache-control": "public, max-age=31536000, immutable",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "sandbox; default-src 'none'",
+  });
+  response.end(request.method === "HEAD" ? undefined : bytes);
+}
+
+/* ------------------------------------------------------- sign-in picture */
+
+/**
+ * The picture on the sign-in page: the logo's rules, a larger allowance. Shown
+ * to anybody, as the logo is - the page it is on is the one before signing in.
+ */
+async function changeSigninImage(service: TeamService, request: IncomingMessage, response: ServerResponse): Promise<void> {
+  if (request.method !== "PUT" && request.method !== "DELETE") {
+    response.writeHead(405, { allow: "PUT, DELETE" }).end();
+    return;
+  }
+  if (!sameOrigin(request)) {
+    refuse(response, 403, "that request came from somewhere else");
+    return;
+  }
+  const identified = identifyWebSession(service.database, webSessionCookie(request.headers.cookie));
+  if (identified.kind !== "identified" || !isOperator(identified.user.groups)) {
+    refuse(response, identified.kind === "identified" ? 403 : 401, "only an operator of this server may change its sign-in picture");
+    return;
+  }
+  if (request.method === "DELETE") {
+    setSigninImage(service.database, null);
+    sendJson(response, 200, {});
+    return;
+  }
+  const declared = Number(request.headers["content-length"] ?? "0");
+  const bytes = declared > SIGNIN_IMAGE_MAX_BYTES ? undefined : await readBody(request, SIGNIN_IMAGE_MAX_BYTES);
+  if (bytes === undefined) {
+    response.setHeader("connection", "close");
+    refuse(response, 413, "that picture is larger than this server keeps");
+    request.resume();
+    return;
+  }
+  const kind = imageKind(bytes);
+  if (kind === undefined) {
+    refuse(response, 415, "a sign-in picture has to be a PNG, JPEG or WebP image");
+    return;
+  }
+  const name = `${createHash("sha256").update(bytes).digest("hex")}.${kind}`;
+  await mkdir(brandDir(service), { recursive: true });
+  await writeFile(join(brandDir(service), name), bytes);
+  setSigninImage(service.database, name);
+  sendJson(response, 200, { imageUrl: `${SIGNIN_IMAGE_SERVE_PREFIX}${name}` });
+}
+
+async function serveSigninImage(service: TeamService, request: IncomingMessage, response: ServerResponse, file: string): Promise<void> {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    response.writeHead(405, { allow: "GET, HEAD" }).end();
+    return;
+  }
+  const current = storedSigninLook(service.database).image;
+  if (current === undefined || file !== current) {
+    refuse(response, 404, "there is no such picture");
+    return;
+  }
+  const bytes = await readFile(join(brandDir(service), file)).catch(() => undefined);
+  if (bytes === undefined) {
+    refuse(response, 404, "there is no such picture");
     return;
   }
   response.writeHead(200, {

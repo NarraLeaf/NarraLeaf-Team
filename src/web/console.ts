@@ -4,6 +4,8 @@
  *     POST /api/console/v1/sign-in    a password, for a session cookie
  *     POST /api/console/v1/sign-out   end the session the cookie names
  *     GET  /api/console/v1/session    who the cookie signs in, or a 401
+ *     GET  /api/console/v1/look       the sign-in page's name, colours, picture, and whether setup is due
+ *     POST /api/console/v1/setup      the first account and the team's look, with the code `up` printed
  *     GET  /console/…                 the page, a built single-page app
  *     GET  /                          a redirect to /console/
  *
@@ -30,7 +32,21 @@ import { extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describeRefusal } from "../identity/bearer.js";
-import { isOperator, type UserRecord } from "../identity/users.js";
+import { inTransaction } from "../identity/database.js";
+import { defaultPasswordHasher } from "../identity/passwords.js";
+import {
+  clearSetupCode,
+  isAccent,
+  setBrandAccent,
+  setServerName,
+  setupCodeMatches,
+  storedBrand,
+  storedServerName,
+  storedSigninLook,
+  storedWatermark,
+} from "../identity/settings.js";
+import { sharedSignInLimiter } from "../identity/signin.js";
+import { ADMIN_ROLE, countUsers, insertUser, isOperator, prepareUser, requireUser, type UserRecord } from "../identity/users.js";
 import {
   clearedCookieHeader,
   createWebSession,
@@ -42,13 +58,16 @@ import {
 } from "../identity/websessions.js";
 import { SIGN_IN_REFUSED_MESSAGE } from "../identity/users.js";
 import type { TeamService } from "../team/service.js";
-import { sameOrigin } from "./origin.js";
-import { answering, checkSignIn, holdOff, onlyMethods, refuse, sendJson } from "./studio.js";
+import { LOGO_SERVE_PREFIX, SIGNIN_IMAGE_SERVE_PREFIX } from "./avatars.js";
+import { remoteAddressOf, sameOrigin } from "./origin.js";
+import { answering, checkSignIn, holdOff, onlyMethods, readJson, refuse, sendJson } from "./studio.js";
 
 const API_PREFIX = "/api/console/v1";
 export const CONSOLE_SIGN_IN_PATH = `${API_PREFIX}/sign-in`;
 export const CONSOLE_SIGN_OUT_PATH = `${API_PREFIX}/sign-out`;
 export const CONSOLE_SESSION_PATH = `${API_PREFIX}/session`;
+export const CONSOLE_LOOK_PATH = `${API_PREFIX}/look`;
+export const CONSOLE_SETUP_PATH = `${API_PREFIX}/setup`;
 
 /** Where the page lives. */
 export const CONSOLE_PATH = "/console";
@@ -179,7 +198,23 @@ function serveApi(service: TeamService, request: IncomingMessage, response: Serv
       refuse(response, 401, describeWebSessionRefusal(identified.reason, describeRefusal));
       return;
     }
-    sendJson(response, 200, { account: accountBody(identified.user) });
+    sendJson(response, 200, { account: accountBody(identified.user), watermark: storedWatermark(service.database) });
+    return;
+  }
+  if (path === CONSOLE_LOOK_PATH) {
+    if (request.method !== "GET") {
+      onlyMethods(response, "GET", "GET");
+      return;
+    }
+    sendJson(response, 200, lookBody(service, (request.headers.host ?? "").replace(/:\d+$/, "")));
+    return;
+  }
+  if (path === CONSOLE_SETUP_PATH) {
+    if (request.method !== "POST") {
+      onlyMethods(response, "POST", "POST");
+      return;
+    }
+    answering(service, response, setUp(service, request, response));
     return;
   }
   refuse(response, 404, "this server has nothing at that address.");
@@ -213,6 +248,111 @@ async function signIn(service: TeamService, request: IncomingMessage, response: 
   service.log?.(`console: ${outcome.user.username} signed in`);
   response.setHeader("set-cookie", sessionCookieHeader(cookie));
   sendJson(response, 200, { account: accountBody(outcome.user) });
+}
+
+/**
+ * What the page shows before anybody signs in: the team's name and look, and
+ * whether this is a server nobody has set up yet. Nothing here is private -
+ * the logo and the picture are served to anybody already.
+ */
+function lookBody(service: TeamService, host: string): Record<string, unknown> {
+  const brand = storedBrand(service.database);
+  const signin = storedSigninLook(service.database);
+  return {
+    name: storedServerName(service.database, host === "" ? "NarraLeaf Team" : host),
+    ...(brand.accent === undefined ? {} : { accent: brand.accent }),
+    ...(brand.logo === undefined ? {} : { logoUrl: `${LOGO_SERVE_PREFIX}${brand.logo}` }),
+    ...(signin.image === undefined ? {} : { signinImageUrl: `${SIGNIN_IMAGE_SERVE_PREFIX}${signin.image}` }),
+    signinLayout: signin.image === undefined ? "center" : signin.layout,
+    setupNeeded: countUsers(service.database) === 0,
+  };
+}
+
+/**
+ * Set up a server nobody has an account on: its first account, an operator,
+ * and optionally its name and accent - `nlteam init` from a browser.
+ *
+ * The code is the credential. `up` prints it to its own terminal while there
+ * are no accounts, so claiming the server takes what `init` takes: being able
+ * to read what the server says where it runs. Wrong codes count against the
+ * caller's address the way wrong passwords do. The account check is made again
+ * inside the transaction, so two browsers racing make one account.
+ */
+async function setUp(service: TeamService, request: IncomingMessage, response: ServerResponse): Promise<void> {
+  if (!sameOrigin(request)) {
+    refuse(response, 403, "that request came from somewhere else");
+    return;
+  }
+  if (countUsers(service.database) > 0) {
+    refuse(response, 409, "this server is already set up; sign in instead");
+    return;
+  }
+  const body = await readJson(request);
+  if (typeof body === "string") {
+    refuse(response, 400, body);
+    return;
+  }
+  const field = (name: string): string | undefined => (typeof body[name] === "string" ? (body[name] as string) : undefined);
+  const code = field("code");
+  const username = field("username");
+  const password = field("password");
+  if (code === undefined || username === undefined || password === undefined) {
+    refuse(response, 400, "setting up takes the setup code, a username and a password");
+    return;
+  }
+  const limiter = service.signIns ?? sharedSignInLimiter();
+  const address = remoteAddressOf(request);
+  const wait = limiter.waitFor("@setup", address);
+  if (wait > 0) {
+    holdOff(response, Math.ceil(wait / 1000));
+    return;
+  }
+  if (!setupCodeMatches(service.database, code)) {
+    limiter.refused("@setup", address);
+    refuse(response, 401, "that is not the setup code this server printed");
+    return;
+  }
+  limiter.accepted("@setup", address);
+  const accent = field("accent");
+  if (accent !== undefined && accent !== "" && !isAccent(accent)) {
+    refuse(response, 400, "an accent is a colour written #rrggbb");
+    return;
+  }
+  const displayName = field("displayName");
+  let prepared;
+  try {
+    prepared = await prepareUser(defaultPasswordHasher(), {
+      username,
+      password,
+      ...(displayName === undefined || displayName.trim() === "" ? {} : { displayName: displayName.trim() }),
+      groups: [ADMIN_ROLE],
+    });
+  } catch (error) {
+    refuse(response, 400, error instanceof Error ? error.message : String(error));
+    return;
+  }
+  let raced = false;
+  inTransaction(service.database, () => {
+    if (countUsers(service.database) > 0) {
+      raced = true;
+      return;
+    }
+    insertUser(service.database, prepared);
+    clearSetupCode(service.database);
+    const name = field("serverName");
+    if (name !== undefined && name.trim() !== "") setServerName(service.database, name.trim());
+    if (accent !== undefined && accent !== "") setBrandAccent(service.database, accent);
+  });
+  if (raced) {
+    refuse(response, 409, "this server is already set up; sign in instead");
+    return;
+  }
+  const user = requireUser(service.database, prepared.username);
+  const agent = request.headers["user-agent"];
+  const { cookie } = createWebSession(service.database, user, { ...(agent === undefined ? {} : { userAgent: agent }) });
+  service.log?.(`console: ${user.username} set this server up`);
+  response.setHeader("set-cookie", sessionCookieHeader(cookie));
+  sendJson(response, 200, { account: accountBody(user) });
 }
 
 /** The headers every file of the page goes out with. */
