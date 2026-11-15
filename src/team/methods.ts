@@ -66,7 +66,15 @@ export interface MethodContext {
    * rather than about a row: saying which installation is on the other end, and
    * everything that follows from it. See {@link callingInstance}.
    */
-  readonly connection: { readonly id: string };
+  readonly connection: {
+    readonly id: string;
+    /**
+     * The projects this connection has agreed a kernel for (see doc.head). Bound to
+     * the socket rather than the account or the window: a reconnect is a new
+     * connection, and what the old one agreed is not something the new one did.
+     */
+    readonly kernel: KernelAgreements;
+  };
   /** Who is connected and which live sessions are open. See src/team/presence.ts. */
   readonly presence: TeamPresence;
   /**
@@ -99,6 +107,13 @@ export function callingInstance(context: MethodContext, project: string): TeamCl
     );
   }
   return instance;
+}
+
+/** Which projects one connection has agreed a kernel for. */
+export interface KernelAgreements {
+  agree(project: string): void;
+  forget(project: string): void;
+  agreed(project: string): boolean;
 }
 
 /** One thing a session can be asked for. */

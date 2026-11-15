@@ -48,7 +48,7 @@ import {
 } from "./protocol.js";
 import { findProjectById } from "../projects/registry.js";
 import { maySeeProject } from "../projects/members.js";
-import { isAdminTopic, judgeTopic, projectOfTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
+import { docTopicProject, isAdminTopic, judgeTopic, projectOfTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
 import { CLOSE, type WebSocketConnection } from "./websocket.js";
 
 /**
@@ -165,6 +165,17 @@ export class TeamSession implements HubSession {
 
   private readonly options: SessionOptions;
   private readonly topics = new Set<string>();
+  /** Projects whose kernel this connection agreed (doc.head); see {@link deliver}. */
+  private readonly kernels = new Set<string>();
+  private readonly kernelAgreements = {
+    agree: (project: string): void => {
+      this.kernels.add(project);
+    },
+    forget: (project: string): void => {
+      this.kernels.delete(project);
+    },
+    agreed: (project: string): boolean => this.kernels.has(project),
+  };
   private inFlight = 0;
   private revalidation: NodeJS.Timeout | undefined;
   private over = false;
@@ -207,6 +218,15 @@ export class TeamSession implements HubSession {
   }
 
   deliver(topic: string, seq: number, payload: unknown): void {
+    // A project's documents are told only to a connection that agreed this
+    // server's kernel for it (doc.head). One that has not - an older Studio that
+    // never says, or one on another kernel - would apply them with different
+    // code, and a Studio that did agree reads anything it missed meanwhile from
+    // doc.effects, so withholding loses nothing.
+    const project = docTopicProject(topic);
+    if (project !== undefined && !this.kernels.has(project)) {
+      return;
+    }
     this.send({ t: "event", topic, seq, payload });
   }
 
@@ -328,7 +348,7 @@ export class TeamSession implements HubSession {
       publish: (topic, payload, audience) => {
         this.options.hub.publish(topic, payload, audience);
       },
-      connection: { id: this.id },
+      connection: { id: this.id, kernel: this.kernelAgreements },
       presence: this.options.presence,
       recheck: (userId) => {
         this.options.hub.recheck(userId);

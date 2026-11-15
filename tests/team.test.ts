@@ -71,6 +71,7 @@ import { versionsOf } from "../src/authority/versions.js";
 import { setWebhookFetch } from "../src/collab/webhooks.js";
 import { setProjectAccess, setProjectCreators, setProjectDeleters } from "../src/identity/settings.js";
 import { ProjectAuthorities } from "../src/authority/manager.js";
+import { ProjectAuthority } from "../src/authority/projectAuthority.js";
 import {
   approveAuthorization,
   checkAuthorizeRequest,
@@ -5244,6 +5245,11 @@ describe("a team project's documents, with this server as their authority", () =
     },
   });
 
+  const KERNEL = ProjectAuthority.kernelVersion;
+  /** Agree this server's kernel for the project on this connection, as a Studio that follows it does. */
+  const follow = (client: { value: (method: string, params?: unknown) => Promise<Record<string, unknown>> }, project: string) =>
+    client.value(TEAM_METHODS.docHead, { project, kernel: KERNEL });
+
   it("applies an edit and publishes it to everybody following the project, the asker included", async () => {
     const { ada, bob, project, team } = await withDocuments();
     setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
@@ -5251,8 +5257,9 @@ describe("a team project's documents, with this server as their authority", () =
       expect((await client.send("subscribe", { topic: projectDocTopic(project) })).code).toBeUndefined();
     }
 
-    const head = await ada.value(TEAM_METHODS.docHead, { project });
-    expect(head).toMatchObject({ seq: 0, mayEdit: true });
+    const head = await follow(ada, project);
+    expect(head).toMatchObject({ seq: 0, mayEdit: true, kernel: KERNEL, compatible: true });
+    await follow(bob, project);
 
     const answer = await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
     expect(answer).toMatchObject({ kind: "effect", effect: { seq: 1, by: "bob" } });
@@ -5269,10 +5276,85 @@ describe("a team project's documents, with this server as their authority", () =
     expect((page["effects"] as { seq: number }[]).map((effect) => effect.seq)).toEqual([1]);
   });
 
+  it("refuses a client that does not say which kernel it applies edits with, and tells it nothing", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    await follow(ada, project);
+    await ada.send("subscribe", { topic: projectDocTopic(project) });
+    await bob.send("subscribe", { topic: projectDocTopic(project) });
+
+    // A Studio from before the question: refused, which it takes as being offline.
+    const head = await bob.call(TEAM_METHODS.docHead, { project });
+    expect(head.code).toBe("refused");
+    expect(head.message).toMatch(new RegExp(`kernel ${KERNEL}`));
+    for (const [method, params] of [
+      [TEAM_METHODS.docIntent, insertRow(project, "r0")],
+      [TEAM_METHODS.docEffects, { project, after: 0 }],
+      [TEAM_METHODS.docBase, { project }],
+      [TEAM_METHODS.docFile, { project, path: "editor/save-schema.json" }],
+    ] as const) {
+      const refused = await bob.call(method, params);
+      expect(refused.code, method).toBe("refused");
+      expect(refused.message).toMatch(/kernel/);
+    }
+
+    // Somebody else's edit is not told to it either.
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    await ada.until(() => ada.events.some((event) => event.topic === projectDocTopic(project)));
+    await bob.value(TEAM_METHODS.serverPing, {});
+    expect(bob.events.filter((event) => event.topic === projectDocTopic(project))).toEqual([]);
+    expect((await bob.call(TEAM_METHODS.docHead, { project, kernel: "4" })).code).toBe("bad-params");
+  });
+
+  it("answers a client on another kernel without agreeing anything, and takes back what it agreed before", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    await follow(ada, project);
+    await bob.send("subscribe", { topic: projectDocTopic(project) });
+
+    await follow(bob, project);
+    expect(await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"))).toMatchObject({ kind: "effect" });
+    await bob.until(() => bob.events.some((event) => event.topic === projectDocTopic(project)));
+
+    const other = await bob.value(TEAM_METHODS.docHead, { project, kernel: KERNEL + 1 });
+    expect(other).toMatchObject({ kernel: KERNEL, compatible: false, seq: 1 });
+    expect((await bob.call(TEAM_METHODS.docIntent, insertRow(project, "r2"))).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.docEffects, { project, after: 0 })).code).toBe("refused");
+
+    const told = bob.events.length;
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r3"));
+    await bob.value(TEAM_METHODS.serverPing, {});
+    expect(bob.events.slice(told).filter((event) => event.topic === projectDocTopic(project))).toEqual([]);
+
+    // Back on this server's kernel, it reads what it missed from the log.
+    expect(await follow(bob, project)).toMatchObject({ compatible: true, seq: 2 });
+    const page = await bob.value(TEAM_METHODS.docEffects, { project, after: 1 });
+    expect((page["effects"] as { seq: number }[]).map((effect) => effect.seq)).toEqual([2]);
+  });
+
+  it("binds the agreement to the connection, so a reconnected client asks again before anything", async () => {
+    const { ada, project, team } = await withDocuments();
+    const first = await follow(ada, project);
+    expect(first["session"]).toBe(ada.hello?.session);
+
+    // The same account on a new socket - a reconnect - agreed nothing yet.
+    const again = await team.connect(team.tokenFor("ada"));
+    await again.send("subscribe", { topic: projectDocTopic(project) });
+    expect((await again.call(TEAM_METHODS.docIntent, insertRow(project, "r1"))).code).toBe("refused");
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r2"));
+    await again.value(TEAM_METHODS.serverPing, {});
+    expect(again.events.filter((event) => event.topic === projectDocTopic(project))).toEqual([]);
+
+    const second = await follow(again, project);
+    expect(second["session"]).toBe(again.hello?.session);
+    expect(second["session"]).not.toBe(first["session"]);
+    expect(await again.value(TEAM_METHODS.docIntent, insertRow(project, "r3"))).toMatchObject({ kind: "effect", effect: { seq: 2 } });
+  });
+
   it("lets a reviewer follow the project and refuses their edits", async () => {
     const { bob, project, team } = await withDocuments();
     setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "reviewer" });
-    expect(await bob.value(TEAM_METHODS.docHead, { project })).toMatchObject({ mayEdit: false });
+    expect(await follow(bob, project)).toMatchObject({ mayEdit: false });
     const refused = await bob.call(TEAM_METHODS.docIntent, insertRow(project, "r1"));
     expect(refused.code).toBe("refused");
   });
@@ -5281,7 +5363,7 @@ describe("a team project's documents, with this server as their authority", () =
     const { bob, project, team } = await withDocuments();
     const bobId = requireUser(team.database, "bob").id;
     setProjectMember(team.database, { projectId: project, userId: bobId, role: "editor", areas: ["characters"] });
-    expect(await bob.value(TEAM_METHODS.docHead, { project })).toMatchObject({
+    expect(await follow(bob, project)).toMatchObject({
       mayEdit: true,
       areas: ["characters"],
     });
@@ -5310,6 +5392,7 @@ describe("a team project's documents, with this server as their authority", () =
 
   it("saves a version on request, with the label an author gave it", async () => {
     const { ada, project, commits } = await withDocuments();
+    await follow(ada, project);
     await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
     const saved = await ada.value(TEAM_METHODS.docSnapshot, { project, label: "Demo 1" });
     expect(saved).toEqual({ revision: "rev-1", seq: 1 });
@@ -5318,6 +5401,7 @@ describe("a team project's documents, with this server as their authority", () =
 
   it("takes a whole file and hands back what the project holds now", async () => {
     const { ada, project } = await withDocuments();
+    await follow(ada, project);
     const answer = await ada.value(TEAM_METHODS.docIntent, {
       project,
       clientId: "file-1",
@@ -5345,6 +5429,8 @@ describe("a team project's documents, with this server as their authority", () =
   it("counts each person's edits as one stretch of work, and keeps who a saved version is down to", async () => {
     const { ada, bob, project, team } = await withDocuments();
     setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    await follow(ada, project);
+    await follow(bob, project);
     await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
     await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r2"));
     await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r3"));
@@ -5372,6 +5458,7 @@ describe("a team project's documents, with this server as their authority", () =
 
   it("marks a version the server saved on its own as automatic, and makes no news of it", async () => {
     const { ada, project, team } = await withDocuments();
+    await follow(ada, project);
     await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
     const authorities = (team.service as { authorities?: ProjectAuthorities }).authorities!;
     await authorities.snapshot(project);
@@ -5388,6 +5475,7 @@ describe("a team project's documents, with this server as their authority", () =
     try {
       const { ada, project, team } = await withDocuments();
       await ada.value(TEAM_METHODS.projectsWebhooksCreate, { project, url: "https://hooks.example.com/x", events: ["version", "commit"] });
+      await follow(ada, project);
       await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
       await (team.service as { authorities?: ProjectAuthorities }).authorities!.snapshot(project);
       await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r2"));
@@ -5408,6 +5496,7 @@ describe("a team project's documents, with this server as their authority", () =
     expect(updated["project"]).toMatchObject({ description: "a lighthouse", saveRole: "owner", restoreRole: "owner" });
     expect((await ada.call(TEAM_METHODS.projectsUpdate, { project, name: "beacon" })).code).toBe("bad-params");
 
+    await follow(bob, project);
     await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
     expect((await bob.call(TEAM_METHODS.docSnapshot, { project })).code).toBe("refused");
     expect((await bob.call(TEAM_METHODS.docRestore, { project, revision: "rev-1" })).code).toBe("refused");
@@ -5471,6 +5560,7 @@ describe("a team project's documents, with this server as their authority", () =
     const { ada, bob, project, team } = await withDocuments();
     await account(team.database, "root", { groups: [ADMIN_ROLE] });
     const root = await team.connect(team.tokenFor("root"));
+    await follow(ada, project);
     await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
     expect((await bob.call(TEAM_METHODS.adminDocumentsStatus)).code).toBe("refused");
     const status = await root.value(TEAM_METHODS.adminDocumentsStatus);

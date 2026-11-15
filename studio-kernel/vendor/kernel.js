@@ -259,7 +259,7 @@ function normalizeAxis(raw) {
   return {
     ...makeAssetSetAxis(
       kind,
-      normalizeStringList(record.values).map(migrate),
+      [...new Set(normalizeStringList(record.values).map(migrate))],
       fallback === void 0 ? void 0 : migrate(fallback)
     )
   };
@@ -4190,12 +4190,17 @@ function normalizeLocalizationDocument(value, locale) {
     if (typeof unit.target !== "string") {
       continue;
     }
-    document.units[unitId] = {
-      target: unit.target,
-      sourceHash: typeof unit.sourceHash === "string" ? unit.sourceHash : "",
-      status: unit.status === "machine" || unit.status === "translated" || unit.status === "reviewed" ? unit.status : "untranslated",
-      ...typeof unit.note === "string" && unit.note ? { note: unit.note } : {}
-    };
+    Object.defineProperty(document.units, unitId, {
+      value: {
+        target: unit.target,
+        sourceHash: typeof unit.sourceHash === "string" ? unit.sourceHash : "",
+        status: unit.status === "machine" || unit.status === "translated" || unit.status === "reviewed" ? unit.status : "untranslated",
+        ...typeof unit.note === "string" && unit.note ? { note: unit.note } : {}
+      },
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
   }
   return document;
 }
@@ -5052,7 +5057,7 @@ function diffDictionary(base, head, options) {
   return buildDocumentDiff(rows, { tier: "semantic", limit: options.limit });
 }
 function byTerm(entries) {
-  const record = {};
+  const record = /* @__PURE__ */ Object.create(null);
   for (const entry of entries) {
     if (typeof entry?.term === "string" && entry.term.length > 0 && !Object.prototype.hasOwnProperty.call(record, entry.term)) {
       record[entry.term] = entry;
@@ -6152,15 +6157,20 @@ function migrateVariableRegistryToLatest(raw) {
     if (!isRecord(value) || typeof value.storageKey !== "string" || typeof value.name !== "string") {
       continue;
     }
-    entries[id] = {
-      id,
-      name: value.name,
-      scope: normalizeVariableRegistryScope(value.scope),
-      valueType: normalizePersistentValueType(typeof value.valueType === "string" ? value.valueType : void 0),
-      ...withDefaultValue(value.defaultValue),
-      storageKey: value.storageKey,
-      ...typeof value.description === "string" ? { description: value.description } : {}
-    };
+    Object.defineProperty(entries, id, {
+      value: {
+        id,
+        name: value.name,
+        scope: normalizeVariableRegistryScope(value.scope),
+        valueType: normalizePersistentValueType(typeof value.valueType === "string" ? value.valueType : void 0),
+        ...withDefaultValue(value.defaultValue),
+        storageKey: value.storageKey,
+        ...typeof value.description === "string" ? { description: value.description } : {}
+      },
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
   }
   return {
     schemaVersion: VARIABLE_REGISTRY_SCHEMA_VERSION,
