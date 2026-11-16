@@ -512,7 +512,7 @@ export async function openRevisionTree(options: OpenRevisionOptions): Promise<Re
     const addresses = new Map(files.map((file) => [file.path, file.address]));
     return {
       revision,
-      files: files.map(({ path: filePath, size }) => ({ path: filePath, size })),
+      files: files.map(({ path: filePath, size, address }) => ({ path: filePath, size, hash: address.hash })),
       async read(filePath) {
         const address = addresses.get(filePath);
         return address === undefined ? undefined : readAddress(online, opened, options.projectId, address);

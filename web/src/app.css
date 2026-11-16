@@ -1327,16 +1327,6 @@ button.small {
 .online-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--nl-success, #2ea043); margin-right: 6px; }
 .history-toggle { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .history-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.compare { margin-bottom: 12px; }
-.compare-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
-.compare-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
-.compare-rows li { padding: 6px 8px; border-radius: var(--nl-radius); background: var(--nl-fill-subtle); }
-.compare-rows .badge { color: var(--nl-fg); }
-.compare-added .badge { background: rgba(46, 160, 67, 0.22); }
-.compare-removed .badge { background: rgba(218, 54, 51, 0.22); }
-.compare-changed .badge { background: rgba(219, 109, 40, 0.22); }
-.compare-before { color: var(--nl-fg-muted); text-decoration: line-through; margin-top: 2px; }
-.compare-after { color: var(--nl-fg); margin-top: 2px; }
 .project-settings form { display: flex; flex-direction: column; gap: 8px; }
 .project-settings textarea { width: 100%; }
 

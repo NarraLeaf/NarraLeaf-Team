@@ -5,6 +5,8 @@
 export interface TreeFile {
   readonly path: string;
   readonly size: number;
+  /** Lore's content address, where the server has one: equal hashes are equal bytes. */
+  readonly hash?: string;
 }
 
 export interface Tree {

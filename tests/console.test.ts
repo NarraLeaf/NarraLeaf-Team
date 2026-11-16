@@ -330,6 +330,9 @@ describe("the console's page", () => {
 
     // A screen rather than a file is the page, which routes itself.
     expect((await team.ask("GET", "/console/p/harbour")).body).toContain("<title>console</title>");
+    // Even with dots in it, as a comparison's address has.
+    expect((await team.ask("GET", "/console/p/harbour/compare/abc...current")).body).toContain("<title>console</title>");
+    expect((await team.ask("GET", "/console/assets/gone.js")).status).toBe(404);
     expect((await team.ask("GET", "/")).headers["location"]).toBe("/console/");
   });
 

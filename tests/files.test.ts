@@ -51,7 +51,7 @@ const FILES: Record<string, string> = {
 function fakeTree(revision: string): RevisionTree {
   return {
     revision: revision === "head" ? REVISION : revision,
-    files: Object.entries(FILES).map(([path, text]) => ({ path, size: text.length })),
+    files: Object.entries(FILES).map(([path, text]) => ({ path, size: text.length, hash: `h-${text}` })),
     read: (path) => Promise.resolve(FILES[path] === undefined ? undefined : Buffer.from(FILES[path] ?? "")),
     close: () => Promise.resolve(),
   };
@@ -181,9 +181,11 @@ describe("a revision's files", () => {
     const team = await serve();
     const reply = await team.get(`/api/team/v1/projects/${team.project.id}/tree/head`, team.tokenFor("vic"));
     expect(reply.status).toBe(200);
-    const body = JSON.parse(reply.body) as { revision: string; files: { path: string }[]; total: number };
+    const body = JSON.parse(reply.body) as { revision: string; files: { path: string; hash?: string }[]; total: number };
     expect(body.revision).toBe(REVISION);
     expect(body.total).toBe(6);
+    // The tree's own content address goes out with each file, so a page can see what changed.
+    expect(body.files.find((file) => file.path === "assets/bg/sea.png")?.hash).toBe("h-PNGBYTES");
     expect(reply.headers["cache-control"]).toBe("private, no-cache");
 
     const pinned = await team.get(`/api/team/v1/projects/harbour/tree/${REVISION}`, team.tokenFor("ada"));

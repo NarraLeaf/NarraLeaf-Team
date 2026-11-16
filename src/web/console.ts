@@ -410,7 +410,11 @@ async function serveFile(
   const extension = extname(resolved).toLowerCase();
   const found = relative === "" ? undefined : await fileAt(resolved);
   if (found === undefined) {
-    if (extension !== "") {
+    // The build keeps its files at the top and under assets/; deeper than that
+    // an address is a screen even with a dot in it, as a comparison's
+    // `from...to` has.
+    const screen = relative.includes("/") && !relative.startsWith("assets/");
+    if (extension !== "" && !screen) {
       // A file that is not there, rather than a screen.
       refuse(response, 404, "there is nothing at that address");
       return;

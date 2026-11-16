@@ -7,10 +7,8 @@
  */
 import { useEffect, useState, type FormEvent } from "react";
 
-import { readStoryDocument, readStoryLibrary, STORY_INDEX_PATH, type StoryRow } from "@narraleaf/project-view";
 import { projectClientsTopic, type TeamClientInstance, type TeamProjectRole, type TeamVersionRole } from "@narraleaf/team-protocol";
 
-import { fetchJson, fetchTree, type Tree } from "./files";
 import { t, type Phrase } from "./i18n";
 import type { IconName } from "./Icon";
 import { confirmAction, Flash, SelectPanel, SettingsLayout, Subhead, toast } from "./ui";
@@ -62,108 +60,6 @@ export function OnlineNow({ connection, open, projectId }: { connection: TeamCon
             </li>
           ))}
         </ul>
-      )}
-    </div>
-  );
-}
-
-/* --------------------------------------------------------------- compare */
-
-interface RowChange {
-  readonly kind: "added" | "removed" | "changed";
-  readonly scene: string;
-  readonly before?: string;
-  readonly after?: string;
-}
-
-function rowText(row: StoryRow): string {
-  if ("text" in row) return row.text;
-  if (row.kind === "empty") return "";
-  return row.kind;
-}
-
-/** Every story document in a tree, by story id: its scenes' rows by block id, with the scene name. */
-async function storyRows(projectId: string, tree: Tree): Promise<Map<string, { scene: string; text: string }>> {
-  const rows = new Map<string, { scene: string; text: string }>();
-  if (!tree.files.some((file) => file.path === STORY_INDEX_PATH)) return rows;
-  const library = readStoryLibrary(await fetchJson(projectId, tree.revision, STORY_INDEX_PATH));
-  if (!library.supported) return rows;
-  for (const story of library.stories) {
-    if (!tree.files.some((file) => file.path === story.documentPath)) continue;
-    const document = readStoryDocument(await fetchJson(projectId, tree.revision, story.documentPath));
-    if (!document.supported) continue;
-    for (const sceneId of document.order) {
-      const scene = document.scenes[sceneId];
-      if (scene === undefined) continue;
-      for (const row of scene.rows) rows.set(`${story.id}/${row.id}`, { scene: scene.name, text: rowText(row) });
-    }
-  }
-  return rows;
-}
-
-/** How one revision's story differs from what the project holds now, row by row, and how many other files differ. */
-export function CompareWithNow({ projectId, revision, close }: { projectId: string; revision: string; close: () => void }) {
-  const [changes, setChanges] = useState<{ rows: RowChange[]; files: number } | undefined>(undefined);
-  const [error, setError] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const [then, now] = await Promise.all([fetchTree(projectId, revision), fetchTree(projectId, "current")]);
-        const [before, after] = await Promise.all([storyRows(projectId, then), storyRows(projectId, now)]);
-        const rows: RowChange[] = [];
-        for (const [key, row] of after) {
-          const old = before.get(key);
-          if (old === undefined) rows.push({ kind: "added", scene: row.scene, after: row.text });
-          else if (old.text !== row.text) rows.push({ kind: "changed", scene: row.scene, before: old.text, after: row.text });
-        }
-        for (const [key, row] of before) {
-          if (!after.has(key)) rows.push({ kind: "removed", scene: row.scene, before: row.text });
-        }
-        const sizes = new Map(then.files.map((file) => [file.path, file.size]));
-        const story = (path: string) => path.startsWith("editor/story/");
-        let files = 0;
-        for (const file of now.files) {
-          if (!story(file.path) && sizes.get(file.path) !== file.size) files += 1;
-          sizes.delete(file.path);
-        }
-        files += [...sizes.keys()].filter((path) => !story(path)).length;
-        if (alive) setChanges({ rows, files });
-      } catch (caught) {
-        if (alive) setError(errorText(caught));
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [projectId, revision]);
-  const phrase = { added: "compareAdded", removed: "compareRemoved", changed: "compareChanged" } as const;
-  return (
-    <div className="card compare">
-      <div className="compare-head">
-        <strong>{t("compareTitle", { rev: revision.slice(0, 12) })}</strong>
-        <button className="ghost small" onClick={close}>
-          {t("close")}
-        </button>
-      </div>
-      {error !== undefined ? (
-        <Flash error={error} />
-      ) : changes === undefined ? (
-        <p className="muted">{t("compareLoading")}</p>
-      ) : (
-        <>
-          {changes.rows.length === 0 ? <p className="muted">{t("compareNone")}</p> : null}
-          <ul className="compare-rows">
-            {changes.rows.slice(0, 300).map((change, index) => (
-              <li key={index} className={`compare-${change.kind}`}>
-                <span className="badge">{t(phrase[change.kind])}</span> <span className="muted small">{change.scene}</span>
-                {change.before !== undefined ? <div className="compare-before">{change.before || "—"}</div> : null}
-                {change.after !== undefined ? <div className="compare-after">{change.after || "—"}</div> : null}
-              </li>
-            ))}
-          </ul>
-          {changes.files > 0 ? <p className="muted small">{t("compareFiles", { count: String(changes.files) })}</p> : null}
-        </>
       )}
     </div>
   );

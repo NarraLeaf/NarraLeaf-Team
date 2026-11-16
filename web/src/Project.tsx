@@ -43,15 +43,17 @@ import { LineComments, storyLineAnchor, useStoryThreads } from "./Comments";
 import type { ConsoleAccount } from "./api";
 import { language, t, type Phrase } from "./i18n";
 import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, type Revision } from "./Production";
-import { CompareWithNow, OnlineNow, ProjectSettings, type ProjectSettingsSection } from "./Versions";
+import { OnlineNow, ProjectSettings, type ProjectSettingsSection } from "./Versions";
 import { AskForMore } from "./Access";
 import { CallError, type TeamConnection, type ConnectionState } from "./socket";
 import { ActionMenu, Blankslate, Checkbox, Flash, SelectPanel, toast } from "./ui";
+import { ChecksPage, ComparePage, placeText } from "./Insight";
+import { assetUses, useProjectData, type Place } from "./projectData";
 import { describeCommand, GROUP_COLOR, GROUP_ICON, type CommandLookups } from "./storyCommands";
 
-export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "settings";
+export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "compare" | "checks" | "settings";
 /** The project's own page: what it is, how it got here, and what is waiting on review. */
-const TABS: readonly ProjectTab[] = ["overview", "history", "reviews"];
+const TABS: readonly ProjectTab[] = ["overview", "history", "reviews", "checks"];
 /** Shown to the project's owners only. */
 const OWNER_TABS: readonly ProjectTab[] = [...TABS, "settings"];
 /** What opens in the workbench, Studio's layout, read-only. */
@@ -65,6 +67,8 @@ const TAB_PHRASE: Record<ProjectTab, Phrase> = {
   todos: "tabTodos",
   reviews: "tabReviews",
   history: "tabHistory",
+  compare: "tabCompare",
+  checks: "tabChecks",
   settings: "tabSettings",
 };
 
@@ -123,10 +127,13 @@ export function ProjectPage(props: {
   revision: string;
   section: ProjectSettingsSection;
   isOperator: boolean;
+  /** For the compare page: `<from>...<to>`. */
+  range: string | undefined;
   go: (tab: ProjectTab, revision: string, section?: ProjectSettingsSection) => void;
+  compare: (range: string) => void;
   back: () => void;
 }) {
-  const { account, connection, state, projectId, tab, revision, section, isOperator, go, back } = props;
+  const { account, connection, state, projectId, tab, revision, section, isOperator, range, go, compare, back } = props;
   const [project, setProject] = useState<ProjectSummary | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [missing, setMissing] = useState(false);
@@ -204,6 +211,18 @@ export function ProjectPage(props: {
     [projectId, projectName, tab],
   );
 
+  /** A row of the story, opened in the workbench at a revision: from the checks, or a line of a comparison. */
+  const openAt = (place: Place, at: string) => {
+    go("story", at === "current" ? "head" : at);
+    const query = new URLSearchParams(window.location.search);
+    query.set("story", place.storyId);
+    query.set("scene", place.sceneId);
+    if (place.rowId !== undefined) query.set("row", place.rowId);
+    else query.delete("row");
+    window.history.replaceState(null, "", `${window.location.pathname}?${query.toString()}`);
+    window.dispatchEvent(new CustomEvent("nlteam:scene", { detail: place.sceneId }));
+  };
+
   if (missing) {
     return (
       <Blankslate
@@ -245,7 +264,7 @@ export function ProjectPage(props: {
       <Blueprints projectId={projectId} tree={tree} />
     ) : (
       <div className="wb-page">
-        <Assets projectId={projectId} tree={tree} />
+        <Assets projectId={projectId} tree={tree} openAt={openAt} />
       </div>
     );
 
@@ -325,8 +344,8 @@ export function ProjectPage(props: {
           <button
             key={key}
             role="tab"
-            aria-selected={tab === key}
-            className={tab === key ? "tab active" : "tab"}
+            aria-selected={tab === key || (tab === "compare" && key === "history")}
+            className={tab === key || (tab === "compare" && key === "history") ? "tab active" : "tab"}
             onClick={() => go(key, revision)}
           >
             {t(TAB_PHRASE[key])}
@@ -342,11 +361,16 @@ export function ProjectPage(props: {
           changed={(next) => setProject({ ...project, ...next })}
           removed={back}
         />
+      ) : tab === "compare" ? (
+        <ComparePage connection={connection} open={open} projectId={projectId} range={range} setRange={compare} openAt={openAt} />
+      ) : tab === "checks" ? (
+        <ChecksPage projectId={projectId} tree={tree} openAt={openAt} />
       ) : tab === "history" ? (
         <History
           connection={connection}
           open={open}
           projectId={projectId}
+          compare={(id) => compare(`${id}...current`)}
           pick={(id) => go("story", id)}
           me={account.username}
           role={project?.role}
@@ -628,8 +652,13 @@ function Story({
         setLibrary(read);
         // A refresh keeps the story being read, unless it is gone.
         if (read.supported) {
+          const asked = new URLSearchParams(window.location.search).get("story");
           setStoryId((current) =>
-            current !== undefined && read.stories.some((story) => story.id === current) ? current : (read.defaultStoryId ?? read.stories[0]?.id),
+            asked !== null && read.stories.some((story) => story.id === asked)
+              ? asked
+              : current !== undefined && read.stories.some((story) => story.id === current)
+                ? current
+                : (read.defaultStoryId ?? read.stories[0]?.id),
           );
         }
       })
@@ -796,6 +825,19 @@ function StoryBody(props: {
   const visible = scene === undefined ? [] : scene.rows.filter((row) => showCommands || (row.kind !== "command" && row.kind !== "empty"));
   const emptyScene = scene !== undefined && scene.rows.every((row) => row.kind === "empty");
   const threads = useStoryThreads(connection, open, projectId, storyId);
+  // A row named in the address (from the checks or a comparison): selected, and scrolled to, once.
+  const rows = scene?.rows;
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const asked = query.get("row");
+    const row = asked === null ? undefined : rows?.find((candidate) => candidate.id === asked);
+    if (row === undefined) return;
+    if (!showCommands && (row.kind === "command" || row.kind === "empty")) setShowCommands(() => true);
+    setSelected({ blockId: row.id, excerpt: "text" in row ? row.text : "" });
+    query.delete("row");
+    window.history.replaceState(null, "", `${window.location.pathname}${query.size > 0 ? `?${query.toString()}` : ""}`);
+    requestAnimationFrame(() => window.document.getElementById(`row-${row.id}`)?.scrollIntoView({ block: "center" }));
+  }, [rows, showCommands, setShowCommands, setSelected]);
   const threadsOn = (blockId: string) => (sceneId === undefined ? [] : (threads.get(storyLineAnchor(sceneId, blockId)) ?? []));
   return (
     <div className="story">
@@ -1210,7 +1252,7 @@ const NODE_NAMES = language === "zh" ? NODE_NAMES_ZH : NODE_NAMES_EN;
 const NODE_ALIASES: Readonly<Record<string, string>> = { "fn.head": "functionEntry", "flow.comment": "comment", "fn.return": "fnReturn" };
 
 /** What Studio calls a node of this type, or the type itself where Studio's catalogue has no name for it. */
-function nodeLabel(type: string): string {
+export function nodeLabel(type: string): string {
   const parts = type.replace(/^blueprint\./, "").split(".");
   const last = parts[parts.length - 1] ?? type;
   const tail = parts.slice(-2);
@@ -1524,8 +1566,8 @@ function GraphCanvas({ graph }: { graph: BlueprintGraphView }) {
 
 /* --------------------------------------------------------------- assets */
 
-const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "avif", "svg"]);
-const AUDIO_EXT = new Set(["mp3", "ogg", "wav", "m4a", "flac"]);
+export const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "avif", "svg"]);
+export const AUDIO_EXT = new Set(["mp3", "ogg", "wav", "m4a", "flac"]);
 /**
  * Studio's registers say what kind an asset is but not its file type, and its
  * bytes are stored without an extension. The kind is enough for the browser:
@@ -1558,7 +1600,7 @@ const ASSET_KIND_ICON: Readonly<Record<string, IconName>> = {
   model: "people",
   blueprint: "graph",
 };
-function assetKindName(kind: string): string {
+export function assetKindName(kind: string): string {
   const phrase = ASSET_KIND_PHRASE[kind];
   return phrase === undefined ? kind : t(phrase);
 }
@@ -1589,10 +1631,13 @@ function useAssetRegister(projectId: string, tree: Tree | undefined): readonly A
   return assets;
 }
 
-function Assets({ projectId, tree }: { projectId: string; tree: Tree }) {
+function Assets({ projectId, tree, openAt }: { projectId: string; tree: Tree; openAt: (place: Place, revision: string) => void }) {
   const assets = useAssetRegister(projectId, tree);
   const [type, setType] = useState<string>("");
   const present = useMemo(() => new Set(tree.files.map((file) => file.path)), [tree]);
+  const data = useProjectData(projectId, tree);
+  const uses = useMemo(() => (data === undefined || data instanceof Error ? undefined : assetUses(data)), [data]);
+  const stories = data === undefined || data instanceof Error ? 1 : data.stories.length;
   if (assets === undefined) return <p className="muted">{t("loading")}</p>;
   if (assets.length === 0)
     return (
@@ -1601,7 +1646,8 @@ function Assets({ projectId, tree }: { projectId: string; tree: Tree }) {
       </Blankslate>
     );
   const types = [...new Set(assets.map((asset) => asset.type))].sort();
-  const shown = assets.filter((asset) => type === "" || asset.type === type);
+  const unused = uses === undefined ? [] : assets.filter((asset) => (uses.get(asset.id)?.length ?? 0) === 0);
+  const shown = type === "\u0000unused" ? unused : assets.filter((asset) => type === "" || asset.type === type);
   return (
     <div className="assets">
       <div className="chips">
@@ -1613,6 +1659,11 @@ function Assets({ projectId, tree }: { projectId: string; tree: Tree }) {
             {assetKindName(kind)} <span className="chip-count">{assets.filter((asset) => asset.type === kind).length}</span>
           </button>
         ))}
+        {unused.length > 0 ? (
+          <button className={type === "\u0000unused" ? "chip active" : "chip"} onClick={() => setType("\u0000unused")} title={t("assetsUnusedHint")}>
+            {t("assetsUnused")} <span className="chip-count">{unused.length}</span>
+          </button>
+        ) : null}
       </div>
       <ul className="asset-grid">
         {shown.map((asset) => {
@@ -1640,6 +1691,26 @@ function Assets({ projectId, tree }: { projectId: string; tree: Tree }) {
                 {assetKindName(asset.type)}
                 {asset.tags.length > 0 ? ` · ${asset.tags.join(", ")}` : ""}
               </div>
+              {uses === undefined ? null : (uses.get(asset.id)?.length ?? 0) === 0 ? (
+                <div className="asset-uses muted small">{t("assetUnused")}</div>
+              ) : (
+                <ActionMenu
+                  label={t("assetUsedIn", { count: String(uses.get(asset.id)?.length ?? 0) })}
+                  trigger={
+                    <span className="asset-uses-trigger">
+                      <Icon name="link" size={12} />
+                      {t("assetUsedIn", { count: String(uses.get(asset.id)?.length ?? 0) })}
+                    </span>
+                  }
+                  triggerClassName="btn btn-invisible btn-sm asset-uses"
+                  actions={(uses.get(asset.id) ?? []).slice(0, 30).map((place) => ({
+                    label: placeText(place, stories),
+                    icon: place.rowId === undefined ? ("image" as const) : ("book" as const),
+                    ...(place.rowId === undefined ? { description: t("assetUsedAsBackground") } : {}),
+                    run: () => openAt(place, tree.revision),
+                  }))}
+                />
+              )}
             </li>
           );
         })}
@@ -1649,7 +1720,7 @@ function Assets({ projectId, tree }: { projectId: string; tree: Tree }) {
 }
 
 /** A play button and a thin progress line, instead of the browser's own wide control. */
-function MiniPlayer({ src }: { src: string }) {
+export function MiniPlayer({ src }: { src: string }) {
   const audio = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -1702,15 +1773,15 @@ function History(props: {
   open: boolean;
   projectId: string;
   pick: (id: string) => void;
+  compare: (id: string) => void;
   me: string;
   role: TeamProjectRole | undefined;
 }) {
-  const { connection, open, projectId, pick, me, role } = props;
+  const { connection, open, projectId, pick, compare, me, role } = props;
   const milestones = useMilestones(connection, open, projectId);
   const [revisions, setRevisions] = useState<readonly Revision[] | undefined>(undefined);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [showAuto, setShowAuto] = useState(false);
-  const [comparing, setComparing] = useState<string | undefined>(undefined);
   const load = useCallback(
     (after?: string) => {
       connection
@@ -1750,7 +1821,6 @@ function History(props: {
           </>
         }
       />
-      {comparing !== undefined ? <CompareWithNow projectId={projectId} revision={comparing} close={() => setComparing(undefined)} /> : null}
       <ol className="history">
         {shown.map((revision) => {
           const version = revision.version;
@@ -1789,7 +1859,7 @@ function History(props: {
                 <button className="ghost" onClick={() => pick(revision.id)}>
                   {t("viewThisRevision")}
                 </button>
-                <button className="ghost" onClick={() => setComparing(revision.id)}>
+                <button className="ghost" onClick={() => compare(revision.id)}>
                   {t("compareWithNow")}
                 </button>
               </div>

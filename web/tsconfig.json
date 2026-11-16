@@ -25,5 +25,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src"]
+  "include": ["src", "../tests/projectdata.test.ts"]
 }
