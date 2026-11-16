@@ -21,6 +21,7 @@ import { PROGRESS_SECTIONS } from "./Progress";
 import { JoinProjects } from "./Access";
 import { Icon } from "./Icon";
 import { teamName, teamNameUnset, useLook, type TeamLook } from "./look";
+import { LeafLogo } from "./LeafLogo";
 import { Setup, SignIn, TeamMark } from "./SignIn";
 import { ShareView } from "./Builds";
 import { projectHue, TeamHome } from "./TeamHome";
@@ -101,7 +102,7 @@ function pathOf(route: Route): string {
 
 /** The team's mark, as the older screens ask for it. */
 export function BrandMark({ logo }: { logo?: string | undefined }) {
-  return logo === undefined ? <span className="brand-mark" aria-hidden="true" /> : <img className="brand-logo-mark" src={logo} alt="" />;
+  return logo === undefined ? <span className="brand-mark" aria-hidden="true"><LeafLogo size={18} /></span> : <img className="brand-logo-mark" src={logo} alt="" />;
 }
 
 export function App() {

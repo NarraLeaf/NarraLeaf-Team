@@ -35,6 +35,7 @@ import {
 import { fetchJson, fetchTree } from "./files";
 import { Icon } from "./Icon";
 import { t, type Phrase } from "./i18n";
+import { LeafLogo } from "./LeafLogo";
 import { loadProjectData, type ProjectData } from "./projectData";
 import { StorageMeter, type StorageRow } from "./Security";
 import type { TeamConnection } from "./socket";
@@ -746,7 +747,7 @@ export function ShareView({ token }: { token: string }) {
   return (
     <main className="share-page">
       <header className="share-head">
-        <Icon name="leaf" size={20} />
+        <LeafLogo size={22} className="share-leaf" />
         <div>
           <h1>{view.label}</h1>
           <p className="muted small">

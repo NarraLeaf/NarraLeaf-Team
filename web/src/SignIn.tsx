@@ -12,6 +12,7 @@ import { setUp, signIn, SignInError, type ConsoleAccount } from "./api";
 import { LanguagePicker } from "./Collab";
 import { t } from "./i18n";
 import { Icon } from "./Icon";
+import { LeafLogo } from "./LeafLogo";
 import { fetchLook, teamName, type SigninLayout, type TeamLook } from "./look";
 
 export function TeamMark({ look, size = 28 }: { look: TeamLook | undefined; size?: number }) {
@@ -21,7 +22,7 @@ export function TeamMark({ look, size = 28 }: { look: TeamLook | undefined; size
   // No logo of its own: NarraLeaf's leaf, not the first letter of a name that may be an address.
   return (
     <span className="team-mark team-mark-leaf" aria-hidden="true" style={{ width: size, height: size }}>
-      <Icon name="leaf" size={Math.round(size * 0.62)} />
+      <LeafLogo size={Math.round(size * 0.92)} />
     </span>
   );
 }
@@ -57,7 +58,7 @@ function Frame({ look, children }: { look: TeamLook; children: ReactNode }) {
         </div>
       </div>
       <a className="gate-powered" href="https://narraleaf.com" target="_blank" rel="noreferrer">
-        <Icon name="leaf" size={13} /> Powered by NarraLeaf
+        <LeafLogo size={14} /> Powered by NarraLeaf
       </a>
     </main>
   );

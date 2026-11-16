@@ -94,10 +94,20 @@ input:focus-visible {
 }
 
 .brand-mark {
+  display: inline-flex;
   width: 18px;
   height: 18px;
-  border-radius: 5px;
-  background: linear-gradient(135deg, rgb(var(--nl-primary)), rgb(var(--nl-primary) / 0.55));
+  color: rgb(var(--nl-primary));
+}
+
+.leaf-logo {
+  flex: none;
+  display: block;
+}
+
+.share-head .share-leaf,
+.gate-powered .leaf-logo {
+  color: rgb(var(--nl-primary));
 }
 
 /* ---------------------------------------------------------- sign-in */
