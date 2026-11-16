@@ -100,7 +100,7 @@ export function normalisePath(path: string): string {
 
 /** How a line of the script reads, which is all a viewer needs to draw it. */
 export type StoryRow =
-  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "narration"; readonly text: string }
+  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "narration"; readonly text: string; readonly textId?: string }
   | {
       readonly id: string;
       readonly depth: number;
@@ -109,9 +109,13 @@ export type StoryRow =
       /** A Studio character, resolved through {@link readCharacters}, or a bare name. */
       readonly speaker: { readonly characterId: string } | { readonly name: string } | undefined;
       readonly text: string;
+      /** The line's translation unit and voice id: one key for text, translation and voice. */
+      readonly textId?: string;
+      /** The clip the line plays, as an asset id. */
+      readonly voiceAssetId?: string;
     }
-  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "choice"; readonly text: string }
-  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "option"; readonly text: string }
+  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "choice"; readonly text: string; readonly textId?: string }
+  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "option"; readonly text: string; readonly textId?: string }
   | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "note"; readonly text: string }
   | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "invalid"; readonly text: string }
   | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "empty" }
@@ -167,6 +171,12 @@ function segmentText(segment: Json): string {
   return text(value?.["value"]) ?? "";
 }
 
+/** A text segment's unit id (`{ textId, value }`), as a `textId` field to spread into a row. */
+function segmentId(segment: Json): { textId?: string } {
+  const textId = text(record(segment)?.["textId"]);
+  return textId === undefined || textId === "" ? {} : { textId };
+}
+
 /** A command's name and the one detail worth showing, from an `action` / `control` / `jump` payload. */
 function commandOf(kind: string, payload: Record<string, Json>): { command: string; detail?: string } {
   const command = text(payload["action"]) ?? text(payload["control"]) ?? text(payload["operation"]) ?? kind;
@@ -187,19 +197,22 @@ function rowOf(block: Record<string, Json>, depth: number): StoryRow | undefined
   switch (kind) {
     case "nodeAction": {
       const action = text(payload["action"]);
-      if (action === "narration") return { ...base, kind: "narration", text: segmentText(payload["text"]) };
+      if (action === "narration") return { ...base, kind: "narration", text: segmentText(payload["text"]), ...segmentId(payload["text"]) };
       if (action === "dialogue") {
         const characterId = text(payload["characterId"]);
         const name = text(payload["speakerName"]);
+        const voiceAssetId = text(payload["voiceAssetId"]);
         return {
           ...base,
           kind: "dialogue",
           speaker: characterId !== undefined ? { characterId } : name !== undefined ? { name } : undefined,
           text: segmentText(payload["text"]),
+          ...segmentId(payload["text"]),
+          ...(voiceAssetId === undefined || voiceAssetId === "" ? {} : { voiceAssetId }),
         };
       }
-      if (action === "choice") return { ...base, kind: "choice", text: segmentText(payload["prompt"]) };
-      if (action === "choiceOption") return { ...base, kind: "option", text: segmentText(payload["text"]) };
+      if (action === "choice") return { ...base, kind: "choice", text: segmentText(payload["prompt"]), ...segmentId(payload["prompt"]) };
+      if (action === "choiceOption") return { ...base, kind: "option", text: segmentText(payload["text"]), ...segmentId(payload["text"]) };
       return { ...base, kind: "command", command: action ?? kind, block: kind, payload };
     }
     case "note":

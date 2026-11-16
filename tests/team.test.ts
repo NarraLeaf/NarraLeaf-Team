@@ -475,6 +475,7 @@ describe("opening a session", () => {
       "clients",
       "comments",
       "digests",
+      "glossary",
       "live",
       "locks",
       "milestones",
@@ -487,7 +488,9 @@ describe("opening a session", () => {
       "reviews",
       "session",
       "shares",
+      "templates",
       "todos",
+      "voice",
       "watches",
       "webhooks",
     ]);

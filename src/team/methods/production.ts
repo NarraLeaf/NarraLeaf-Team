@@ -330,7 +330,8 @@ export function productionMethods(): TeamMethod[] {
           milestone = createMilestone(context.options.database, context.user, {
             projectId,
             name: requiredText(read, "name", NAME_LIMIT),
-            revision: requiredText(read, "revision", ANCHOR_FIELD_LIMIT),
+            // A milestone that is only planned names no revision yet.
+            revision: optionalText(read, "revision", ANCHOR_FIELD_LIMIT) ?? "",
             ...(note === undefined ? {} : { note }),
             ...(typeof dueAt === "number" ? { dueAt } : {}),
             gate: flag(read, "gate", false),
@@ -346,7 +347,10 @@ export function productionMethods(): TeamMethod[] {
           projectId,
           actor: context.account.username,
           ref: milestone.revision,
-          summary: `${context.account.username} marked ${milestone.revision.slice(0, 8)} as “${milestone.name}”`,
+          summary:
+            milestone.revision === ""
+              ? `${context.account.username} planned “${milestone.name}”`
+              : `${context.account.username} marked ${milestone.revision.slice(0, 8)} as “${milestone.name}”`,
         });
         return { milestone: view };
       },
@@ -374,7 +378,7 @@ export function productionMethods(): TeamMethod[] {
         const id = requiredText(read, "milestone", ID_LIMIT);
         const input: { name?: string; revision?: string; note?: string | null; dueAt?: number | null; gate?: boolean } = {};
         if (read["name"] !== undefined) input.name = requiredText(read, "name", NAME_LIMIT);
-        if (read["revision"] !== undefined) input.revision = requiredText(read, "revision", ANCHOR_FIELD_LIMIT);
+        if (read["revision"] !== undefined) input.revision = read["revision"] === null ? "" : (optionalText(read, "revision", ANCHOR_FIELD_LIMIT) ?? "");
         if (read["note"] !== undefined) input.note = read["note"] === null ? null : (optionalText(read, "note", NOTE_LIMIT) ?? null);
         const dueAt = optionalTime(read, "dueAt");
         if (dueAt !== undefined) input.dueAt = dueAt;

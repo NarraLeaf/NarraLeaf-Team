@@ -12,10 +12,11 @@ import { currentSession, signOut, type ConsoleAccount, type Watermark } from "./
 import { t, type Phrase } from "./i18n";
 import { TeamConnection, type ConnectionState } from "./socket";
 import { Authorize, Device } from "./OAuth";
-import { ProjectPage, WORKBENCH_TABS, type ProjectTab } from "./Project";
+import { ProjectPage, WORKBENCH_TABS, type ProjectSection, type ProjectTab } from "./Project";
 import { Face, MyTodos, Notifications, Profile, Settings, setFaceSource, useNotifications, type NotificationTarget } from "./Collab";
 import { Admin, ADMIN_PHRASE, ADMIN_SECTIONS, type AdminSection } from "./Admin";
-import { PROJECT_SETTINGS_SECTIONS, type ProjectSettingsSection } from "./Versions";
+import { PROJECT_SETTINGS_SECTIONS } from "./Versions";
+import { PROGRESS_SECTIONS } from "./Progress";
 import { JoinProjects } from "./Access";
 import { Icon } from "./Icon";
 import { teamName, teamNameUnset, useLook, type TeamLook } from "./look";
@@ -39,12 +40,12 @@ type Route =
       readonly id: string;
       readonly tab: ProjectTab;
       readonly revision: string;
-      readonly section?: ProjectSettingsSection;
+      readonly section?: ProjectSection;
       /** The compare page's `<from>...<to>`. */
       readonly range?: string;
     };
 
-const PROJECT_TABS: readonly ProjectTab[] = ["overview", "discussion", "story", "blueprints", "assets", "todos", "reviews", "history", "compare", "checks", "builds", "settings"];
+const PROJECT_TABS: readonly ProjectTab[] = ["overview", "discussion", "story", "blueprints", "assets", "todos", "reviews", "history", "compare", "checks", "progress", "builds", "settings"];
 const PLAIN_SCREENS = ["projects", "me", "todos", "notifications", "settings"] as const;
 
 /** The screen an address names; one that names nothing is "not found", never quietly the home page. */
@@ -61,7 +62,12 @@ function routeOf(location: Location): Route {
     const base = { screen: "project", id: decodeURIComponent(second), tab, revision } as const;
     if (section === undefined) return more.length === 0 ? base : { screen: "notFound" };
     if (tab === "compare") return more.length > 1 ? { screen: "notFound" } : { ...base, range: decodeURIComponent(section) };
-    const known = tab === "settings" ? PROJECT_SETTINGS_SECTIONS.find((key) => key === section) : undefined;
+    const known: ProjectSection | undefined =
+      tab === "settings"
+        ? PROJECT_SETTINGS_SECTIONS.find((key) => key === section)
+        : tab === "progress"
+          ? PROGRESS_SECTIONS.find((key) => key === section)
+          : undefined;
     return known === undefined || more.length > 1 ? { screen: "notFound" } : { ...base, section: known };
   }
   if (first === "admin" && third === undefined) {
@@ -79,8 +85,9 @@ function pathOf(route: Route): string {
   if (route.screen === "project") {
     const query = route.revision === "head" ? "" : `?rev=${encodeURIComponent(route.revision)}`;
     const section =
-      route.tab === "settings" && route.section !== undefined && route.section !== "general"
-        ? `/${route.section}`
+      (route.tab === "settings" && route.section !== undefined && route.section !== "general") ||
+      (route.tab === "progress" && route.section !== undefined && route.section !== "stats")
+        ? `/${route.section ?? ""}`
         : route.tab === "compare" && route.range !== undefined
           ? `/${encodeURIComponent(route.range).replaceAll("%2E", ".")}`
           : "";
@@ -357,7 +364,7 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
           projectId={route.id}
           tab={route.tab}
           revision={route.revision}
-          section={route.section ?? "general"}
+          section={route.section}
           isOperator={account.operator}
           range={route.range}
           go={(tab, revision, section) => go({ screen: "project", id: route.id, tab, revision, ...(section === undefined ? {} : { section }) })}

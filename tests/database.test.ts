@@ -94,6 +94,10 @@ describe("migrate", () => {
       // ⚠ These lines track whichever migration is last: a new one appended to
       // the list is a new thing to undo here, and the failure when it is
       // forgotten is this test rather than a server in the field.
+      database.exec("DROP TABLE glossary");
+      database.exec("DROP TABLE voice_lines");
+      database.exec("DROP TABLE project_templates");
+      database.exec("ALTER TABLE todos DROP COLUMN milestone_id");
       database.exec("DROP TABLE push_subscriptions");
       database.exec("DROP TABLE notification_prefs");
       database.exec("DROP TABLE watches");

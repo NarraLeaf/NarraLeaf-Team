@@ -44,20 +44,23 @@ import { WatchToggle } from "./Notify";
 import type { ConsoleAccount } from "./api";
 import { language, t, type Phrase } from "./i18n";
 import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, type Revision } from "./Production";
-import { OnlineNow, ProjectSettings, type ProjectSettingsSection } from "./Versions";
+import { OnlineNow, PROJECT_SETTINGS_SECTIONS, ProjectSettings, type ProjectSettingsSection } from "./Versions";
 import { AskForMore } from "./Access";
 import { CallError, type TeamConnection, type ConnectionState } from "./socket";
 import { ActionMenu, Blankslate, Checkbox, Flash, SelectPanel, toast } from "./ui";
 import { BuildsPage } from "./Builds";
+import { PROGRESS_SECTIONS, ProgressPage, type ProgressSection } from "./Progress";
 import { ChecksPage, ComparePage, placeText } from "./Insight";
 import { assetUses, eachScene, useProjectData, type Place } from "./projectData";
 import { ApprovalControl, assetTarget, LockControl, MilestonePlan, sceneTarget, useApprovals, useLocks } from "./Review";
 import type { TeamApproval, TeamAssetLock } from "@narraleaf/team-protocol";
 import { describeCommand, GROUP_COLOR, GROUP_ICON, type CommandLookups } from "./storyCommands";
 
-export type ProjectTab = "overview" | "discussion" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "compare" | "checks" | "builds" | "settings";
+export type ProjectTab = "overview" | "discussion" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "compare" | "checks" | "progress" | "builds" | "settings";
+/** A sub-page of the settings or the progress tab, named in the address. */
+export type ProjectSection = ProjectSettingsSection | ProgressSection;
 /** The project's own page: what it is, how it got here, and what is waiting on review. */
-const TABS: readonly ProjectTab[] = ["overview", "discussion", "history", "reviews", "checks", "builds"];
+const TABS: readonly ProjectTab[] = ["overview", "discussion", "history", "reviews", "checks", "progress", "builds"];
 /** Shown to the project's owners only. */
 const OWNER_TABS: readonly ProjectTab[] = [...TABS, "settings"];
 /** What opens in the workbench, Studio's layout, read-only. */
@@ -74,6 +77,7 @@ const TAB_PHRASE: Record<ProjectTab, Phrase> = {
   history: "tabHistory",
   compare: "tabCompare",
   checks: "tabChecks",
+  progress: "tabProgress",
   builds: "tabBuilds",
   settings: "tabSettings",
 };
@@ -131,11 +135,11 @@ export function ProjectPage(props: {
   projectId: string;
   tab: ProjectTab;
   revision: string;
-  section: ProjectSettingsSection;
+  section: ProjectSection | undefined;
   isOperator: boolean;
   /** For the compare page: `<from>...<to>`. */
   range: string | undefined;
-  go: (tab: ProjectTab, revision: string, section?: ProjectSettingsSection) => void;
+  go: (tab: ProjectTab, revision: string, section?: ProjectSection) => void;
   compare: (range: string) => void;
   back: () => void;
 }) {
@@ -378,7 +382,7 @@ export function ProjectPage(props: {
         <ProjectSettings
           connection={connection}
           project={project}
-          section={section}
+          section={PROJECT_SETTINGS_SECTIONS.find((key) => key === section) ?? "general"}
           go={(next) => go("settings", revision, next)}
           changed={(next) => setProject({ ...project, ...next })}
           removed={back}
@@ -387,6 +391,18 @@ export function ProjectPage(props: {
         <ComparePage connection={connection} open={open} projectId={projectId} range={range} setRange={compare} openAt={openAt} />
       ) : tab === "checks" ? (
         <ChecksPage projectId={projectId} tree={tree} openAt={openAt} />
+      ) : tab === "progress" ? (
+        <ProgressPage
+          connection={connection}
+          open={open}
+          projectId={projectId}
+          tree={tree}
+          role={project?.role}
+          me={account.username}
+          operator={account.operator}
+          section={PROGRESS_SECTIONS.find((key) => key === section) ?? "stats"}
+          go={(next) => go("progress", revision, next)}
+        />
       ) : tab === "builds" ? (
         <BuildsPage connection={connection} open={open} projectId={projectId} role={project?.role} me={account.username} operator={account.operator} />
       ) : tab === "history" ? (

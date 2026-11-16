@@ -26,6 +26,7 @@ import type { ConsoleAccount } from "./api";
 import { AvatarCropper } from "./Cropper";
 import { localTimeIn, NotificationSettings, timeZones } from "./Notify";
 import { Icon } from "./Icon";
+import { useMilestoneList } from "./Progress";
 import { studioConnectLink } from "./studioLink";
 import { chooseLanguage, chosenLanguage, t, type Language, type Phrase } from "./i18n";
 import { chooseTheme, chosenTheme, type ThemeChoice } from "./theme";
@@ -260,6 +261,7 @@ export function Todos({
   const [only, setOnly] = useState<TeamTodoKind | "all">("all");
   const [label, setLabel] = useState<string | undefined>(undefined);
   const [mine, setMine] = useState(false);
+  const milestones = useMilestoneList(connection, open && project !== undefined, project ?? "");
   const [labelling, setLabelling] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const labelsInUse = useMemo(() => [...new Set((todos ?? []).flatMap((todo) => todo.labels ?? []))].sort((a, b) => a.localeCompare(b)), [todos]);
@@ -380,6 +382,12 @@ export function Todos({
         <div className="muted small">
           {todo.visibility === "private" ? t("visibilityPrivate") : t("visibilityProject")}
           {todo.assignee !== undefined ? ` · → ${todo.assignee}` : ""}
+          {todo.milestone === undefined ? null : (
+            <>
+              {" · "}
+              <Icon name="flag" size={12} /> {milestones?.find((milestone) => milestone.id === todo.milestone)?.name ?? "…"}
+            </>
+          )}
           {todo.doneRevision !== undefined && todo.project !== undefined ? (
             <>
               {" · "}
@@ -405,6 +413,25 @@ export function Todos({
               label: member.displayName || member.username,
               description: member.displayName ? `@${member.username}` : undefined,
               leading: <Face name={member.displayName || member.username} user={member.username} size={18} />,
+            })),
+          ]}
+        />
+      ) : null}
+      {project !== undefined && todo.visibility === "project" && todo.owner === account.username && (milestones ?? []).length > 0 ? (
+        <SelectPanel
+          className="todo-milestone"
+          size="small"
+          align="end"
+          label={t("todoMilestone")}
+          value={todo.milestone ?? ""}
+          onChange={(id) => void update(todo, { milestone: id === "" ? null : id })}
+          options={[
+            { value: "", label: t("todoNoMilestone") },
+            ...(milestones ?? []).map((milestone) => ({
+              value: milestone.id,
+              label: milestone.name,
+              icon: "flag" as const,
+              description: milestone.dueAt === undefined ? undefined : new Date(milestone.dueAt).toLocaleDateString(),
             })),
           ]}
         />

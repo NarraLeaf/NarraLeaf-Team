@@ -1038,6 +1038,49 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE users ADD COLUMN notify_hook TEXT",
     ],
   },
+  {
+    version: 27,
+    description: "glossaries, voice recording status, project templates, and to-dos counting toward a milestone",
+    statements: [
+      // translations is a JSON object of locale tag to the agreed word.
+      `CREATE TABLE glossary (
+         id          TEXT    PRIMARY KEY,
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         term        TEXT    NOT NULL,
+         translations TEXT   NOT NULL DEFAULT '{}',
+         note        TEXT,
+         created_by  TEXT,
+         updated_by  TEXT,
+         created_at  INTEGER NOT NULL,
+         updated_at  INTEGER NOT NULL,
+         UNIQUE (project_id, term)
+       ) STRICT`,
+      // line is Studio's textId; a line with no row has not been recorded.
+      `CREATE TABLE voice_lines (
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         locale     TEXT    NOT NULL,
+         line       TEXT    NOT NULL,
+         status     TEXT    NOT NULL,
+         take       INTEGER,
+         note       TEXT,
+         updated_by TEXT,
+         updated_at INTEGER NOT NULL,
+         PRIMARY KEY (project_id, locale, line)
+       ) STRICT`,
+      // body is the TeamTemplateBody as JSON.
+      `CREATE TABLE project_templates (
+         id          TEXT    PRIMARY KEY,
+         name        TEXT    NOT NULL UNIQUE,
+         description TEXT,
+         body        TEXT    NOT NULL,
+         created_by  TEXT,
+         created_at  INTEGER NOT NULL,
+         updated_at  INTEGER NOT NULL
+       ) STRICT`,
+      // No REFERENCES: deleting a milestone clears it by hand, and the column can be dropped.
+      "ALTER TABLE todos ADD COLUMN milestone_id TEXT",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

@@ -167,6 +167,12 @@ export const TEAM_CAPABILITIES = [
   "reactions",
   /** Following a project, or one scene of it, to be told when a version is saved or a commit lands. */
   "watches",
+  /** A project's glossary: terms and how each language says them, kept by Team for translators. */
+  "glossary",
+  /** Which voiced lines are recorded, and which need another take, per language. Team state only. */
+  "voice",
+  /** Project templates: members, milestones and to-dos to start a project with, or to add to one. */
+  "templates",
   /** A daily or weekly letter of what was unread, by email or to a personal Feishu or Slack address. */
   "digests",
   /**
@@ -1149,6 +1155,8 @@ export interface TeamTodo {
   readonly doneAt?: number;
   /** The revision that finished it, where it was ticked off in a commit. Never parsed. */
   readonly doneRevision?: string;
+  /** The milestone of the same project it counts toward, by id: what a burndown is drawn from. */
+  readonly milestone?: string;
 }
 
 /** What happened on a to-do topic. */
@@ -1278,11 +1286,15 @@ export type TeamChatEvent =
 
 /* ----------------------------------------------------------- milestones */
 
-/** A name on one revision of a project. Unique per project. */
+/**
+ * A name on one revision of a project. Unique per project. A milestone that is only planned —
+ * "Demo 1, due in March" — has no revision yet, and `revision` is the empty string.
+ */
 export interface TeamMilestone {
   readonly id: string;
   readonly project: string;
   readonly name: string;
+  /** The revision it names, or `""` while it is only planned. */
   readonly revision: string;
   readonly note?: string;
   readonly createdBy?: string;
@@ -1299,6 +1311,75 @@ export interface TeamMilestone {
 export type TeamMilestonesEvent =
   | { readonly kind: "milestone-set"; readonly milestone: TeamMilestone }
   | { readonly kind: "milestone-removed"; readonly milestone: string };
+
+/* ------------------------------------------------------------- glossary */
+
+/** One term of a project's glossary and how each language says it. Unique by term per project. */
+export interface TeamGlossaryEntry {
+  readonly id: string;
+  readonly project: string;
+  /** The term as the source language writes it. */
+  readonly term: string;
+  /** Locale tag → how that language says it. A missing locale has no agreed word yet. */
+  readonly translations: Readonly<Record<string, string>>;
+  readonly note?: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly updatedBy?: string;
+}
+
+/* ---------------------------------------------------------------- voice */
+
+/**
+ * Where one voiced line stands in one language. `recorded`: there is a take to use; `retake`: it
+ * has to be recorded again. A line with no record has not been recorded. Only Team's own record;
+ * the voice files in the project are Studio's.
+ */
+export const TEAM_VOICE_STATUSES = ["recorded", "retake"] as const;
+export type TeamVoiceStatus = (typeof TEAM_VOICE_STATUSES)[number];
+
+export interface TeamVoiceLine {
+  readonly project: string;
+  readonly locale: string;
+  /** The line, by the textId Studio gives it. Never parsed. */
+  readonly line: string;
+  readonly status: TeamVoiceStatus;
+  /** Which take is the one to use, counted from 1. */
+  readonly take?: number;
+  readonly note?: string;
+  readonly updatedAt: number;
+  readonly updatedBy?: string;
+}
+
+/* ------------------------------------------------------------ templates */
+
+/** What a project template puts into a project. Nothing in it touches the project's files. */
+export interface TeamTemplateBody {
+  /** Accounts to add, each with a permission template. Accounts that do not exist are skipped. */
+  readonly members?: readonly { readonly username: string; readonly template: TeamPermissionTemplateId }[];
+  /** Planned milestones, due some days after the template is applied. */
+  readonly milestones?: readonly { readonly name: string; readonly note?: string; readonly dueInDays?: number }[];
+  /** Project to-dos, optionally counting toward one of the milestones above, by name. */
+  readonly todos?: readonly {
+    readonly title: string;
+    readonly body?: string;
+    readonly kind?: TeamTodoKind;
+    readonly locale?: string;
+    readonly labels?: readonly string[];
+    readonly milestone?: string;
+    readonly dueInDays?: number;
+  }[];
+}
+
+export interface TeamProjectTemplate {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly body: TeamTemplateBody;
+  readonly createdBy?: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
 
 /* ------------------------------------------------------------ approvals */
 
@@ -2235,6 +2316,24 @@ export const TEAM_METHODS = {
   reactionsToggle: "reactions.toggle",
   /** Mail a test letter to an address with the stored SMTP settings, and answer what the server said. Operators. */
   adminEmailTest: "admin.email.test",
+  /** A project's glossary. */
+  glossaryList: "glossary.list",
+  /** Add a term to a project's glossary, or change one. Whoever may edit the project's localization. */
+  glossarySet: "glossary.set",
+  /** Take a term out of a project's glossary. */
+  glossaryDelete: "glossary.delete",
+  /** Where a project's voiced lines stand, optionally in one language. */
+  voiceList: "voice.list",
+  /** Mark some lines of one language recorded, needing a retake, or not recorded. */
+  voiceSet: "voice.set",
+  /** The project templates on this server. */
+  templatesList: "templates.list",
+  /** Keep a project template, new or changed; or make one from a project as it stands. */
+  templatesSave: "templates.save",
+  /** Take a project template away. */
+  templatesDelete: "templates.delete",
+  /** Put a template's members, milestones and to-dos into a project. Its owners. */
+  templatesApply: "templates.apply",
   /** The threads anchored in one project, newest activity first. */
   threadsList: "threads.list",
   /** One thread and every comment in it. */

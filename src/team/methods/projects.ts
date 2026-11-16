@@ -37,6 +37,8 @@ import { countUsers, eachUser, findUser, type UserRecord } from "../../identity/
 import { NOT_READ_YET } from "../../teamview.js";
 import { mayRemoveProject, memberBody, projectBody, projectMemberBody } from "../../projects/answers.js";
 import { makeOrAdoptProject } from "../../projects/create.js";
+import { findTemplate } from "../../collab/templates.js";
+import { applyAndAnnounce } from "./planning.js";
 import { setVersionRoles, versionsOf } from "../../authority/versions.js";
 import { storedProjectCreators, storedProjectDeleters } from "../../identity/settings.js";
 import { isOperator, isProjectCreator } from "../../identity/users.js";
@@ -202,7 +204,7 @@ export function requireOwner(context: MethodContext, project: ProjectRecord, doi
 }
 
 /** Whether the caller may make a project, as `project.create_by` stands now. */
-function mayCreateProjects(context: MethodContext): boolean {
+export function mayCreateProjects(context: MethodContext): boolean {
   switch (storedProjectCreators(context.options.database)) {
     case "everyone":
       return true;
@@ -423,6 +425,10 @@ export function projectMethods(): TeamMethod[] {
         const description = optionalText(read, "description", DESCRIPTION_LIMIT);
         const repositoryId = optionalText(read, "repositoryId", ID_LIMIT);
         const clientId = optionalText(read, "clientId", CLIENT_ID_LIMIT);
+        const template = optionalText(read, "template", ID_LIMIT);
+        if (template !== undefined && findTemplate(context.options.database, template) === undefined) {
+          throw new MethodError("not-found", "there is no template of that id");
+        }
 
         // The one call that makes or adopts a project: it writes the row before it
         // asks loreserver and rolls the row back if loreserver refuses, adopts
@@ -461,13 +467,23 @@ export function projectMethods(): TeamMethod[] {
             // changed, so - like every idempotent write here - nothing is
             // announced.
             return { project: projectBody(context.options, result.project, context.user) };
-          case "made":
+          case "made": {
             announceProjects(
               context,
               { kind: "project-created", project: result.project.id },
               projectAudience(context.options.database, result.project.id),
             );
-            return { project: projectBody(context.options, result.project, context.user) };
+            // The project is made either way; a template that could not be put in is said, not thrown.
+            let applied: ReturnType<typeof applyAndAnnounce> | { error: string } | undefined;
+            if (template !== undefined) {
+              try {
+                applied = applyAndAnnounce(context, template, result.project.id);
+              } catch (error) {
+                applied = { error: error instanceof Error ? error.message : String(error) };
+              }
+            }
+            return { project: projectBody(context.options, result.project, context.user), ...(applied === undefined ? {} : { template: applied }) };
+          }
         }
       },
     },

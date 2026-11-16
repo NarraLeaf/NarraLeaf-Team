@@ -93,7 +93,7 @@ function refused(error: unknown): never {
 }
 
 /** Tell everybody entitled to it that a to-do changed, or went. */
-function announceTodo(context: MethodContext, todo: TodoRecord, event: TeamTodosEvent, previous?: TodoRecord): void {
+export function announceTodo(context: MethodContext, todo: TodoRecord, event: TeamTodosEvent, previous?: TodoRecord): void {
   for (const accountId of new Set([...todoAccounts(todo), ...(previous === undefined ? [] : todoAccounts(previous))])) {
     const user = findUserById(context.options.database, accountId);
     // An assignee who can no longer see it hears that it went, not what it says now.
@@ -155,6 +155,7 @@ function todoInput(context: MethodContext, read: Record<string, unknown>): TodoI
   if (read["locale"] !== undefined) input.locale = read["locale"] === null ? null : requiredText(read, "locale", 35);
   if (read["asset"] !== undefined) input.asset = read["asset"] === null ? null : requiredText(read, "asset", ANCHOR_FIELD_LIMIT);
   if (read["labels"] !== undefined) input.labels = todoLabels(read["labels"]);
+  if (read["milestone"] !== undefined) input.milestoneId = read["milestone"] === null ? null : requiredText(read, "milestone", ID_LIMIT);
   if (read["anchor"] !== undefined) {
     if (read["anchor"] === null) {
       input.anchor = null;

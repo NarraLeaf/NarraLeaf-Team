@@ -102,6 +102,7 @@ export function deleteMilestone(database: DatabaseSync, actor: UserRecord, id: s
     throw new MilestoneRefusal("refused", "whoever named it, or an owner, may take it off");
   }
   database.prepare("DELETE FROM milestones WHERE id = ?").run(id);
+  database.prepare("UPDATE todos SET milestone_id = NULL WHERE milestone_id = ?").run(id);
   return current;
 }
 
