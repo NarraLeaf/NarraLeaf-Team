@@ -58,7 +58,9 @@ import { openProjectFiles } from "./authority/project.js";
 import { OwedBytesStore } from "./authority/owedBytes.js";
 import { loadProjectFiles } from "./authority/projectFiles.js";
 import { commitSnapshot } from "./projects/workingCopy.js";
-import { projectDocTopic, projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
+import { accountNotificationsTopic, projectDocTopic, projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
+import { digestJob } from "./collab/digest.js";
+import { setNotificationAnnouncer } from "./collab/notifications.js";
 import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
 import { ensureCertificates } from "./tls/authority.js";
@@ -372,7 +374,14 @@ export async function up(
 
     // Retention, webhook retries and the other jobs that run on the hour.
     housekeeping = new Housekeeping(database);
+    // Daily and weekly digests: whoever is due when the hour comes round.
+    housekeeping.add(digestJob);
     housekeeping.start();
+    // Notifications written away from a request (a watched project's commit found by a refresh)
+    // reach the account's open sessions through the hub, once there is one.
+    setNotificationAnnouncer((accountId, notification) => {
+      team?.hub.publish(accountNotificationsTopic(accountId), { kind: "notification", notification }, new Set([accountId]));
+    });
 
     // Opened before the service below, because whether there is one is part of
     // what this server announces. Opening empties the directory: a file in it
@@ -742,6 +751,7 @@ export async function up(
     // waiting for a byte that is not going to come now.
     blobs?.close();
     housekeeping?.stop();
+    setNotificationAnnouncer(undefined);
     // It holds a timer and a reader that would go on reading repositories
     // through a database that is about to be closed under it.
     readings?.stop();

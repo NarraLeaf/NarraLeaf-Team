@@ -542,6 +542,8 @@ export interface ThreadQuery {
    * one. Opaque to the client, which passes back whatever it was given.
    */
   readonly before?: string;
+  /** Only the threads about the project itself, the ones with no document: its discussion. */
+  readonly projectWide?: boolean;
 }
 
 /**
@@ -588,6 +590,8 @@ export function listThreads(database: DatabaseSync, query: ThreadQuery): ThreadP
   if (query.document !== undefined) {
     conditions.push("document = ?");
     values.push(query.document);
+  } else if (query.projectWide === true) {
+    conditions.push("document IS NULL");
   }
   if (query.element !== undefined) {
     conditions.push("element = ?");

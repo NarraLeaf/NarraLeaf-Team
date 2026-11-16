@@ -60,6 +60,12 @@ export class TeamHub {
     this.sessions.delete(session);
   }
 
+  /** Whether an account has any session open right now: the console or Studio, anywhere. */
+  isOnline(userId: string): boolean {
+    for (const session of this.sessions) if (session.userId === userId) return true;
+    return false;
+  }
+
   /** Where a topic stands now, which is what a new subscription is told. */
   sequenceOf(topic: string): number {
     return this.sequences.get(topic) ?? 0;

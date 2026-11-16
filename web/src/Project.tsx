@@ -39,7 +39,8 @@ import { ChatPanel } from "./LiveChat";
 import { NODE_NAMES_EN, NODE_NAMES_ZH } from "./nodeNames";
 import { rememberPlace } from "./TeamHome";
 import { openInStudio } from "./studioLink";
-import { LineComments, storyLineAnchor, useStoryThreads } from "./Comments";
+import { LineComments, ProjectDiscussion, storyLineAnchor, useStoryThreads } from "./Comments";
+import { WatchToggle } from "./Notify";
 import type { ConsoleAccount } from "./api";
 import { language, t, type Phrase } from "./i18n";
 import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, type Revision } from "./Production";
@@ -54,9 +55,9 @@ import { ApprovalControl, assetTarget, LockControl, MilestonePlan, sceneTarget, 
 import type { TeamApproval, TeamAssetLock } from "@narraleaf/team-protocol";
 import { describeCommand, GROUP_COLOR, GROUP_ICON, type CommandLookups } from "./storyCommands";
 
-export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "compare" | "checks" | "builds" | "settings";
+export type ProjectTab = "overview" | "discussion" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "compare" | "checks" | "builds" | "settings";
 /** The project's own page: what it is, how it got here, and what is waiting on review. */
-const TABS: readonly ProjectTab[] = ["overview", "history", "reviews", "checks", "builds"];
+const TABS: readonly ProjectTab[] = ["overview", "discussion", "history", "reviews", "checks", "builds"];
 /** Shown to the project's owners only. */
 const OWNER_TABS: readonly ProjectTab[] = [...TABS, "settings"];
 /** What opens in the workbench, Studio's layout, read-only. */
@@ -64,6 +65,7 @@ export const WORKBENCH_TABS: readonly ProjectTab[] = ["story", "blueprints", "as
 const WORKBENCH_ICON: Record<string, IconName> = { story: "book", blueprints: "graph", assets: "image", todos: "todo" };
 const TAB_PHRASE: Record<ProjectTab, Phrase> = {
   overview: "tabOverview",
+  discussion: "tabDiscussion",
   story: "tabStory",
   blueprints: "tabBlueprints",
   assets: "tabAssets",
@@ -267,6 +269,7 @@ export function ProjectPage(props: {
         role={project?.role}
         approvals={approvals}
         remember={remember}
+        me={account.username}
       />
     ) : tab === "blueprints" ? (
       <Blueprints projectId={projectId} tree={tree} />
@@ -324,6 +327,7 @@ export function ProjectPage(props: {
         </div>
         <div className="project-actions">
           {project === undefined ? null : <AskForMore connection={connection} project={projectId} role={project.role} />}
+          <WatchToggle connection={connection} projectId={projectId} />
           <div className="btn-group">
             <button className="btn btn-primary" onClick={() => go("story", revision)} title={t("enterWorkbenchHint")}>
               <Icon name="workbench" size={16} />
@@ -394,6 +398,14 @@ export function ProjectPage(props: {
           pick={(id) => go("story", id)}
           me={account.username}
           role={project?.role}
+        />
+      ) : tab === "discussion" ? (
+        <ProjectDiscussion
+          connection={connection}
+          open={open}
+          projectId={projectId}
+          canWrite={project?.role !== undefined && project.role !== "viewer"}
+          me={account.username}
         />
       ) : tab === "reviews" ? (
         <Reviews connection={connection} open={open} projectId={projectId} me={account.username} role={project?.role} viewAt={(id) => go("story", id)} />
@@ -658,11 +670,13 @@ function Story({
   role,
   approvals,
   remember,
+  me,
 }: {
   projectId: string;
   tree: Tree;
   connection: TeamConnection;
   open: boolean;
+  me: string;
   canWrite: boolean;
   role: TeamProjectRole | undefined;
   approvals: ReadonlyMap<string, TeamApproval>;
@@ -799,6 +813,7 @@ function Story({
       projectId={projectId}
       revision={tree.revision === "current" ? (tree.base ?? "") : tree.revision}
       canWrite={canWrite}
+      me={me}
       role={role}
       approvals={approvals}
       selected={selected}
@@ -825,6 +840,7 @@ function StoryBody(props: {
   projectId: string;
   revision: string;
   canWrite: boolean;
+  me: string;
   role: TeamProjectRole | undefined;
   approvals: ReadonlyMap<string, TeamApproval>;
   selected: { blockId: string; excerpt: string } | undefined;
@@ -837,7 +853,7 @@ function StoryBody(props: {
     if (sceneName !== undefined) remember(sceneName);
   }, [sceneName, remember]);
   const { library, storyId, setStoryId, document, sceneId, setSceneId, scene, showCommands, setShowCommands, characters } = props;
-  const { connection, open, projectId, revision, canWrite, selected, setSelected, lookups, fileUrl, role, approvals } = props;
+  const { connection, open, projectId, revision, canWrite, me, selected, setSelected, lookups, fileUrl, role, approvals } = props;
   const faceOf = (character: CharacterView | undefined) => fileUrl(character?.avatarPath);
   /** Who speaks in a scene, in the order they first do, for the outline. */
   const castOf = (id: string): CharacterView[] => {
@@ -942,6 +958,7 @@ function StoryBody(props: {
                     label={scene.name}
                   />
                 )}
+                {sceneId === undefined ? null : <WatchToggle connection={connection} projectId={projectId} scope={`scene:${sceneId}`} compact />}
               </div>
               <div className="segmented" role="group" aria-label={t("showCommands")}>
                 <button aria-pressed={showCommands} className={showCommands ? "active" : undefined} onClick={() => setShowCommands(() => true)}>
@@ -1000,6 +1017,7 @@ function StoryBody(props: {
                     excerpt={selected.excerpt}
                     threads={threadsOn(selected.blockId)}
                     canWrite={canWrite}
+                    me={me}
                     close={() => setSelected(undefined)}
                   />
                 ) : null}

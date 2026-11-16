@@ -42,6 +42,7 @@ import { liveMethods } from "./methods/live.js";
 import { overlayMethods } from "./methods/overlay.js";
 import { docMethods } from "./methods/doc.js";
 import { serverMethods } from "./methods/server.js";
+import { notifyMethods } from "./methods/notify.js";
 import { projectMethods } from "./methods/projects.js";
 import { accessMethods } from "./methods/access.js";
 import { TeamPresence } from "./presence.js";
@@ -187,6 +188,7 @@ export function teamMethods(): readonly TeamMethod[] {
     ...accessMethods(),
     ...accountMethods(),
     ...collabMethods(),
+    ...notifyMethods(),
     ...productionMethods(),
     ...commentMethods(),
     ...clientMethods(),

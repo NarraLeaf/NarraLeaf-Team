@@ -69,6 +69,16 @@ function accountNamed(context: MethodContext, username: string): UserRecord {
 }
 
 /** A project id or name the caller can see, or a not-found refusal. */
+/** Whether a name is a time zone this runtime knows. */
+function isTimeZone(name: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: name });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function projectRef(context: MethodContext, reference: string): string {
   const project = findProject(context.options.database, reference);
   if (project === undefined || !projectVisible(context, project.id)) {
@@ -169,7 +179,8 @@ export function collabMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const username = optionalText(paramsObject(params), "username", USERNAME_LIMIT);
         const user = username === undefined ? context.user : accountNamed(context, username);
-        return { profile: profileBody(user) };
+        const online = context.online?.(user.id);
+        return { profile: { ...profileBody(user), ...(online === undefined ? {} : { online }) } };
       },
     },
     {
@@ -179,7 +190,12 @@ export function collabMethods(): TeamMethod[] {
         const read = paramsObject(params);
         const displayName = read["displayName"] === undefined ? undefined : requiredText(read, "displayName", DISPLAY_NAME_LIMIT);
         const bio = read["bio"] === undefined ? undefined : (optionalText(read, "bio", BIO_LIMIT) ?? "");
+        const timezone = read["timezone"] === undefined ? undefined : (optionalText(read, "timezone", 64) ?? "");
+        if (timezone !== undefined && timezone !== "" && !isTimeZone(timezone)) {
+          throw new MethodError("bad-params", "timezone has to be an IANA time zone such as Asia/Shanghai");
+        }
         const database = context.options.database;
+        if (timezone !== undefined) database.prepare("UPDATE users SET timezone = ? WHERE id = ?").run(timezone === "" ? null : timezone, context.user.id);
         if (displayName !== undefined) database.prepare("UPDATE users SET display_name = ? WHERE id = ?").run(displayName, context.user.id);
         if (bio !== undefined) database.prepare("UPDATE users SET bio = ? WHERE id = ?").run(bio === "" ? null : bio, context.user.id);
         return { profile: profileBody(findUserById(database, context.user.id) ?? context.user) };

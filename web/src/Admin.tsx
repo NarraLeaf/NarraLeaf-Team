@@ -551,11 +551,32 @@ function SettingsTable({ connection, settings: given, reload }: { connection: Te
   const order = [...new Set(given.map((row) => row.group))];
   const settings = [...given].sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
   const [editing, setEditing] = useState<{ label: string; value: string } | undefined>(undefined);
+  const [mailTo, setMailTo] = useState("");
   const { run, view } = useAction();
+  const hasMail = given.some((row) => row.group === "email");
   return (
     <div className="card">
       <strong>{t("serverSettings")}</strong>
       {view}
+      {hasMail ? (
+        <form
+          className="admin-form-row mail-test"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const to = mailTo.trim();
+            void run(
+              () => connection.call<{ to: string }>("admin.email.test", to === "" ? {} : { to }).then((answer) => toast(t("emailTestSent", { to: answer.to }))),
+              undefined,
+            );
+          }}
+        >
+          <span className="muted small">{t("emailTestLead")}</span>
+          <input type="email" value={mailTo} placeholder={t("emailTestTo")} onChange={(event) => setMailTo(event.target.value)} maxLength={254} />
+          <button className="btn btn-sm" type="submit">
+            <Icon name="send" size={14} /> {t("emailTest")}
+          </button>
+        </form>
+      ) : null}
       <table className="admin-table">
         <tbody>
           {settings.map((row, index) => (

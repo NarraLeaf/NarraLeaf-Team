@@ -49,6 +49,8 @@ export interface UserRecord {
   readonly avatar?: string;
   /** A line about themselves, absent where they wrote none. */
   readonly bio?: string;
+  /** An IANA time zone the person set, absent where they set none. */
+  readonly timezone?: string;
 }
 
 /** Raised when a username does not fit the rules. */
@@ -253,6 +255,7 @@ function toUser(database: DatabaseSync, row: Row): UserRecord {
     groups: groupsOf(database, id),
     ...optionalField("avatar", optionalTextColumn(row, "avatar")),
     ...optionalField("bio", optionalTextColumn(row, "bio")),
+    ...optionalField("timezone", optionalTextColumn(row, "timezone")),
   };
 }
 
@@ -262,7 +265,7 @@ function optionalField<K extends string>(key: K, value: string | undefined): { [
 
 const SELECT_USER =
   "SELECT id, username, display_name, email, is_service_account, created_at, " +
-  "disabled_at, token_epoch, tokens_invalidated_at, avatar, bio FROM users";
+  "disabled_at, token_epoch, tokens_invalidated_at, avatar, bio, timezone FROM users";
 
 /**
  * Every account, in name order, one row at a time.

@@ -978,6 +978,66 @@ const MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX share_links_by_project ON share_links (project_id, created_at)",
     ],
   },
+  {
+    version: 26,
+    description: "push subscriptions, notification switches, watches, reactions, time zones and digests",
+    statements: [
+      // One row per browser that asked to be pushed to. endpoint is the push
+      // service's address for it; p256dh and auth are the keys its payloads are
+      // encrypted to (RFC 8291), base64url as the browser gave them.
+      `CREATE TABLE push_subscriptions (
+         endpoint    TEXT    PRIMARY KEY,
+         account_id  TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         p256dh      TEXT    NOT NULL,
+         auth        TEXT    NOT NULL,
+         created_at  INTEGER NOT NULL,
+         last_ok_at  INTEGER
+       ) STRICT`,
+      "CREATE INDEX push_subscriptions_by_account ON push_subscriptions (account_id)",
+      // Only the switches somebody turned; a missing row is on.
+      `CREATE TABLE notification_prefs (
+         account_id TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         category   TEXT    NOT NULL,
+         channel    TEXT    NOT NULL,
+         enabled    INTEGER NOT NULL,
+         PRIMARY KEY (account_id, category, channel)
+       ) STRICT`,
+      // scope is '' for the whole project, scene:{id} for one scene.
+      `CREATE TABLE watches (
+         account_id TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         scope      TEXT    NOT NULL DEFAULT '',
+         created_at INTEGER NOT NULL,
+         PRIMARY KEY (account_id, project_id, scope)
+       ) STRICT`,
+      "CREATE INDEX watches_by_project ON watches (project_id, scope)",
+      // The watched scenes an edit reached since the project's last version.
+      `CREATE TABLE watch_touched (
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         scope      TEXT    NOT NULL,
+         account_id TEXT,
+         at         INTEGER NOT NULL,
+         PRIMARY KEY (project_id, scope)
+       ) STRICT`,
+      // target_kind is comment or chat; target_id the comment's id or the message's.
+      `CREATE TABLE reactions (
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         target_kind TEXT    NOT NULL,
+         target_id   TEXT    NOT NULL,
+         account_id  TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         emoji       TEXT    NOT NULL,
+         at          INTEGER NOT NULL,
+         PRIMARY KEY (target_kind, target_id, account_id, emoji)
+       ) STRICT`,
+      "CREATE INDEX reactions_by_target ON reactions (target_kind, target_id)",
+      "ALTER TABLE users ADD COLUMN timezone TEXT",
+      // off, daily or weekly; and when the last one went.
+      "ALTER TABLE users ADD COLUMN digest TEXT NOT NULL DEFAULT 'off'",
+      "ALTER TABLE users ADD COLUMN last_digest_at INTEGER",
+      // A Feishu or Slack incoming-webhook address of the account's own.
+      "ALTER TABLE users ADD COLUMN notify_hook TEXT",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

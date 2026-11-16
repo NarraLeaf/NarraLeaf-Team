@@ -474,6 +474,7 @@ describe("opening a session", () => {
       "chat",
       "clients",
       "comments",
+      "digests",
       "live",
       "locks",
       "milestones",
@@ -481,10 +482,13 @@ describe("opening a session", () => {
       "oauth",
       "overlay",
       "password-sign-in",
+      "push",
+      "reactions",
       "reviews",
       "session",
       "shares",
       "todos",
+      "watches",
       "webhooks",
     ]);
   });
@@ -3591,6 +3595,7 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminWebhooksTest,
   TEAM_METHODS.adminWebhooksDeliveries,
   TEAM_METHODS.adminWebhooksRedeliver,
+  TEAM_METHODS.adminEmailTest,
 ];
 
 /** Both halves, which is what the gate has to cover. */

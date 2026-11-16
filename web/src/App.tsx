@@ -44,7 +44,7 @@ type Route =
       readonly range?: string;
     };
 
-const PROJECT_TABS: readonly ProjectTab[] = ["overview", "story", "blueprints", "assets", "todos", "reviews", "history", "compare", "checks", "builds", "settings"];
+const PROJECT_TABS: readonly ProjectTab[] = ["overview", "discussion", "story", "blueprints", "assets", "todos", "reviews", "history", "compare", "checks", "builds", "settings"];
 const PLAIN_SCREENS = ["projects", "me", "todos", "notifications", "settings"] as const;
 
 /** The screen an address names; one that names nothing is "not found", never quietly the home page. */
@@ -70,6 +70,8 @@ function routeOf(location: Location): Route {
   }
   const plain = PLAIN_SCREENS.find((key) => key === first);
   if (plain !== undefined && second === undefined) return { screen: plain };
+  // The notification settings live on the settings page; a push's "test" link names them.
+  if (first === "settings" && second === "notifications" && third === undefined) return { screen: "settings" };
   return { screen: "notFound" };
 }
 

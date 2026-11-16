@@ -29,6 +29,7 @@ import {
   projectOpClaimKeys,
 } from "../../../studio-kernel/vendor/kernel.js";
 import { lockedAgainst } from "../../collab/locks.js";
+import { notifyWatchers, touchScenes } from "../../collab/watches.js";
 import { findUserById } from "../../identity/users.js";
 import {
   boundedCount,
@@ -264,6 +265,7 @@ export function docMethods(): TeamMethod[] {
         // A resend answers with the effect it already had; only a new one is counted.
         if (answer.kind === "effect" && answer.effect.seq > before) {
           recordEdit(context.options.database, { accountId: context.user.id, projectId });
+          touchScenes(context.options.database, projectId, scenesOfEdit(intent.document, intent.op), context.user.id);
         }
         return answer;
       },
@@ -341,6 +343,13 @@ function announceVersion(
     ...(label === undefined ? {} : { summary: label }),
   });
   const actor = context.account.displayName || context.account.username;
+  notifyWatchers(database, {
+    projectId,
+    kind: "version",
+    actorId: context.user.id,
+    ref: revision,
+    summary: how === "restored" ? `恢复了较早的版本${label === undefined ? "" : `：${label}`}` : `保存了版本${label === undefined ? "" : `：${label}`}`,
+  });
   emitWebhookEvent(database, {
     type: "version",
     projectId,
@@ -383,6 +392,17 @@ function assetsOfEdit(document: DocIntent["document"], op: DocIntent["op"]): str
     return projectOpClaimKeys(document, op)
       .filter((key) => key.startsWith("asset:"))
       .map((key) => key.slice("asset:".length));
+  } catch {
+    return [];
+  }
+}
+
+/** The scenes an edit writes, by id, as the kernel names its claims (`scene:{id}`). */
+function scenesOfEdit(document: DocIntent["document"], op: DocIntent["op"]): string[] {
+  try {
+    return projectOpClaimKeys(document, op)
+      .filter((key) => key.startsWith("scene:"))
+      .map((key) => key.slice("scene:".length));
   } catch {
     return [];
   }

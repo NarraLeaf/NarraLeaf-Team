@@ -58,6 +58,7 @@ import { pageDecisions } from "../../identity/audit.js";
 import { adminUserBody } from "../../identity/answers.js";
 import { SigningKeyRetirementError, type KeyStore } from "../../identity/keys.js";
 import { defaultPasswordHasher } from "../../identity/passwords.js";
+import { plainAddress, sendMail, smtpSettings } from "../../collab/smtp.js";
 import {
   COLLABORATION_KEY,
   InvalidCollaborationModeError,
@@ -1045,6 +1046,25 @@ export function adminMethods(): TeamMethod[] {
         signin: storedSigninLook(context.options.database),
         watermark: storedWatermark(context.options.database),
       };
+    }),
+    administered(TEAM_METHODS.adminEmailTest, async (params: unknown, context: MethodContext) => {
+      // One message through the relay the email.* policies name, to the operator by default, so a
+      // wrong port or password shows up here and not as a digest nobody received.
+      const read = paramsObject(params);
+      const relay = smtpSettings(context.options.database);
+      if (relay === undefined) throw new MethodError("unavailable", "set email.smtp_host and email.from first");
+      const to = plainAddress(optionalText(read, "to", 254) ?? context.user.email ?? "");
+      if (to === undefined) throw new MethodError("bad-params", "name an address to send to: this account has none");
+      try {
+        await sendMail(relay, {
+          to,
+          subject: "NarraLeaf Team：测试邮件 / test message",
+          text: `这封邮件来自 NarraLeaf Team 服务器，说明邮件设置可以用。\nThis message comes from your NarraLeaf Team server: its mail settings work.\n\n— ${context.account.username}`,
+        });
+      } catch (error) {
+        throw new MethodError("unavailable", error instanceof Error ? error.message : String(error));
+      }
+      return { to };
     }),
   ];
 }

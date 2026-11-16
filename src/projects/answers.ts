@@ -227,12 +227,13 @@ export function avatarUrl(user: UserRecord): string | undefined {
 }
 
 /** An account's profile: a name, a face and a line. */
-export function profileBody(user: UserRecord): { username: string; displayName: string; bio?: string; avatarUrl?: string } {
+export function profileBody(user: UserRecord): { username: string; displayName: string; bio?: string; avatarUrl?: string; timezone?: string } {
   const avatar = avatarUrl(user);
   return {
     username: user.username,
     displayName: user.displayName,
     ...(user.bio === undefined ? {} : { bio: user.bio }),
+    ...(user.timezone === undefined ? {} : { timezone: user.timezone }),
     ...(avatar === undefined ? {} : { avatarUrl: avatar }),
   };
 }

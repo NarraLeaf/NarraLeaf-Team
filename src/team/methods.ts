@@ -74,6 +74,8 @@ export interface MethodContext {
    * change that took something away from it — see TeamHub.recheck.
    */
   readonly recheck?: (userId: string) => void;
+  /** Whether an account has a session open now. Absent outside a server (a test's context). */
+  readonly online?: (userId: string) => boolean;
 }
 
 /**

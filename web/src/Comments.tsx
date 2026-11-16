@@ -6,14 +6,15 @@
  * `revision` is the revision the comment was written against. A thread written
  * here shows in Studio's scene editor on the same line, and the reverse.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
-import { projectThreadsTopic, type TeamComment, type TeamThread } from "@narraleaf/team-protocol";
+import { projectThreadsTopic, type TeamComment, type TeamThread, type TeamThreadEvent } from "@narraleaf/team-protocol";
 
 import { Face } from "./Collab";
 import { Icon } from "./Icon";
+import { MentionField, PersonHover, ReactionBar, useReactions } from "./Notify";
 import { t } from "./i18n";
-import { RelativeTime, toast, toastError } from "./ui";
+import { Blankslate, RelativeTime, toast, toastError } from "./ui";
 import type { TeamConnection } from "./socket";
 
 /** The anchor document for one story. */
@@ -56,7 +57,10 @@ export function useStoryThreads(connection: TeamConnection, open: boolean, proje
   useEffect(() => {
     if (!open) return undefined;
     void load();
-    return connection.subscribe(projectThreadsTopic(projectId), () => void load());
+    return connection.subscribe(projectThreadsTopic(projectId), (payload) => {
+      // A reaction changes no thread; the reaction bars hear it themselves.
+      if ((payload as TeamThreadEvent).kind !== "reaction") void load();
+    });
   }, [open, load, connection, projectId]);
   return threads;
 }
@@ -126,9 +130,11 @@ function sendOnModEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
   }
 }
 
-function ThreadView({ connection, thread, canWrite }: { connection: TeamConnection; thread: TeamThread; canWrite: boolean }) {
+function ThreadView({ connection, thread, canWrite, me }: { connection: TeamConnection; thread: TeamThread; canWrite: boolean; me: string | undefined }) {
   const [comments, setComments] = useState<readonly TeamComment[] | undefined>(undefined);
   const [body, setBody] = useState("");
+  const targets = useMemo(() => (comments ?? []).filter((comment) => comment.deletedAt === undefined).map((comment) => comment.id), [comments]);
+  const reactions = useReactions(connection, thread.project, "comment", targets);
   const load = useCallback(() => {
     connection
       .call<{ comments: TeamComment[] }>("threads.get", { thread: thread.id, limit: 200 })
@@ -179,7 +185,9 @@ function ThreadView({ connection, thread, canWrite }: { connection: TeamConnecti
       {comments === undefined ? <p className="muted small">{t("loading")}</p> : null}
       {(comments ?? []).map((comment) => (
         <article key={comment.id} className="note">
-          <Face name={authorName(comment.author)} {...(isGuest(comment.author) ? {} : { user: comment.author })} size={24} />
+          <PersonHover connection={connection} username={isGuest(comment.author) ? undefined : comment.author}>
+            <Face name={authorName(comment.author)} {...(isGuest(comment.author) ? {} : { user: comment.author })} size={24} />
+          </PersonHover>
           <div className="note-main">
             <div className="note-head">
               <strong>{authorName(comment.author)}</strong>
@@ -188,16 +196,28 @@ function ThreadView({ connection, thread, canWrite }: { connection: TeamConnecti
             <div className={comment.deletedAt === undefined ? "note-text" : "note-text muted"}>
               {comment.deletedAt === undefined ? <CommentBody projectId={thread.project} body={comment.body} /> : t("commentDeleted")}
             </div>
+            {comment.deletedAt === undefined ? (
+              <ReactionBar
+                connection={connection}
+                projectId={thread.project}
+                kind="comment"
+                target={comment.id}
+                reactions={reactions.get(comment.id)}
+                me={me}
+                canReact={canWrite}
+              />
+            ) : null}
           </div>
         </article>
       ))}
       {canWrite && !resolved ? (
         <form className="note-reply" onSubmit={(event) => void reply(event)}>
-          <textarea
+          <MentionField
+            connection={connection}
             value={body}
             placeholder={t("reply")}
             rows={body === "" ? 1 : 3}
-            onChange={(event) => setBody(event.target.value)}
+            onValue={setBody}
             onKeyDown={sendOnModEnter}
             onPaste={pastePicture(thread.project, setBody)}
             maxLength={16000}
@@ -233,9 +253,10 @@ export function LineComments(props: {
   excerpt: string;
   threads: readonly TeamThread[];
   canWrite: boolean;
+  me: string | undefined;
   close: () => void;
 }) {
-  const { connection, projectId, storyId, sceneId, blockId, revision, excerpt, threads, canWrite, close } = props;
+  const { connection, projectId, storyId, sceneId, blockId, revision, excerpt, threads, canWrite, me, close } = props;
   const [body, setBody] = useState("");
   const [writing, setWriting] = useState(false);
   const [top, setTop] = useState<number | undefined>(undefined);
@@ -290,17 +311,18 @@ export function LineComments(props: {
       </header>
       <div className="note-pop-body">
         {threads.map((thread) => (
-          <ThreadView key={thread.id} connection={connection} thread={thread} canWrite={canWrite} />
+          <ThreadView key={thread.id} connection={connection} thread={thread} canWrite={canWrite} me={me} />
         ))}
         {!canWrite && threads.length === 0 ? <p className="muted small">{t("noComments")}</p> : null}
         {canWrite && starting ? (
           <form className="note-reply note-new" onSubmit={(event) => void start(event)}>
-            <textarea
+            <MentionField
+              connection={connection}
               autoFocus
               value={body}
               placeholder={t("addComment")}
               rows={3}
-              onChange={(event) => setBody(event.target.value)}
+              onValue={setBody}
               onKeyDown={sendOnModEnter}
               onPaste={pastePicture(projectId, setBody)}
               maxLength={16000}
@@ -325,5 +347,102 @@ export function LineComments(props: {
         ) : null}
       </div>
     </aside>
+  );
+}
+
+/**
+ * The project's discussion: threads that hang on no line or page - a question for the whole
+ * team, a decision to write down. Newest first, open ones before resolved ones.
+ */
+export function ProjectDiscussion({ connection, open, projectId, canWrite, me }: { connection: TeamConnection; open: boolean; projectId: string; canWrite: boolean; me: string | undefined }) {
+  const [threads, setThreads] = useState<readonly TeamThread[] | undefined>(undefined);
+  const [showResolved, setShowResolved] = useState(false);
+  const [body, setBody] = useState("");
+  const load = useCallback(() => {
+    connection
+      .call<{ threads: TeamThread[] }>("threads.list", { project: projectId, projectWide: true, limit: 200 })
+      .then((answer) => setThreads(answer.threads))
+      .catch((caught: unknown) => {
+        setThreads([]);
+        toastError(caught);
+      });
+  }, [connection, projectId]);
+  useEffect(() => {
+    if (!open) return undefined;
+    load();
+    return connection.subscribe(projectThreadsTopic(projectId), (payload) => {
+      if ((payload as TeamThreadEvent).kind !== "reaction") load();
+    });
+  }, [open, load, connection, projectId]);
+  const start = async (event: FormEvent) => {
+    event.preventDefault();
+    const text = body.trim();
+    if (text === "") return;
+    setBody("");
+    try {
+      await connection.call("threads.create", { project: projectId, anchor: {}, body: text, clientId: crypto.randomUUID() });
+      toast(t("discussionStarted"));
+    } catch (caught) {
+      setBody(text);
+      toastError(caught);
+    }
+  };
+  const sorted = [...(threads ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);
+  const openThreads = sorted.filter((thread) => thread.status !== "resolved");
+  const resolved = sorted.filter((thread) => thread.status === "resolved");
+  return (
+    <div className="discussion">
+      <header className="discussion-head">
+        <div>
+          <h2>{t("discussion")}</h2>
+          <p className="muted small">{t("discussionLead")}</p>
+        </div>
+      </header>
+      {canWrite ? (
+        <form className="note-reply note-new discussion-new" onSubmit={(event) => void start(event)}>
+          <MentionField
+            connection={connection}
+            value={body}
+            placeholder={t("discussionPlaceholder")}
+            rows={body === "" ? 2 : 4}
+            onValue={setBody}
+            onKeyDown={sendOnModEnter}
+            onPaste={pastePicture(projectId, setBody)}
+            maxLength={16000}
+          />
+          <div className="note-reply-actions">
+            <span className="muted small">{t("sendHint")}</span>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={body.trim() === ""}>
+              {t("startThread")}
+            </button>
+          </div>
+        </form>
+      ) : null}
+      {threads === undefined ? <p className="muted small">{t("loading")}</p> : null}
+      {threads !== undefined && openThreads.length === 0 ? (
+        <Blankslate icon="chat" title={t("discussionEmpty")}>
+          {canWrite ? t("discussionEmptyLead") : t("discussionReadOnly")}
+        </Blankslate>
+      ) : null}
+      <div className="discussion-list">
+        {openThreads.map((thread) => (
+          <ThreadView key={thread.id} connection={connection} thread={thread} canWrite={canWrite} me={me} />
+        ))}
+      </div>
+      {resolved.length > 0 ? (
+        <>
+          <button className="btn btn-invisible btn-sm" onClick={() => setShowResolved((value) => !value)}>
+            {t(showResolved ? "discussionHideResolved" : "discussionShowResolved", { count: String(resolved.length) })}
+          </button>
+          {showResolved ? (
+            <div className="discussion-list">
+              {resolved.map((thread) => (
+                <ThreadView key={thread.id} connection={connection} thread={thread} canWrite={canWrite} me={me} />
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
   );
 }

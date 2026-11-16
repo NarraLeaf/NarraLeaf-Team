@@ -379,6 +379,11 @@ export function setWebhookFetch(next: WebhookFetch | undefined): void {
   fetchForEvents = next;
 }
 
+/** What posts to an outside address now: the test's, or the platform's. Personal digest hooks use it too. */
+export function webhookFetch(): WebhookFetch {
+  return fetchForEvents ?? (fetch as unknown as WebhookFetch);
+}
+
 const retryTimers = new Map<number, NodeJS.Timeout>();
 
 /** Try a delivery, and keep trying on the schedule while it fails. */

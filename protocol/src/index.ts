@@ -159,6 +159,17 @@ export const TEAM_CAPABILITIES = [
   /** Read-only links for somebody without an account, opened at `/console/s/{token}`. */
   "shares",
   /**
+   * Notifications may reach a browser that is closed: Web Push, encrypted per RFC 8291, to the
+   * subscriptions a console registered with `push.subscribe` under this server's VAPID key.
+   */
+  "push",
+  /** An emoji from {@link TEAM_REACTIONS} on a comment or a chat message. */
+  "reactions",
+  /** Following a project, or one scene of it, to be told when a version is saved or a commit lands. */
+  "watches",
+  /** A daily or weekly letter of what was unread, by email or to a personal Feishu or Slack address. */
+  "digests",
+  /**
    * A project's own channel: messages its members write to each other, kept,
    * in order, and read back a page at a time - unlike a live session's chat,
    * which only the people in the room at that moment ever see.
@@ -992,7 +1003,9 @@ export type TeamThreadEvent =
   | { readonly kind: "thread-created"; readonly thread: TeamThread }
   | { readonly kind: "thread-updated"; readonly thread: TeamThread }
   | { readonly kind: "comment-created"; readonly thread: string; readonly comment: TeamComment }
-  | { readonly kind: "comment-updated"; readonly thread: string; readonly comment: TeamComment };
+  | { readonly kind: "comment-updated"; readonly thread: string; readonly comment: TeamComment }
+  /** Somebody reacted to a comment, or took a reaction back; `target` is the comment id. */
+  | { readonly kind: "reaction"; readonly reaction: TeamReaction };
 
 /**
  * What happened on the projects topic.
@@ -1154,7 +1167,63 @@ export type TeamNotificationKind =
   /** Somebody asked for access this account decides on; `ref` is `access:{id}`. */
   | "access-requested"
   /** An access request this account made was answered; `ref` is `access:{id}`. */
-  | "access-decided";
+  | "access-decided"
+  /** Something this account follows changed: a version saved or a commit landed; `ref` is the revision. */
+  | "watch";
+
+/**
+ * What a person may switch notifications on and off by. Each {@link TeamNotificationKind} is one
+ * of these: `review-requested` and `review-answered` are both `review`, both access kinds `access`.
+ */
+export const TEAM_NOTIFICATION_CATEGORIES = ["mention", "reply", "assign", "review", "watch", "access"] as const;
+
+export type TeamNotificationCategory = (typeof TEAM_NOTIFICATION_CATEGORIES)[number];
+
+/**
+ * Where a notification may go: the list in the console and Studio, a push to a browser, and the
+ * daily or weekly digest (by email, or to the account's own Feishu or Slack address).
+ */
+export const TEAM_NOTIFICATION_CHANNELS = ["inapp", "push", "email"] as const;
+
+export type TeamNotificationChannel = (typeof TEAM_NOTIFICATION_CHANNELS)[number];
+
+export const TEAM_DIGEST_FREQUENCIES = ["off", "daily", "weekly"] as const;
+
+export type TeamDigestFrequency = (typeof TEAM_DIGEST_FREQUENCIES)[number];
+
+/** One account's notification settings. Every switch not stored is on. */
+export interface TeamNotificationPrefs {
+  readonly switches: readonly { readonly category: TeamNotificationCategory; readonly channel: TeamNotificationChannel; readonly enabled: boolean }[];
+  readonly digest: TeamDigestFrequency;
+  /** A Feishu or Slack incoming-webhook address the digest is also posted to. */
+  readonly hook?: string;
+  /** Where the digest is mailed, absent when the account has no address. */
+  readonly email?: string;
+  /** Whether this server can send mail at all: an operator configured SMTP. */
+  readonly mail: boolean;
+  /** How many browsers this account has asked to be pushed to. */
+  readonly pushSubscriptions: number;
+}
+
+/** Something one account follows: a whole project, or one scene in it. */
+export interface TeamWatch {
+  readonly project: string;
+  /** `scene:{sceneId}` for one scene; absent for the whole project. */
+  readonly scope?: string;
+  readonly createdAt: number;
+}
+
+/** The reactions a comment or a chat message may carry, and nothing else. */
+export const TEAM_REACTIONS = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"] as const;
+
+export type TeamReactionEmoji = (typeof TEAM_REACTIONS)[number];
+
+/** Everybody who put one emoji on one comment or message, by username, earliest first. */
+export interface TeamReaction {
+  readonly target: string;
+  readonly emoji: TeamReactionEmoji;
+  readonly by: readonly string[];
+}
 
 /* -------------------------------------------------------------- reviews */
 
@@ -1203,7 +1272,9 @@ export interface TeamChatMessage {
 
 export type TeamChatEvent =
   | { readonly kind: "chat-message"; readonly message: TeamChatMessage }
-  | { readonly kind: "chat-deleted"; readonly id: number; readonly project: string };
+  | { readonly kind: "chat-deleted"; readonly id: number; readonly project: string }
+  /** Somebody reacted to a message, or took a reaction back; `target` is the message id. */
+  | { readonly kind: "reaction"; readonly project: string; readonly reaction: TeamReaction };
 
 /* ----------------------------------------------------------- milestones */
 
@@ -1460,6 +1531,10 @@ export interface TeamProfile {
   readonly bio?: string;
   /** Where the avatar image is, on this server. Absent for an account with none. */
   readonly avatarUrl?: string;
+  /** An IANA time zone the person set, such as `Asia/Shanghai`. */
+  readonly timezone?: string;
+  /** Whether a console or a Studio of theirs is connected now. */
+  readonly online?: boolean;
 }
 
 /* --------------------------------------------------------- project members */
@@ -2134,6 +2209,32 @@ export const TEAM_METHODS = {
   notificationsList: "notifications.list",
   /** Mark notifications read. */
   notificationsRead: "notifications.read",
+  /** The caller's notification switches, digest frequency and personal address. */
+  notificationsPrefs: "notifications.prefs",
+  /** Change some of them. */
+  notificationsPrefsSet: "notifications.prefs.set",
+  /** Post a line to the caller's personal Feishu or Slack address now, and answer how it went. */
+  notificationsHookTest: "notifications.hook.test",
+  /** Send the caller their digest now, whatever the frequency says. */
+  notificationsDigestNow: "notifications.digest.now",
+  /** This server's VAPID public key, for `PushManager.subscribe`. */
+  pushKey: "push.key",
+  /** Ask for this browser to be pushed to. */
+  pushSubscribe: "push.subscribe",
+  /** Stop pushing to one browser. */
+  pushUnsubscribe: "push.unsubscribe",
+  /** Push a test notification to every browser of the caller's, and answer how many it reached. */
+  pushTest: "push.test",
+  /** What the caller follows, optionally in one project. */
+  watchesList: "watches.list",
+  /** Follow a project or a scene, or stop. */
+  watchesSet: "watches.set",
+  /** The reactions on some of a project's comments or chat messages. */
+  reactionsList: "reactions.list",
+  /** Put an emoji on a comment or a message, or take it back. */
+  reactionsToggle: "reactions.toggle",
+  /** Mail a test letter to an address with the stored SMTP settings, and answer what the server said. Operators. */
+  adminEmailTest: "admin.email.test",
   /** The threads anchored in one project, newest activity first. */
   threadsList: "threads.list",
   /** One thread and every comment in it. */

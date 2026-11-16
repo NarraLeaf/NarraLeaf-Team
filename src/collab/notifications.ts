@@ -11,6 +11,8 @@ import { integerColumn, optionalIntegerColumn, optionalTextColumn, textColumn, t
 import { findUser, findUserById, type UserRecord } from "../identity/users.js";
 import { maySeeProject } from "../projects/members.js";
 import type { TeamNotification, TeamNotificationKind } from "../team/protocol.js";
+import { categoryOf, switchOn } from "./prefs.js";
+import { pushNotification } from "./push.js";
 
 /** The longest summary kept. */
 const SUMMARY_LIMIT = 200;
@@ -40,6 +42,9 @@ export interface NewNotification {
 /**
  * Notify each of `recipients` who may see the project, except the actor.
  * Answers the notifications written, by account id, for the caller to announce.
+ *
+ * Each person's switches decide where it goes: with `inapp` off nothing is written (and so nothing
+ * is announced or put in a digest); with `push` on, every browser they subscribed is pushed to.
  */
 export function notify(
   database: DatabaseSync,
@@ -54,6 +59,8 @@ export function notify(
     const user = findUserById(database, accountId);
     if (user === undefined || user.disabledAt !== undefined) continue;
     if (entry.projectId !== undefined && !maySeeProject(database, entry.projectId, user)) continue;
+    const category = categoryOf(entry.kind);
+    if (!switchOn(database, accountId, category, "inapp")) continue;
     const result = database
       .prepare(
         `INSERT INTO notifications (account_id, kind, project_id, ref, actor_id, summary, at, read_at)
@@ -61,9 +68,31 @@ export function notify(
       )
       .run(accountId, entry.kind, entry.projectId ?? null, entry.ref ?? null, entry.actorId ?? null, summary, now);
     const row = database.prepare("SELECT * FROM notifications WHERE id = ?").get(Number(result.lastInsertRowid));
-    if (row !== undefined) written.set(accountId, toNotification(database, row as Row));
+    if (row === undefined) continue;
+    const notification = toNotification(database, row as Row);
+    written.set(accountId, notification);
+    if (switchOn(database, accountId, category, "push")) pushNotification(database, accountId, notification);
   }
   return written;
+}
+
+/** Tells an account's open sessions about a new notification. */
+export type NotificationAnnouncer = (accountId: string, notification: TeamNotification) => void;
+
+let announcer: NotificationAnnouncer | undefined;
+
+/**
+ * Who announces notifications written away from any request - a commit found by a refresh, a
+ * version saved on the hour. The server sets it once it has a hub; undefined while it has none.
+ */
+export function setNotificationAnnouncer(next: NotificationAnnouncer | undefined): void {
+  announcer = next;
+}
+
+/** Announce what {@link notify} wrote, through the server's announcer. */
+export function announceWritten(written: Map<string, TeamNotification>): void {
+  if (announcer === undefined) return;
+  for (const [accountId, notification] of written) announcer(accountId, notification);
 }
 
 /** The accounts a comment body mentions by username. */

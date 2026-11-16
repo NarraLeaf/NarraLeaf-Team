@@ -333,6 +333,7 @@ export class TeamSession implements HubSession {
       recheck: (userId) => {
         this.options.hub.recheck(userId);
       },
+      online: (userId) => this.options.hub.isOnline(userId),
     };
 
     this.inFlight += 1;

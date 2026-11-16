@@ -94,6 +94,15 @@ describe("migrate", () => {
       // ⚠ These lines track whichever migration is last: a new one appended to
       // the list is a new thing to undo here, and the failure when it is
       // forgotten is this test rather than a server in the field.
+      database.exec("DROP TABLE push_subscriptions");
+      database.exec("DROP TABLE notification_prefs");
+      database.exec("DROP TABLE watches");
+      database.exec("DROP TABLE watch_touched");
+      database.exec("DROP TABLE reactions");
+      database.exec("ALTER TABLE users DROP COLUMN timezone");
+      database.exec("ALTER TABLE users DROP COLUMN digest");
+      database.exec("ALTER TABLE users DROP COLUMN last_digest_at");
+      database.exec("ALTER TABLE users DROP COLUMN notify_hook");
       database.exec("DROP TABLE builds");
       database.exec("DROP TABLE attachments");
       database.exec("DROP TABLE share_links");

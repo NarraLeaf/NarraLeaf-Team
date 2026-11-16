@@ -1413,3 +1413,337 @@
 .danger-zone {
   margin-top: 40px;
 }
+
+/* ---------------------------------------------------- phase E: reactions */
+
+.reactions {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--nl-edge);
+  border-radius: var(--nl-radius-pill);
+  background: var(--nl-fill-subtle);
+  color: var(--nl-fg-muted);
+  font-size: var(--nl-text-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.reaction:hover:not(:disabled) {
+  border-color: var(--nl-edge-strong);
+  background: var(--nl-fill);
+}
+
+.reaction:disabled {
+  cursor: default;
+}
+
+.reaction.mine {
+  border-color: rgb(var(--nl-primary) / 0.6);
+  background: rgb(var(--nl-primary) / 0.14);
+  color: rgb(var(--nl-primary-ink));
+}
+
+.reaction-emoji {
+  font-size: 13px;
+}
+
+.reaction-add {
+  padding: 0 6px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.note:hover .reaction-add,
+.chat-line:hover .reaction-add,
+.reaction-add[aria-expanded="true"],
+.reaction-add:focus-visible,
+.reactions:has(.reaction:not(.reaction-add)) .reaction-add {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .reaction-add {
+    opacity: 1;
+  }
+}
+
+.reaction-picker {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  z-index: 30;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-radius: var(--nl-radius-pill);
+  background: rgb(var(--nl-surface-overlay));
+  box-shadow: var(--nl-shadow-overlay);
+}
+
+.reaction-choice {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 17px;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+
+.reaction-choice:hover,
+.reaction-choice:focus-visible {
+  background: var(--nl-fill);
+  transform: scale(1.15);
+}
+
+/* ------------------------------------------------------ phase E: watching */
+
+.btn.is-watching {
+  color: rgb(var(--nl-primary-ink));
+}
+
+.btn.is-watching:not(.btn-invisible) {
+  border-color: rgb(var(--nl-primary) / 0.5);
+  background: rgb(var(--nl-primary) / 0.1);
+}
+
+/* ------------------------------------------------------ phase E: mentions */
+
+.mention-field {
+  position: relative;
+  display: block;
+  flex: 1;
+  min-width: 0;
+}
+
+.mention-field > textarea,
+.mention-field > input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.mention-offers {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  z-index: 40;
+  min-width: 220px;
+  max-width: 320px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border-radius: var(--nl-radius);
+  background: rgb(var(--nl-surface-overlay));
+  box-shadow: var(--nl-shadow-overlay);
+}
+
+.mention-offer {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--nl-radius-sm);
+  background: transparent;
+  color: rgb(var(--nl-fg));
+  font-size: var(--nl-text-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mention-offer.active,
+.mention-offer:hover {
+  background: rgb(var(--nl-primary) / 0.16);
+}
+
+/* ------------------------------------------------- phase E: person cards */
+
+.person-hover {
+  position: relative;
+  display: inline-flex;
+}
+
+.person-card {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 180px;
+  max-width: 260px;
+  padding: 10px 12px;
+  border-radius: var(--nl-radius);
+  background: rgb(var(--nl-surface-overlay));
+  box-shadow: var(--nl-shadow-overlay);
+  color: rgb(var(--nl-fg));
+  font-size: var(--nl-text-md);
+  font-weight: normal;
+  white-space: normal;
+  text-align: left;
+}
+
+.person-online {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot-online,
+.dot-offline {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dot-online {
+  background: rgb(var(--nl-success));
+}
+
+.dot-offline {
+  background: rgb(var(--nl-fg-subtle));
+}
+
+.person-bio {
+  margin-top: 4px;
+}
+
+/* ---------------------------------------- phase E: notification settings */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.notify-matrix {
+  width: 100%;
+  max-width: 560px;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: var(--nl-text-md);
+}
+
+.notify-matrix th,
+.notify-matrix td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--nl-edge-subtle);
+}
+
+.notify-matrix thead th {
+  color: rgb(var(--nl-fg-muted));
+  font-weight: 500;
+  font-size: var(--nl-text-sm);
+  text-align: center;
+}
+
+.notify-matrix tbody th {
+  font-weight: normal;
+  text-align: left;
+}
+
+.notify-matrix td {
+  text-align: center;
+}
+
+.notify-matrix td .nl-checkbox,
+.notify-matrix td label {
+  justify-content: center;
+}
+
+.settings-sub {
+  margin: 20px 0 6px;
+  font-size: var(--nl-text-base);
+  font-weight: 600;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 8px 0;
+}
+
+.settings-row .grow {
+  flex: 1;
+  min-width: 200px;
+}
+
+.settings-row-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* ----------------------------------------------------- phase E: discussion */
+
+.discussion {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 820px;
+}
+
+.discussion-head h2 {
+  margin: 0;
+  font-size: var(--nl-text-lg);
+}
+
+.discussion-head p {
+  margin: 4px 0 0;
+}
+
+.discussion-new {
+  padding: 12px;
+  border: 1px solid var(--nl-edge);
+  border-radius: var(--nl-radius-lg);
+  background: rgb(var(--nl-surface-raised) / 0.5);
+}
+
+.discussion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.discussion-list .note-thread {
+  padding: 12px 14px;
+  border: 1px solid var(--nl-edge);
+  border-radius: var(--nl-radius-lg);
+  background: rgb(var(--nl-surface));
+}
+
+.discussion-list .note-thread + .note-thread {
+  margin-top: 0;
+  border-top: 1px solid var(--nl-edge);
+}
+
+.mail-test {
+  flex-wrap: wrap;
+  margin: 8px 0 12px;
+}
+
+.mail-test input {
+  flex: 1;
+  min-width: 200px;
+}

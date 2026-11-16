@@ -24,6 +24,7 @@ import {
 
 import type { ConsoleAccount } from "./api";
 import { AvatarCropper } from "./Cropper";
+import { localTimeIn, NotificationSettings, timeZones } from "./Notify";
 import { Icon } from "./Icon";
 import { studioConnectLink } from "./studioLink";
 import { chooseLanguage, chosenLanguage, t, type Language, type Phrase } from "./i18n";
@@ -789,6 +790,7 @@ const NOTIFICATION_PHRASE: Record<TeamNotification["kind"], Phrase> = {
   "review-answered": "nReviewAnswered",
   "access-requested": "nAccessRequested",
   "access-decided": "nAccessDecided",
+  watch: "nWatch",
 };
 
 const KIND_PHRASE: Record<TeamTodoKind, Phrase> = { task: "kindTask", asset: "kindAsset", translation: "kindTranslation", voice: "kindVoice" };
@@ -976,6 +978,7 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
   const [profile, setProfile] = useState<TeamProfile | undefined>(undefined);
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
+  const [timezone, setTimezone] = useState("");
   const [note, setNote] = useState<string | undefined>(undefined);
   const [devices, setDevices] = useState<readonly TeamAccountDevice[]>([]);
   const picker = useRef<HTMLInputElement>(null);
@@ -988,6 +991,7 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
         setProfile(answer.profile);
         setDisplayName(answer.profile.displayName);
         setBio(answer.profile.bio ?? "");
+        setTimezone(answer.profile.timezone ?? "");
       })
       .catch(() => undefined);
     connection
@@ -1002,7 +1006,7 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
   const save = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await connection.call("account.profile.update", { displayName, bio });
+      await connection.call("account.profile.update", { displayName, bio, timezone });
       setNote(t("saved"));
       load();
     } catch (caught) {
@@ -1076,6 +1080,22 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
             <span className="muted small">{t("bio")}</span>
             <textarea value={bio} onChange={(event) => setBio(event.target.value)} maxLength={400} rows={3} />
           </label>
+          <div className="settings-row">
+            <span>
+              <span className="muted small">{t("timezone")}</span>
+              <br />
+              <span className="small">{timezone === "" ? t("timezoneUnset") : localTimeIn(timezone) === undefined ? timezone : `${timezone} · ${localTimeIn(timezone)}`}</span>
+            </span>
+            <SelectPanel<string>
+              label={t("timezone")}
+              value={timezone === "" ? "-" : timezone}
+              filterFrom={0}
+              options={[{ value: "-", label: t("timezoneUnset") }, ...timeZones().map((zone) => ({ value: zone, label: zone }))]}
+              onChange={(zone) => setTimezone(zone === "-" ? "" : zone)}
+              size="small"
+              align="end"
+            />
+          </div>
           <div className="actions">
             {note !== undefined ? <span className="muted small">{note}</span> : null}
             <button className="primary" type="submit">
@@ -1084,6 +1104,7 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
           </div>
         </form>
       </div>
+      <NotificationSettings connection={connection} open={open} />
       <div className="card settings-block">
         <h2>{t("devices")}</h2>
         {devices.length === 0 ? (
