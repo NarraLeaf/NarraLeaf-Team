@@ -702,6 +702,17 @@ button.big {
   margin-bottom: 6px;
 }
 
+/* Three choices side by side; `.admin-field` would otherwise stack them. */
+fieldset.admin-field.layout-choice {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 160px));
+  gap: 8px;
+}
+
+fieldset.admin-field.layout-choice > :not(.layout-option) {
+  grid-column: 1 / -1;
+}
+
 .layout-option {
   display: flex;
   flex-direction: column;
