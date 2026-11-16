@@ -684,7 +684,6 @@ export function AuditPanel({ connection }: { connection: TeamConnection }) {
         <SelectPanel<Outcome>
           label={t("auditOutcome")}
           value={outcome}
-          size="small"
           options={[
             { value: "any", label: t("auditAny") },
             { value: "allowed", label: t("auditAllowed") },
@@ -694,7 +693,7 @@ export function AuditPanel({ connection }: { connection: TeamConnection }) {
         />
         <input type="date" aria-label={t("auditSince")} value={since} onChange={(event) => setSince(event.target.value)} />
         <input type="date" aria-label={t("auditUntil")} value={until} onChange={(event) => setUntil(event.target.value)} />
-        <button className="btn btn-sm" type="submit">
+        <button className="btn" type="submit">
           {t("auditFilter")}
         </button>
       </form>

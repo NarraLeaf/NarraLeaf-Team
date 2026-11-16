@@ -3082,7 +3082,7 @@ fieldset.admin-field {
 .wb-search {
   flex: 1;
   max-width: 560px;
-  height: 26px;
+  height: 28px;
   margin: 0 auto;
   padding: 0 10px;
   font-size: 12px;
@@ -3108,7 +3108,7 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
+  height: 28px;
   padding: 0 10px;
   border: 0;
   border-radius: var(--nl-radius);

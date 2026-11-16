@@ -209,7 +209,7 @@ export function WatchToggle({ connection, projectId, scope, compact = false }: {
   return (
     <button
       type="button"
-      className={`btn ${compact ? "btn-invisible btn-icon btn-sm" : "btn-sm"}${watching ? " is-watching" : ""}`}
+      className={`btn${compact ? " btn-invisible btn-icon btn-sm" : ""}${watching ? " is-watching" : ""}`}
       aria-pressed={watching}
       title={t(scope === undefined ? "watchProjectHint" : "watchSceneHint")}
       aria-label={label}
@@ -653,7 +653,7 @@ export function NotificationSettings({ connection, open }: { connection: TeamCon
         </span>
       </div>
       <form
-        className="settings-row"
+        className="settings-row settings-row-field"
         onSubmit={(event) => {
           event.preventDefault();
           void set({ hook: hook.trim() === "" ? null : hook.trim() }).then((ok) => ok && toast(t("saved")));
@@ -664,10 +664,10 @@ export function NotificationSettings({ connection, open }: { connection: TeamCon
           <input type="url" value={hook} onChange={(event) => setHook(event.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" maxLength={2048} />
         </label>
         <span className="settings-row-actions">
-          <button className="btn btn-sm" type="button" disabled={busy || hook.trim() === ""} onClick={() => void run(() => connection.call("notifications.hook.test", { url: hook.trim() }).then(() => toast(t("hookTested"))))}>
+          <button className="btn" type="button" disabled={busy || hook.trim() === ""} onClick={() => void run(() => connection.call("notifications.hook.test", { url: hook.trim() }).then(() => toast(t("hookTested"))))}>
             {t("sendTest")}
           </button>
-          <button className="btn btn-primary btn-sm" type="submit" disabled={(prefs.hook ?? "") === hook.trim()}>
+          <button className="btn btn-primary" type="submit" disabled={(prefs.hook ?? "") === hook.trim()}>
             {t("save")}
           </button>
         </span>

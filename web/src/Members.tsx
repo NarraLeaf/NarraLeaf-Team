@@ -136,7 +136,7 @@ export function ProjectMembers({ connection, projectId }: { connection: TeamConn
                 <AreaCell member={member} change={(areas) => setAreas(member, areas)} />
               </td>
               <td className="admin-actions">
-                <ActionMenu actions={[{ label: t("removeMember"), icon: "trash", danger: true, run: () => remove(member) }]} />
+                <ActionMenu triggerClassName="btn btn-invisible btn-icon btn-sm" actions={[{ label: t("removeMember"), icon: "trash", danger: true, run: () => remove(member) }]} />
               </td>
             </tr>
           ))}

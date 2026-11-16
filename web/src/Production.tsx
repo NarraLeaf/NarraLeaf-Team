@@ -338,10 +338,10 @@ export function MilestoneTags(props: {
       {naming ? (
         <form className="milestone-new" onSubmit={(event) => void add(event)}>
           <input autoFocus value={name} placeholder={t("milestoneName")} maxLength={80} onChange={(event) => setName(event.target.value)} />
-          <button className="primary small" type="submit" disabled={name.trim() === ""}>
+          <button className="btn btn-primary" type="submit" disabled={name.trim() === ""}>
             {t("add")}
           </button>
-          <button className="ghost small" type="button" onClick={() => setNaming(false)}>
+          <button className="btn btn-invisible" type="button" onClick={() => setNaming(false)}>
             {t("cancel")}
           </button>
         </form>

@@ -595,7 +595,7 @@ function SettingsTable({ connection, settings: given, reload }: { connection: Te
         >
           <span className="muted small">{t("emailTestLead")}</span>
           <input type="email" value={mailTo} placeholder={t("emailTestTo")} onChange={(event) => setMailTo(event.target.value)} maxLength={254} />
-          <button className="btn btn-sm" type="submit">
+          <button className="btn" type="submit">
             <Icon name="send" size={14} /> {t("emailTest")}
           </button>
         </form>

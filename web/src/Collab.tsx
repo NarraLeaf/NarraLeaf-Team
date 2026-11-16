@@ -470,7 +470,7 @@ export function Todos({
         {project !== undefined ? (
           <Checkbox className="todo-share" checked={shared} onChange={setShared} label={t("visibilityProject")} />
         ) : null}
-        <button className="primary" type="submit">
+        <button className="btn btn-primary" type="submit">
           {t("add")}
         </button>
       </form>

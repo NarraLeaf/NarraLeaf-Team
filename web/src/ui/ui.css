@@ -184,6 +184,28 @@
   box-shadow: 0 0 0 3px rgb(var(--nl-primary) / 0.22);
 }
 
+/*
+ * A one-line field is exactly as tall as a button, whatever padding an older
+ * rule gives it, so a field and the button beside it line up. Rules that want
+ * a bigger field (the sign-in page's) name a height of their own and win.
+ */
+:where(
+    input:not([type]),
+    input[type="text"],
+    input[type="search"],
+    input[type="password"],
+    input[type="email"],
+    input[type="url"],
+    input[type="number"],
+    input[type="date"],
+    input[type="time"],
+    input[type="datetime-local"]
+  ) {
+  height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
 :where(input, textarea)::placeholder {
   color: rgb(var(--nl-fg-subtle));
 }
@@ -1693,6 +1715,17 @@
   display: flex;
   gap: 6px;
   margin-left: auto;
+}
+
+/* A row whose field has a caption above it: the buttons line up with the field, not the caption. */
+.settings-row-field {
+  align-items: flex-end;
+}
+
+.settings-row-field .grow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* ----------------------------------------------------- phase E: discussion */
