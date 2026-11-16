@@ -25,7 +25,7 @@ import {
 
 import { t, type Phrase } from "./i18n";
 import { Face } from "./Collab";
-import { ago, Checkbox, confirmAction, SelectPanel, toast, type SelectOption } from "./ui";
+import { ago, Blankslate, Checkbox, confirmAction, SelectPanel, toast, type SelectOption } from "./ui";
 import type { TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -213,7 +213,9 @@ export function Reviews(props: {
       {reviews === undefined ? (
         <p className="muted">{t("loading")}</p>
       ) : reviews.length === 0 ? (
-        <p className="placeholder-card">{t("noReviews")}</p>
+        <Blankslate icon="review" title={t("noReviews")} compact>
+          {t("noReviewsHint")}
+        </Blankslate>
       ) : (
         <ul className="review-list">
           {reviews.map((review) => (
@@ -466,7 +468,9 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
       {hooks === undefined ? (
         <p className="muted">{t("loading")}</p>
       ) : hooks.length === 0 ? (
-        <p className="placeholder-card">{t("whNone")}</p>
+        <Blankslate icon="link" title={t("whNone")} compact>
+          {t("whNoneHint")}
+        </Blankslate>
       ) : (
         <ul className="webhook-list">
           {hooks.map((hook) => (

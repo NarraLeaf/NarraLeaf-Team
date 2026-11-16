@@ -1550,10 +1550,10 @@ button.big {
 
 .scene-card {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 14px;
-  margin-bottom: 10px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
   border-radius: var(--nl-radius-lg);
   border: 1px solid var(--nl-edge-subtle);
   background: rgb(var(--nl-surface-raised));
@@ -1567,9 +1567,35 @@ button.big {
   flex-direction: column;
 }
 
+.scene-thumb {
+  width: 64px;
+  height: 36px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--nl-fill-subtle);
+  color: rgb(var(--nl-fg-subtle));
+}
+
+.scene-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scene-card-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.4;
+}
+
 .wb .row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 12px;
   min-height: 40px;
   padding: 4px 8px 4px 0;
@@ -1595,6 +1621,7 @@ button.big {
 .row-no {
   width: 32px;
   flex: none;
+  align-self: center;
   text-align: right;
   font-family: var(--nl-mono-font);
   font-size: 12px;
@@ -1607,20 +1634,67 @@ button.big {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
   flex-wrap: wrap;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+
+/* One step in per choice option, with the line Studio draws down the option. */
+.row-guide {
+  position: relative;
+  width: 10px;
+  flex: none;
+  align-self: stretch;
+  margin: -4px 0;
+}
+
+.row-guide::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 13px;
+  border-left: 1px solid var(--nl-edge);
+}
+
+.row-guide + .row-guide,
+.row-guide + .row-glyph {
+  margin-left: 2px;
 }
 
 .row-glyph {
+  position: relative;
   width: 28px;
   flex: none;
+  align-self: stretch;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
-.row-glyph .avatar {
+.glyph-face .avatar {
+  position: relative;
+  z-index: 1;
   box-shadow: 0 0 0 2px rgb(var(--nl-success));
 }
+
+/* The same speaker again: a line down from their face instead of the face and name. */
+.glyph-thread::before {
+  content: "";
+  position: absolute;
+  top: -12px;
+  bottom: -4px;
+  left: 50%;
+  border-left: 2px solid rgb(var(--nl-success) / 0.55);
+}
+
 
 .glyph-quote {
   width: 24px;
@@ -1632,19 +1706,16 @@ button.big {
   color: rgb(var(--nl-fg-muted));
 }
 
-.glyph-command {
-  color: rgb(var(--nl-primary-ink));
-  font-weight: 600;
-}
-
 .glyph-option {
-  color: rgb(var(--nl-binding));
+  color: #b2a6c9;
 }
 
 .wb .speaker {
+  flex: none;
   color: rgb(var(--nl-success));
   font-weight: 600;
-  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .wb .line {
@@ -1655,11 +1726,34 @@ button.big {
 
 .cmd {
   color: rgb(var(--nl-primary-ink));
+  font-weight: 500;
 }
 
-.cmd-detail {
-  color: rgb(var(--nl-warning));
+.cmd-arg {
+  display: inline-flex;
+  align-items: baseline;
+  font-size: 14px;
   overflow-wrap: anywhere;
+}
+
+.cmd-arg .avatar {
+  align-self: center;
+  margin-right: 4px;
+}
+
+.cmd-key {
+  color: rgb(var(--nl-fg-muted));
+}
+
+/* Something the project names (a character, an asset, a scene): Studio underlines it with dots. */
+.cmd-ref {
+  color: rgb(var(--nl-warning));
+  text-decoration: underline dotted rgb(var(--nl-warning) / 0.6);
+  text-underline-offset: 4px;
+}
+
+.cmd-value {
+  color: rgb(var(--nl-primary-ink));
 }
 
 .option-label {
@@ -1670,9 +1764,11 @@ button.big {
 .row-narration .line,
 .row-note .line {
   color: rgb(var(--nl-fg));
+  font-style: normal;
 }
 
 .row-mark {
+  align-self: center;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1686,19 +1782,142 @@ button.big {
   position: static;
 }
 
-.wb .story.with-comments {
-  display: flex;
+/* Comments: a card level with the line, over the right of the script, like a review comment. */
+.script-flow {
+  position: relative;
 }
 
-.wb .line-comments {
-  width: 340px;
-  flex: none;
-  position: static;
-  max-height: none;
-  padding: 14px;
-  border-left: 1px solid var(--nl-edge-subtle);
-  background: rgb(var(--nl-surface-sunken));
+/* Room under the last lines, so a card opened near the end can still be scrolled into view. */
+.script-flow:has(> .note-pop) {
+  padding-bottom: 420px;
+}
+
+.note-pop {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  z-index: 3;
+  width: min(360px, 60%);
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+  border: 1px solid var(--nl-edge);
+  border-radius: var(--nl-radius-lg);
+  background: rgb(var(--nl-surface-overlay));
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+  margin-top: 44px;
+}
+
+.note-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--nl-edge-subtle);
+}
+
+.note-excerpt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: rgb(var(--nl-fg-muted));
+}
+
+.note-pop-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px 14px;
   overflow: auto;
+}
+
+.note-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.note-thread + .note-thread,
+.note-thread + .note-new {
+  padding-top: 12px;
+  border-top: 1px solid var(--nl-edge-subtle);
+}
+
+.note-thread.is-resolved .note {
+  opacity: 0.6;
+}
+
+.note-thread-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -4px 0 -4px;
+}
+
+.note-count {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.note-thread.is-resolved .note-count {
+  color: rgb(var(--nl-success));
+  font-weight: 500;
+}
+
+.note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.note-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.note-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.note-text {
+  margin-top: 2px;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.note-reply textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.note-reply-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.note-reply-actions .muted {
+  margin-right: auto;
+}
+
+.note-new-button {
+  align-self: flex-start;
 }
 
 /* Blueprints */
@@ -2311,16 +2530,23 @@ fieldset.admin-field {
   }
 
   .row-no {
-    width: 24px;
-    padding-top: 4px;
+    width: 22px;
+    align-self: flex-start;
+    padding-top: 5px;
+  }
+
+  .wb .row {
+    gap: 8px;
   }
 
   .row-body {
     gap: 8px;
+    align-items: flex-start;
   }
 
   .row-glyph {
-    display: none;
+    width: 24px;
+    align-self: stretch;
   }
 
   .wb .line {
@@ -2328,7 +2554,7 @@ fieldset.admin-field {
     min-width: 0;
   }
 
-  .wb .line-comments,
+  .wb .note-pop,
   .wb-panel {
     position: fixed;
     left: 0;
@@ -2342,6 +2568,16 @@ fieldset.admin-field {
     border-radius: 18px 18px 0 0;
     background: rgb(var(--nl-surface-overlay));
     box-shadow: 0 -12px 32px rgb(0 0 0 / 0.45);
+  }
+
+  .wb .note-pop {
+    top: auto !important;
+    max-height: none;
+    margin-top: 0;
+  }
+
+  .script-flow:has(> .note-pop) {
+    padding-bottom: 0;
   }
 
   .wb .graph-props {
@@ -3068,4 +3304,103 @@ kbd {
     padding: 0;
     background: none;
   }
+}
+
+/* ------------------------------------------------- outline: cast, counts */
+
+.outline-link > .icon {
+  flex: none;
+  color: rgb(var(--nl-fg-subtle));
+}
+
+.outline-cast {
+  display: inline-flex;
+  flex: none;
+}
+
+.outline-cast .avatar {
+  box-shadow: 0 0 0 2px rgb(var(--nl-surface));
+}
+
+.outline-cast .avatar + .avatar {
+  margin-left: -6px;
+}
+
+/* ------------------------------------------------------- asset previews */
+
+.chip-count {
+  margin-left: 2px;
+  color: rgb(var(--nl-fg-subtle));
+  font-variant-numeric: tabular-nums;
+}
+
+.chip.active .chip-count {
+  color: inherit;
+  opacity: 0.75;
+}
+
+.asset-kind {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: rgb(var(--nl-fg-subtle));
+}
+
+.asset.is-missing .asset-kind {
+  color: rgb(var(--nl-warning));
+}
+
+.mini-player {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.mini-play {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(var(--nl-primary));
+  color: #fff;
+  cursor: pointer;
+}
+
+.mini-play:hover {
+  background: rgb(var(--nl-primary) / 0.85);
+}
+
+.mini-play:focus-visible {
+  outline: 2px solid rgb(var(--nl-primary));
+  outline-offset: 2px;
+}
+
+.mini-track {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--nl-fill-subtle);
+  cursor: pointer;
+}
+
+.mini-track > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: rgb(var(--nl-primary));
+}
+
+.mini-time {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--nl-fg-muted));
 }

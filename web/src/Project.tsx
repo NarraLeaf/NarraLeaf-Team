@@ -16,8 +16,10 @@ import {
   readCharacters,
   readStoryDocument,
   readStoryLibrary,
+  readVariables,
   STORY_INDEX_PATH,
   UI_GRAPHS_PATH,
+  VARIABLE_STORE_PATH,
   type AssetView,
   type BlueprintGraphView,
   type BlueprintsView,
@@ -26,6 +28,7 @@ import {
   type StoryLibrary,
   type StoryRow,
   type Unsupported,
+  type VariableView,
 } from "@narraleaf/project-view";
 import { projectDocTopic, type TeamProjectRole, type TeamVersionRole } from "@narraleaf/team-protocol";
 
@@ -43,7 +46,8 @@ import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, ty
 import { CompareWithNow, OnlineNow, ProjectSettings, type ProjectSettingsSection } from "./Versions";
 import { AskForMore } from "./Access";
 import type { TeamConnection, ConnectionState } from "./socket";
-import { ActionMenu, Checkbox, SelectPanel, toast } from "./ui";
+import { ActionMenu, Blankslate, Checkbox, SelectPanel, toast } from "./ui";
+import { describeCommand, GROUP_COLOR, GROUP_ICON, type CommandLookups } from "./storyCommands";
 
 export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "settings";
 /** The project's own page: what it is, how it got here, and what is waiting on review. */
@@ -554,6 +558,8 @@ function Story({
   const [storyId, setStoryId] = useState<string | undefined>(undefined);
   const [document, setDocument] = useState<StoryDocumentView | Unsupported | undefined>(undefined);
   const [characters, setCharacters] = useState<ReadonlyMap<string, CharacterView>>(new Map());
+  const [variables, setVariables] = useState<ReadonlyMap<string, VariableView>>(new Map());
+  const assetList = useAssetRegister(projectId, tree);
   const [sceneId, setSceneId] = useState<string | undefined>(undefined);
   const [showCommands, setShowCommands] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -581,7 +587,29 @@ function Story({
         .then((json) => setCharacters(readCharacters(json)))
         .catch(() => undefined);
     }
+    if (has(VARIABLE_STORE_PATH)) {
+      fetchJson(projectId, tree.revision, VARIABLE_STORE_PATH)
+        .then((json) => setVariables(readVariables(json)))
+        .catch(() => undefined);
+    }
   }, [projectId, tree, has]);
+
+  const assets = useMemo(() => new Map((assetList ?? []).map((asset) => [asset.id, asset])), [assetList]);
+  const lookups = useMemo<CommandLookups>(
+    () => ({
+      characters,
+      variables,
+      assets,
+      sceneName: (id) => (document?.supported ? document.scenes[id]?.name : undefined),
+    }),
+    [characters, variables, assets, document],
+  );
+  const present = useMemo(() => new Set(tree.files.map((file) => file.path)), [tree]);
+  /** Where a file of this revision can be read, if the revision has it. */
+  const fileUrl = useCallback(
+    (path: string | undefined, as?: string) => (path !== undefined && present.has(path) ? rawUrl(projectId, tree.revision, path, as) : undefined),
+    [present, projectId, tree.revision],
+  );
 
   const entry = library?.supported ? library.stories.find((story) => story.id === storyId) : undefined;
   const documentPath = entry?.documentPath;
@@ -619,7 +647,13 @@ function Story({
   if (error !== undefined) return <Notice tone="error">{t("loadFailed", { reason: error })}</Notice>;
   if (library === undefined) return <p className="muted">{t("loading")}</p>;
   if (!library.supported) return <UnsupportedNotice value={library} />;
-  if (library.stories.length === 0) return <Notice>{t("noStories")}</Notice>;
+  if (library.stories.length === 0) {
+    return (
+      <Blankslate icon="book" title={t("noStories")}>
+        {t("noStoriesHint")}
+      </Blankslate>
+    );
+  }
 
   const scene = document?.supported && sceneId !== undefined ? document.scenes[sceneId] : undefined;
   return (
@@ -638,6 +672,8 @@ function Story({
       showCommands={showCommands}
       setShowCommands={setShowCommands}
       characters={characters}
+      lookups={lookups}
+      fileUrl={fileUrl}
       connection={connection}
       open={open}
       projectId={projectId}
@@ -660,6 +696,8 @@ function StoryBody(props: {
   showCommands: boolean;
   setShowCommands: (update: (value: boolean) => boolean) => void;
   characters: ReadonlyMap<string, CharacterView>;
+  lookups: CommandLookups;
+  fileUrl: (path: string | undefined, as?: string) => string | undefined;
   connection: TeamConnection;
   open: boolean;
   projectId: string;
@@ -675,11 +713,40 @@ function StoryBody(props: {
     if (sceneName !== undefined) remember(sceneName);
   }, [sceneName, remember]);
   const { library, storyId, setStoryId, document, sceneId, setSceneId, scene, showCommands, setShowCommands, characters } = props;
-  const { connection, open, projectId, revision, canWrite, selected, setSelected } = props;
+  const { connection, open, projectId, revision, canWrite, selected, setSelected, lookups, fileUrl } = props;
+  const faceOf = (character: CharacterView | undefined) => fileUrl(character?.avatarPath);
+  /** Who speaks in a scene, in the order they first do, for the outline. */
+  const castOf = (id: string): CharacterView[] => {
+    const seen = new Map<string, CharacterView>();
+    for (const row of (document?.supported ? document.scenes[id]?.rows : undefined) ?? []) {
+      if (row.kind !== "dialogue" || row.speaker === undefined || !("characterId" in row.speaker)) continue;
+      const found = characters.get(row.speaker.characterId);
+      if (found !== undefined && !seen.has(found.id)) seen.set(found.id, found);
+    }
+    return [...seen.values()];
+  };
+  const sceneLink = (id: string) =>
+    document?.supported ? (
+      <SceneLink
+        key={id}
+        name={document.scenes[id]?.name ?? id}
+        count={document.scenes[id]?.rows.filter((row) => row.kind !== "empty").length}
+        cast={castOf(id).map((character) => ({
+          name: character.name,
+          url: faceOf(character),
+        }))}
+        active={id === sceneId}
+        onClick={() => setSceneId(id)}
+      />
+    ) : null;
+  const background = scene?.backgroundAssetId === undefined ? undefined : lookups.assets.get(scene.backgroundAssetId);
+  const backgroundUrl = background === undefined ? undefined : fileUrl(background.contentPath, assetAs(background));
+  const visible = scene === undefined ? [] : scene.rows.filter((row) => showCommands || (row.kind !== "command" && row.kind !== "empty"));
+  const emptyScene = scene !== undefined && scene.rows.every((row) => row.kind === "empty");
   const threads = useStoryThreads(connection, open, projectId, storyId);
   const threadsOn = (blockId: string) => (sceneId === undefined ? [] : (threads.get(storyLineAnchor(sceneId, blockId)) ?? []));
   return (
-    <div className={selected === undefined ? "story" : "story with-comments"}>
+    <div className="story">
       <aside className="story-outline">
         <div className="panel-head">
           <Icon name="book" />
@@ -706,29 +773,13 @@ function StoryBody(props: {
                 <div className="outline-title">
                   ▾ {chapter.name} <span className="outline-count">({chapter.sceneIds.length})</span>
                 </div>
-                {chapter.sceneIds.map((id) => (
-                  <SceneLink
-                    key={id}
-                    name={document.scenes[id]?.name ?? id}
-                    count={document.scenes[id]?.rows.filter((row) => row.kind !== "empty").length}
-                    active={id === sceneId}
-                    onClick={() => setSceneId(id)}
-                  />
-                ))}
+                {chapter.sceneIds.map(sceneLink)}
               </div>
             ))}
             {document.unassignedSceneIds.length > 0 ? (
               <div className="outline-group">
                 <div className="outline-title">{t("unassigned")}</div>
-                {document.unassignedSceneIds.map((id) => (
-                  <SceneLink
-                    key={id}
-                    name={document.scenes[id]?.name ?? id}
-                    count={document.scenes[id]?.rows.filter((row) => row.kind !== "empty").length}
-                    active={id === sceneId}
-                    onClick={() => setSceneId(id)}
-                  />
-                ))}
+                {document.unassignedSceneIds.map(sceneLink)}
               </div>
             ) : null}
           </>
@@ -753,68 +804,137 @@ function StoryBody(props: {
                 </button>
               </div>
             </div>
-            {scene.description ? <div className="scene-card"><strong>{scene.name}</strong><span className="muted small">{scene.description}</span></div> : null}
-            <ol className="script-rows">
-              {scene.rows
-                .filter((row) => showCommands || (row.kind !== "command" && row.kind !== "empty"))
-                .map((row, index) => (
-                  <ScriptRow
-                    key={row.id}
-                    line={index + 1}
-                    row={row}
-                    characters={characters}
-                    marks={threadsOn(row.id).filter((thread) => thread.status === "open").length}
-                    selected={selected?.blockId === row.id}
-                    onSelect={() => setSelected({ blockId: row.id, excerpt: "text" in row ? row.text : "" })}
+            <div className="scene-card">
+              <span className="scene-thumb">{backgroundUrl === undefined ? <Icon name="image" size={18} /> : <img src={backgroundUrl} alt="" />}</span>
+              <span className="scene-card-text">
+                <strong>{scene.name}</strong>
+                <span className="muted small">{scene.description || t("sceneNoDescription")}</span>
+              </span>
+            </div>
+            {emptyScene ? (
+              <Blankslate
+                icon="book"
+                title={t("sceneEmpty")}
+                action={
+                  <button className="btn" onClick={() => void openInStudio(projectId)}>
+                    <Icon name="external" size={14} /> {t("editInStudio")}
+                  </button>
+                }
+              >
+                {t("sceneEmptyHint")}
+              </Blankslate>
+            ) : (
+              <div className="script-flow">
+                <ol className="script-rows">
+                  {visible.map((row, index) => (
+                    <ScriptRow
+                      key={row.id}
+                      line={index + 1}
+                      row={row}
+                      previous={visible[index - 1]}
+                      characters={characters}
+                      lookups={lookups}
+                      faceOf={faceOf}
+                      marks={threadsOn(row.id).filter((thread) => thread.status === "open").length}
+                      selected={selected?.blockId === row.id}
+                      onSelect={() => setSelected({ blockId: row.id, excerpt: "text" in row ? row.text : "" })}
+                    />
+                  ))}
+                </ol>
+                {selected !== undefined && sceneId !== undefined && storyId !== undefined ? (
+                  <LineComments
+                    connection={connection}
+                    projectId={projectId}
+                    storyId={storyId}
+                    sceneId={sceneId}
+                    blockId={selected.blockId}
+                    revision={revision}
+                    excerpt={selected.excerpt}
+                    threads={threadsOn(selected.blockId)}
+                    canWrite={canWrite}
+                    close={() => setSelected(undefined)}
                   />
-                ))}
-            </ol>
+                ) : null}
+              </div>
+            )}
           </>
         )}
       </div>
-      {selected !== undefined && sceneId !== undefined && storyId !== undefined ? (
-        <LineComments
-          connection={connection}
-          projectId={projectId}
-          storyId={storyId}
-          sceneId={sceneId}
-          blockId={selected.blockId}
-          revision={revision}
-          excerpt={selected.excerpt}
-          threads={threadsOn(selected.blockId)}
-          canWrite={canWrite}
-          close={() => setSelected(undefined)}
-        />
-      ) : null}
     </div>
   );
 }
 
-function SceneLink({ name, active, onClick, count }: { name: string; active: boolean; onClick: () => void; count?: number | undefined }) {
+function SceneLink({
+  name,
+  active,
+  onClick,
+  count,
+  cast = [],
+  icon = "file",
+  countLabel = "lineCount",
+}: {
+  name: string;
+  active: boolean;
+  onClick: () => void;
+  count?: number | undefined;
+  countLabel?: "lineCount" | "nodes";
+  icon?: IconName;
+  cast?: readonly { name: string; url: string | undefined }[];
+}) {
   return (
     <button className={active ? "outline-link active" : "outline-link"} aria-current={active ? "true" : undefined} onClick={onClick}>
+      <Icon name={icon} size={14} />
       <span className="outline-name">{name}</span>
-      {count === undefined ? null : <span className="outline-count">{t("lineCount", { count: String(count) })}</span>}
+      {cast.length === 0 ? null : (
+        <span className="outline-cast" title={cast.map((one) => one.name).join("、")}>
+          {cast.slice(0, 3).map((one) => (
+            <Face key={one.name} name={one.name} url={one.url} size={18} />
+          ))}
+        </span>
+      )}
+      {count === undefined ? null : <span className="outline-count">{t(countLabel, { count: String(count) })}</span>}
     </button>
+  );
+}
+
+/** Who says a line: a character by id, or a name typed straight into the line. */
+function speakerKey(row: StoryRow): string | undefined {
+  if (row.kind !== "dialogue" || row.speaker === undefined) return undefined;
+  return "characterId" in row.speaker ? `c:${row.speaker.characterId}` : `n:${row.speaker.name}`;
+}
+
+/** The vertical lines that show which choice option a row sits under. */
+function Guides({ depth }: { depth: number }) {
+  return (
+    <>
+      {Array.from({ length: depth }, (_, index) => (
+        <span key={index} className="row-guide" aria-hidden="true" />
+      ))}
+    </>
   );
 }
 
 function ScriptRow({
   row,
+  previous,
   line,
   characters,
+  lookups,
+  faceOf,
   marks,
   selected,
   onSelect,
 }: {
   row: StoryRow;
+  previous: StoryRow | undefined;
   line: number;
   characters: ReadonlyMap<string, CharacterView>;
+  lookups: CommandLookups;
+  faceOf: (character: CharacterView | undefined) => string | undefined;
   marks: number;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const indent = { paddingLeft: `${row.depth * 22}px` };
   const cls = `row row-${row.kind}${row.disabled ? " row-disabled" : ""}${selected ? " row-selected" : ""}`;
   const mark =
     marks > 0 ? (
@@ -830,86 +950,98 @@ function ScriptRow({
       onSelect();
     }
   };
-  const common = { className: cls, id: `row-${row.id}`, onClick: onSelect, onKeyDown: select, tabIndex: 0 };
+  const common = {
+    className: cls,
+    id: `row-${row.id}`,
+    onClick: onSelect,
+    onKeyDown: select,
+    tabIndex: 0,
+  };
+  const shell = (glyph: React.ReactNode, text: React.ReactNode, extra = "") => (
+    <li {...common} className={`${cls}${extra}`}>
+      {gutter}
+      <span className="row-body">
+        <Guides depth={row.depth} />
+        {glyph}
+        <span className="row-text">{text}</span>
+      </span>
+      {mark}
+    </li>
+  );
   switch (row.kind) {
     case "dialogue": {
+      const character = row.speaker !== undefined && "characterId" in row.speaker ? characters.get(row.speaker.characterId) : undefined;
       const speaker =
-        row.speaker === undefined
-          ? "？"
-          : "characterId" in row.speaker
-            ? (characters.get(row.speaker.characterId)?.name ?? row.speaker.characterId.slice(0, 8))
-            : row.speaker.name;
-      return (
-        <li {...common}>
-          {gutter}
-          <span className="row-body" style={indent}>
-            <span className="row-glyph">
-              <Face name={speaker} size={24} />
-            </span>
-            <span className="speaker">{speaker}</span>
-            <span className="line">{row.text}</span>
-          </span>
-          {mark}
-        </li>
+        row.speaker === undefined ? "？" : "characterId" in row.speaker ? (character?.name ?? row.speaker.characterId.slice(0, 8)) : row.speaker.name;
+      // The same voice again, straight after: Studio draws the name once and a line down from the face.
+      const continued =
+        previous !== undefined && previous.depth === row.depth && speakerKey(previous) !== undefined && speakerKey(previous) === speakerKey(row);
+      if (continued) {
+        return shell(
+          <span className="row-glyph glyph-thread" aria-hidden="true" />,
+          <span className="line" aria-label={`${speaker}: ${row.text}`}>
+            {row.text}
+          </span>,
+          " is-continued",
+        );
+      }
+      return shell(
+        <span className="row-glyph glyph-face">
+          <Face name={speaker} url={faceOf(character)} size={24} />
+        </span>,
+        <>
+          <span className="speaker">{speaker}</span>
+          <span className="line">{row.text}</span>
+        </>,
       );
     }
     case "narration":
     case "note":
     case "invalid":
-      return (
-        <li {...common}>
-          {gutter}
-          <span className="row-body" style={indent}>
-            <span className="row-glyph glyph-quote" aria-hidden="true">
-              66
-            </span>
-            <span className="line">{row.text}</span>
-          </span>
-          {mark}
-        </li>
+      return shell(
+        <span className="row-glyph glyph-quote" aria-hidden="true">
+          66
+        </span>,
+        <span className="line">{row.text}</span>,
       );
     case "choice":
-      return (
-        <li {...common}>
-          {gutter}
-          <span className="row-body" style={indent}>
-            <span className="row-glyph glyph-command" aria-hidden="true">
-              <Icon name="todo" size={15} />
-            </span>
-            <span className="cmd">@{t("menuCommand")}</span>
-            <span className="line">{row.text}</span>
-          </span>
-          {mark}
-        </li>
+      return shell(
+        <span className="row-glyph" style={{ color: GROUP_COLOR.flow }} aria-hidden="true">
+          <Icon name="todo" size={15} />
+        </span>,
+        <>
+          <span className="cmd">@{t("menuCommand")}</span>
+          <span className="line">{row.text}</span>
+        </>,
       );
     case "option":
-      return (
-        <li {...common}>
-          {gutter}
-          <span className="row-body" style={indent}>
-            <span className="row-glyph glyph-option" aria-hidden="true">
-              ⑂
-            </span>
-            <span className="option-label">{t("optionLabel")}</span>
-            <span className="line">{row.text}</span>
-          </span>
-          {mark}
-        </li>
+      return shell(
+        <span className="row-glyph glyph-option" aria-hidden="true">
+          <Icon name="link" size={15} />
+        </span>,
+        <>
+          <span className="option-label">{t("optionLabel")}</span>
+          <span className="line">{row.text}</span>
+        </>,
       );
-    case "command":
-      return (
-        <li {...common}>
-          {gutter}
-          <span className="row-body" style={indent}>
-            <span className="row-glyph glyph-command" aria-hidden="true">
-              @
+    case "command": {
+      const view = describeCommand(row, lookups);
+      return shell(
+        <span className="row-glyph" style={{ color: GROUP_COLOR[view.group] }} aria-hidden="true">
+          <Icon name={GROUP_ICON[view.group]} size={15} />
+        </span>,
+        <>
+          <span className="cmd">@{view.name}</span>
+          {view.args.map((arg, index) => (
+            <span key={index} className="cmd-arg">
+              {arg.key === undefined ? null : <span className="cmd-key">{arg.key}=</span>}
+              {arg.avatar === undefined ? null : <Face name={arg.value} url={faceOf(arg.avatar)} size={16} />}
+              <span className={arg.ref ? "cmd-ref" : "cmd-value"}>{arg.value}</span>
             </span>
-            <span className="cmd">@{row.command}</span>
-            {row.detail ? <span className="cmd-detail"> {row.detail}</span> : null}
-          </span>
-          {mark}
-        </li>
+          ))}
+        </>,
       );
+    }
     case "empty":
       return (
         <li className={cls}>
@@ -943,7 +1075,14 @@ function Blueprints({ projectId, tree }: { projectId: string; tree: Tree }) {
   if (error !== undefined) return <Notice tone="error">{t("loadFailed", { reason: error })}</Notice>;
   if (view === undefined) return <p className="muted">{t("loading")}</p>;
   if (!view.supported) return <UnsupportedNotice value={view} />;
-  if (view.blueprints.length === 0) return <Notice>{t("noBlueprints")}</Notice>;
+  const shown = view.blueprints.filter((blueprint) => blueprint.graphs.length > 0);
+  if (shown.length === 0) {
+    return (
+      <Blankslate icon="graph" title={t("noBlueprints")}>
+        {t("noBlueprintsHint")}
+      </Blankslate>
+    );
+  }
   const graph = view.blueprints.find((bp) => bp.id === picked?.blueprint)?.graphs.find((g) => g.id === picked?.graph);
   return (
     <div className="story">
@@ -952,7 +1091,7 @@ function Blueprints({ projectId, tree }: { projectId: string; tree: Tree }) {
           <Icon name="graph" />
           <span>{t("tabBlueprints")}</span>
         </div>
-        {view.blueprints.map((blueprint) => (
+        {shown.map((blueprint) => (
           <div key={blueprint.id} className="outline-group">
             <div className="outline-title" title={blueprint.owner}>
               {blueprint.name}
@@ -960,7 +1099,10 @@ function Blueprints({ projectId, tree }: { projectId: string; tree: Tree }) {
             {blueprint.graphs.map((g) => (
               <SceneLink
                 key={g.id}
-                name={`${g.name} · ${t("nodes", { count: String(g.nodes.length) })}`}
+                icon="graph"
+                name={g.name}
+                count={g.nodes.length}
+                countLabel="nodes"
                 active={picked?.blueprint === blueprint.id && picked.graph === g.id}
                 onClick={() => setPicked({ blueprint: blueprint.id, graph: g.id })}
               />
@@ -1023,6 +1165,19 @@ function isExecPort(port: string): boolean {
   return /^(exec|in|out|then|else|next|done|completed|true|false|body|loop|start|finished|onComplete|exec[A-Z_].*)$/i.test(port);
 }
 
+/** Whether a node has nothing for its body: no settings, and at most one unnamed run-order pin on each side. */
+function isCompact(node: BlueprintGraphView["nodes"][number], own: { inputs: string[]; outputs: string[] } | undefined): boolean {
+  const inputs = own?.inputs ?? [];
+  const outputs = own?.outputs ?? [];
+  return (
+    paramRows(node.params).length === 0 &&
+    inputs.length <= 1 &&
+    outputs.length <= 1 &&
+    inputs.every(isExecPort) &&
+    outputs.every((pin) => pin === "then" || pin === "out")
+  );
+}
+
 /**
  * A read-only node graph: placed nodes, their ports, and the wires between
  * them, on Studio's dotted canvas. Drag to pan, wheel or pinch to zoom, and
@@ -1057,17 +1212,18 @@ function GraphCanvas({ graph }: { graph: BlueprintGraphView }) {
       const comment = node.type === "blueprint.flow.comment";
       const w = comment ? Math.max(200, Number(node.params["width"]) || 320) : NODE_W;
       const rows = Math.max(own?.inputs.length ?? 0, own?.outputs.length ?? 0, 1) + paramRows(node.params).length;
-      const h = comment ? Math.max(60, Number(node.params["height"]) || 100) : NODE_HEAD + rows * PORT_H + 10;
+      const h = comment ? Math.max(60, Number(node.params["height"]) || 100) : isCompact(node, own) ? NODE_HEAD : NODE_HEAD + rows * PORT_H + 10;
       const x = node.x ?? maxX + NODE_W + 80;
       const y = node.y ?? (floating += h + 24) - h;
       boxes.set(node.id, { x, y, h, w });
     }
     const all = [...boxes.values()];
-    const minX = Math.min(0, ...all.map((box) => box.x));
-    const minY = Math.min(0, ...all.map((box) => box.y));
-    const maxRight = Math.max(400, ...all.map((box) => box.x + box.w));
-    const maxBottom = Math.max(300, ...all.map((box) => box.y + box.h));
-    return { boxes, minX, minY, width: maxRight - minX, height: maxBottom - minY };
+    // The graph's own bounds, not the origin's: a graph drawn away from 0,0 still fits the view.
+    const minX = all.length === 0 ? 0 : Math.min(...all.map((box) => box.x));
+    const minY = all.length === 0 ? 0 : Math.min(...all.map((box) => box.y));
+    const maxRight = all.length === 0 ? 400 : Math.max(...all.map((box) => box.x + box.w));
+    const maxBottom = all.length === 0 ? 300 : Math.max(...all.map((box) => box.y + box.h));
+    return { boxes, minX, minY, width: Math.max(200, maxRight - minX), height: Math.max(120, maxBottom - minY) };
   }, [graph, ports]);
 
   const fit = useCallback(() => {
@@ -1113,7 +1269,7 @@ function GraphCanvas({ graph }: { graph: BlueprintGraphView }) {
     if (own === undefined || box === undefined) return undefined;
     const list = side === "in" ? own.inputs : own.outputs;
     const index = Math.max(0, list.indexOf(name));
-    return { x: side === "in" ? box.x : box.x + box.w, y: box.y + NODE_HEAD + index * PORT_H + PORT_H / 2 };
+    return { x: side === "in" ? box.x : box.x + box.w, y: box.h === NODE_HEAD ? box.y + NODE_HEAD / 2 : box.y + NODE_HEAD + index * PORT_H + PORT_H / 2 };
   };
   const chosen = graph.nodes.find((node) => node.id === selected);
   const zoom = (factor: number) => {
@@ -1179,17 +1335,24 @@ function GraphCanvas({ graph }: { graph: BlueprintGraphView }) {
               const own = ports.get(node.id) ?? { inputs: [], outputs: [] };
               const rows = Math.max(own.inputs.length, own.outputs.length, 1);
               const name = typeof node.params["name"] === "string" ? `${nodeLabel(node.type)} · ${node.params["name"]}` : nodeLabel(node.type);
+              // A node with nothing to show but its run-order pins is only its title bar, the pins at its ends.
+              const compact = box.h === NODE_HEAD;
+              const pinY = (index: number) => (compact ? box.y + NODE_HEAD / 2 : box.y + NODE_HEAD + index * PORT_H + PORT_H / 2);
               return (
                 <g key={node.id} className={selected === node.id ? `node tone-${tone} selected` : `node tone-${tone}`} onClick={() => setSelected(node.id)}>
                   <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={6} className="node-body" />
-                  <path d={`M${box.x},${box.y + NODE_HEAD} v-${NODE_HEAD - 6} a6,6 0 0 1 6,-6 h${box.w - 12} a6,6 0 0 1 6,6 v${NODE_HEAD - 6} z`} className="node-head" />
+                  {compact ? (
+                    <rect x={box.x} y={box.y} width={box.w} height={NODE_HEAD} rx={6} className="node-head" />
+                  ) : (
+                    <path d={`M${box.x},${box.y + NODE_HEAD} v-${NODE_HEAD - 6} a6,6 0 0 1 6,-6 h${box.w - 12} a6,6 0 0 1 6,6 v${NODE_HEAD - 6} z`} className="node-head" />
+                  )}
                   <text x={box.x + 10} y={box.y + 17} className="node-title">
                     {name.length > 24 ? `${name.slice(0, 23)}…` : name}
                   </text>
                   {own.inputs.map((pin, index) => (
                     <g key={`i${pin}`}>
                       {isExecPort(pin) ? (
-                        <path d={`M${box.x - 4},${box.y + NODE_HEAD + index * PORT_H + PORT_H / 2 - 5} l7,5 l-7,5 z`} className="pin pin-exec" />
+                        <path d={`M${box.x - 4},${pinY(index) - 5} l7,5 l-7,5 z`} className="pin pin-exec" />
                       ) : (
                         <circle cx={box.x} cy={box.y + NODE_HEAD + index * PORT_H + PORT_H / 2} r={4} className="pin pin-data" />
                       )}
@@ -1201,7 +1364,7 @@ function GraphCanvas({ graph }: { graph: BlueprintGraphView }) {
                   {own.outputs.map((pin, index) => (
                     <g key={`o${pin}`}>
                       {isExecPort(pin) ? (
-                        <path d={`M${box.x + box.w - 3},${box.y + NODE_HEAD + index * PORT_H + PORT_H / 2 - 5} l7,5 l-7,5 z`} className="pin pin-exec" />
+                        <path d={`M${box.x + box.w - 3},${pinY(index) - 5} l7,5 l-7,5 z`} className="pin pin-exec" />
                       ) : (
                         <circle cx={box.x + box.w} cy={box.y + NODE_HEAD + index * PORT_H + PORT_H / 2} r={4} className="pin pin-data" />
                       )}
@@ -1276,67 +1439,170 @@ function GraphCanvas({ graph }: { graph: BlueprintGraphView }) {
 
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "avif", "svg"]);
 const AUDIO_EXT = new Set(["mp3", "ogg", "wav", "m4a", "flac"]);
+/**
+ * Studio's registers say what kind an asset is but not its file type, and its
+ * bytes are stored without an extension. The kind is enough for the browser:
+ * it reads the real format from the bytes once it knows it is an image or a sound.
+ */
+const KIND_AS: Readonly<Record<string, string>> = {
+  image: "png",
+  audio: "mp3",
+  video: "mp4",
+};
+export function assetAs(asset: AssetView): string | undefined {
+  return asset.ext ?? KIND_AS[asset.type];
+}
+const ASSET_KIND_PHRASE: Readonly<Record<string, Phrase>> = {
+  image: "assetKindImage",
+  audio: "assetKindAudio",
+  video: "assetKindVideo",
+  font: "assetKindFont",
+  json: "assetKindJson",
+  model: "assetKindModel",
+  blueprint: "assetKindBlueprint",
+  other: "assetKindOther",
+};
+const ASSET_KIND_ICON: Readonly<Record<string, IconName>> = {
+  image: "image",
+  audio: "music",
+  video: "play",
+  font: "file",
+  json: "file",
+  model: "people",
+  blueprint: "graph",
+};
+function assetKindName(kind: string): string {
+  const phrase = ASSET_KIND_PHRASE[kind];
+  return phrase === undefined ? kind : t(phrase);
+}
 
-function Assets({ projectId, tree }: { projectId: string; tree: Tree }) {
+/** Every asset the revision's registers list, by name. */
+function useAssetRegister(projectId: string, tree: Tree): readonly AssetView[] | undefined {
   const [assets, setAssets] = useState<readonly AssetView[] | undefined>(undefined);
-  const [type, setType] = useState<string>("");
   useEffect(() => {
     const registers = tree.files.flatMap((file) => {
       const kind = assetRegisterType(file.path);
       return kind === undefined ? [] : [{ kind, path: file.path }];
     });
+    let live = true;
     Promise.all(
       registers.map((register) =>
         fetchJson(projectId, tree.revision, register.path)
           .then((json) => readAssetRegister(register.kind, json))
           .catch(() => []),
       ),
-    ).then((lists) => setAssets(lists.flat().sort((a, b) => a.name.localeCompare(b.name))));
+    ).then((lists) => {
+      if (live) setAssets(lists.flat().sort((a, b) => a.name.localeCompare(b.name)));
+    });
+    return () => {
+      live = false;
+    };
   }, [projectId, tree]);
+  return assets;
+}
 
+function Assets({ projectId, tree }: { projectId: string; tree: Tree }) {
+  const assets = useAssetRegister(projectId, tree);
+  const [type, setType] = useState<string>("");
   const present = useMemo(() => new Set(tree.files.map((file) => file.path)), [tree]);
   if (assets === undefined) return <p className="muted">{t("loading")}</p>;
-  if (assets.length === 0) return <Notice>{t("noAssets")}</Notice>;
+  if (assets.length === 0)
+    return (
+      <Blankslate icon="image" title={t("noAssets")}>
+        {t("noAssetsHint")}
+      </Blankslate>
+    );
   const types = [...new Set(assets.map((asset) => asset.type))].sort();
   const shown = assets.filter((asset) => type === "" || asset.type === type);
   return (
     <div className="assets">
       <div className="chips">
         <button className={type === "" ? "chip active" : "chip"} onClick={() => setType("")}>
-          {t("allTypes")} {assets.length}
+          {t("allTypes")} <span className="chip-count">{assets.length}</span>
         </button>
         {types.map((kind) => (
           <button key={kind} className={type === kind ? "chip active" : "chip"} onClick={() => setType(kind)}>
-            {kind} {assets.filter((asset) => asset.type === kind).length}
+            {assetKindName(kind)} <span className="chip-count">{assets.filter((asset) => asset.type === kind).length}</span>
           </button>
         ))}
       </div>
       <ul className="asset-grid">
         {shown.map((asset) => {
           const there = present.has(asset.contentPath);
-          const url = there ? rawUrl(projectId, tree.revision, asset.contentPath, asset.ext) : undefined;
+          const as = assetAs(asset);
+          const url = there ? rawUrl(projectId, tree.revision, asset.contentPath, as) : undefined;
           return (
-            <li key={asset.id} className="asset">
+            <li key={asset.id} className={there ? "asset" : "asset is-missing"}>
               <div className="asset-preview">
-                {url !== undefined && asset.ext !== undefined && IMAGE_EXT.has(asset.ext) ? (
+                {url !== undefined && as !== undefined && IMAGE_EXT.has(as) ? (
                   <img src={url} alt={asset.name} loading="lazy" />
-                ) : url !== undefined && asset.ext !== undefined && AUDIO_EXT.has(asset.ext) ? (
-                  <audio src={url} controls preload="none" />
+                ) : url !== undefined && as !== undefined && AUDIO_EXT.has(as) ? (
+                  <MiniPlayer src={url} />
                 ) : (
-                  <span className="muted">{asset.ext ?? asset.type}</span>
+                  <span className="asset-kind">
+                    <Icon name={ASSET_KIND_ICON[asset.type] ?? "file"} size={22} />
+                    {there ? null : <span className="small">{t("assetNotSynced")}</span>}
+                  </span>
                 )}
               </div>
               <div className="asset-name" title={asset.name}>
                 {asset.name}
               </div>
               <div className="muted small">
-                {asset.type}
+                {assetKindName(asset.type)}
                 {asset.tags.length > 0 ? ` · ${asset.tags.join(", ")}` : ""}
               </div>
             </li>
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+/** A play button and a thin progress line, instead of the browser's own wide control. */
+function MiniPlayer({ src }: { src: string }) {
+  const audio = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [length, setLength] = useState<number | undefined>(undefined);
+  const toggle = () => {
+    const element = audio.current;
+    if (element === null) return;
+    if (element.paused) void element.play().catch(() => setPlaying(false));
+    else element.pause();
+  };
+  const clock = (value: number) => (value < 1 ? `${value.toFixed(1)}s` : `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, "0")}`);
+  return (
+    <div className="mini-player">
+      <audio
+        ref={audio}
+        src={src}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => {
+          setPlaying(false);
+          setProgress(0);
+        }}
+        onLoadedMetadata={(event) => setLength(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : undefined)}
+        onTimeUpdate={(event) => setProgress(event.currentTarget.duration > 0 ? event.currentTarget.currentTime / event.currentTarget.duration : 0)}
+      />
+      <button className="mini-play" onClick={toggle} aria-label={playing ? t("pause") : t("play")}>
+        <Icon name={playing ? "pause" : "play"} size={16} />
+      </button>
+      <span
+        className="mini-track"
+        onClick={(event) => {
+          const element = audio.current;
+          if (element === null || !(element.duration > 0)) return;
+          const box = event.currentTarget.getBoundingClientRect();
+          element.currentTime = ((event.clientX - box.left) / box.width) * element.duration;
+        }}
+      >
+        <span style={{ width: `${progress * 100}%` }} />
+      </span>
+      <span className="mini-time">{length === undefined ? "" : clock(length)}</span>
     </div>
   );
 }
@@ -1373,7 +1639,13 @@ function History(props: {
     if (open) load();
   }, [open, load]);
   if (revisions === undefined) return <p className="muted">{t("loading")}</p>;
-  if (revisions.length === 0) return <Notice>{t("noHistory")}</Notice>;
+  if (revisions.length === 0) {
+    return (
+      <Blankslate icon="history" title={t("noHistory")}>
+        {t("noHistoryHint")}
+      </Blankslate>
+    );
+  }
   // Automatic snapshots come every few minutes of editing; folded away unless asked for.
   const shown = revisions.filter((revision) => showAuto || !isAutoVersion(revision));
   const hidden = revisions.length - shown.length;

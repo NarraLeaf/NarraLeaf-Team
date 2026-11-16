@@ -400,7 +400,9 @@ export function Todos({
       {todos === undefined ? (
         <p className="muted">{t("loading")}</p>
       ) : todos.length === 0 ? (
-        <p className="placeholder-card">{t("noTodos")}</p>
+        <Blankslate icon="todo" title={t("noTodos")} compact>
+          {t("noTodosHint")}
+        </Blankslate>
       ) : project === undefined ? (
         <Board todos={todos} card={card} over={over} setOver={setOver} dropOn={dropOn} />
       ) : (

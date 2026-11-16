@@ -127,12 +127,18 @@ export type StoryRow =
       readonly kind: "command";
       readonly command: string;
       readonly detail?: string;
+      /** The block's own kind (`action`, `control`, `jump`, `declaration`, `nodeAction`…). */
+      readonly block: string;
+      /** Everything the block says, for a viewer that names what the step acts on. */
+      readonly payload: Readonly<Record<string, Json>>;
     };
 
 export interface StoryScene {
   readonly id: string;
   readonly name: string;
   readonly description?: string;
+  /** The image the scene opens on, as an asset id. */
+  readonly backgroundAssetId?: string;
   readonly rows: readonly StoryRow[];
 }
 
@@ -194,7 +200,7 @@ function rowOf(block: Record<string, Json>, depth: number): StoryRow | undefined
       }
       if (action === "choice") return { ...base, kind: "choice", text: segmentText(payload["prompt"]) };
       if (action === "choiceOption") return { ...base, kind: "option", text: segmentText(payload["text"]) };
-      return { ...base, kind: "command", command: action ?? kind };
+      return { ...base, kind: "command", command: action ?? kind, block: kind, payload };
     }
     case "note":
       return { ...base, kind: "note", text: segmentText(payload["text"]) || (text(payload["text"]) ?? "") };
@@ -203,9 +209,9 @@ function rowOf(block: Record<string, Json>, depth: number): StoryRow | undefined
     case "empty":
       return { ...base, kind: "empty" };
     case "declaration":
-      return { ...base, kind: "command", command: "declare", detail: text(payload["name"]) ?? "" };
+      return { ...base, kind: "command", command: "declare", detail: text(payload["name"]) ?? "", block: kind, payload };
     default:
-      return { ...base, kind: "command", ...commandOf(kind, payload) };
+      return { ...base, kind: "command", ...commandOf(kind, payload), block: kind, payload };
   }
 }
 
@@ -241,10 +247,12 @@ export function readStoryDocument(json: Json): StoryDocumentView | Unsupported {
     const scene = record(value);
     if (scene === undefined) continue;
     const description = text(scene["description"]);
+    const backgroundAssetId = text(scene["defaultBackgroundAssetId"]);
     scenes[key] = {
       id: text(scene["id"]) ?? key,
       name: text(scene["name"]) ?? key,
       ...(description === undefined || description === "" ? {} : { description }),
+      ...(backgroundAssetId === undefined || backgroundAssetId === "" ? {} : { backgroundAssetId }),
       rows: rowsOf(scene),
     };
   }
@@ -278,6 +286,8 @@ export interface CharacterView {
   readonly name: string;
   readonly description: string;
   readonly nicknames: readonly string[];
+  /** Where its default face is drawn, when Studio has baked one. */
+  readonly avatarPath?: string;
 }
 
 /** The characters, by id. A store this cannot read is an empty map: lines then show their bare ids. */
@@ -288,14 +298,42 @@ export function readCharacters(json: Json): ReadonlyMap<string, CharacterView> {
     const profile = record(record(entry)?.["profile"]);
     const id = text(profile?.["id"]);
     if (profile === undefined || id === undefined) continue;
+    const appearance = record(profile["appearance"]);
+    const pose = text(appearance?.["defaultPoseId"]);
+    const baked = pose !== undefined && record(record(appearance?.["avatars"])?.[pose]) !== undefined;
     characters.set(id, {
       id,
+      ...(baked ? { avatarPath: `resources/characters/avatars/${id}/${pose}.png` } : {}),
       name: text(profile["name"]) ?? id,
       description: text(profile["description"]) ?? "",
       nicknames: list(profile["nicknames"]).flatMap((n) => (typeof n === "string" ? [n] : [])),
     });
   }
   return characters;
+}
+
+/* ------------------------------------------------------------- variables */
+
+export const VARIABLE_STORE_PATH = "editor/variables.json";
+
+export interface VariableView {
+  readonly id: string;
+  readonly name: string;
+  /** `saved`, `persistent`, or `scene`. */
+  readonly scope: string;
+  readonly valueType: string;
+}
+
+/** The project's variables, by id. A store this cannot read is an empty map. */
+export function readVariables(json: Json): ReadonlyMap<string, VariableView> {
+  const variables = new Map<string, VariableView>();
+  for (const [key, value] of Object.entries(record(record(json)?.["entries"]) ?? {})) {
+    const entry = record(value);
+    if (entry === undefined) continue;
+    const id = text(entry["id"]) ?? key;
+    variables.set(id, { id, name: text(entry["name"]) ?? id, scope: text(entry["scope"]) ?? "", valueType: text(entry["valueType"]) ?? "" });
+  }
+  return variables;
 }
 
 /* ---------------------------------------------------------------- assets */

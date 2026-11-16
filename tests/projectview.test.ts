@@ -57,7 +57,7 @@ describe("the story readers", () => {
       { id: "b2", depth: 0, disabled: false, kind: "dialogue", speaker: { characterId: "ch1" }, text: "你来了。" },
       { id: "b3", depth: 0, disabled: false, kind: "choice", text: "怎么回答？" },
       { id: "b4", depth: 1, disabled: false, kind: "option", text: "嗯。" },
-      { id: "b5", depth: 2, disabled: true, kind: "command", command: "setBackground" },
+      { id: "b5", depth: 2, disabled: true, kind: "command", command: "setBackground", block: "action", payload: { action: "setBackground", assetId: "a" } },
     ]);
   });
 
