@@ -45,8 +45,8 @@ import { language, t, type Phrase } from "./i18n";
 import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, type Revision } from "./Production";
 import { CompareWithNow, OnlineNow, ProjectSettings, type ProjectSettingsSection } from "./Versions";
 import { AskForMore } from "./Access";
-import type { TeamConnection, ConnectionState } from "./socket";
-import { ActionMenu, Blankslate, Checkbox, SelectPanel, toast } from "./ui";
+import { CallError, type TeamConnection, type ConnectionState } from "./socket";
+import { ActionMenu, Blankslate, Checkbox, Flash, SelectPanel, toast } from "./ui";
 import { describeCommand, GROUP_COLOR, GROUP_ICON, type CommandLookups } from "./storyCommands";
 
 export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "settings";
@@ -129,6 +129,7 @@ export function ProjectPage(props: {
   const { account, connection, state, projectId, tab, revision, section, isOperator, go, back } = props;
   const [project, setProject] = useState<ProjectSummary | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [missing, setMissing] = useState(false);
   const [tree, setTree] = useState<Tree | undefined>(undefined);
   const [treeError, setTreeError] = useState<string | undefined>(undefined);
   const open = state.kind === "open";
@@ -137,8 +138,15 @@ export function ProjectPage(props: {
     if (!open) return;
     connection
       .call<{ project: ProjectSummary }>("projects.get", { project: projectId })
-      .then((answer) => setProject(answer.project))
-      .catch((caught: unknown) => setError(errorText(caught)));
+      .then((answer) => {
+        setMissing(false);
+        setProject(answer.project);
+      })
+      .catch((caught: unknown) => {
+        // A project one has no place in is answered as one that is not there; both read as 404.
+        if (caught instanceof CallError && caught.code === "not-found") setMissing(true);
+        else setError(errorText(caught));
+      });
   }, [open, connection, projectId]);
 
   // The newest view is what the server holds right now (`current`), not the last saved version;
@@ -196,14 +204,29 @@ export function ProjectPage(props: {
     [projectId, projectName, tab],
   );
 
+  if (missing) {
+    return (
+      <Blankslate
+        icon="search"
+        title={t("projectMissing")}
+        action={
+          <button className="btn btn-primary" onClick={back}>
+            {t("backToProjects")}
+          </button>
+        }
+      >
+        {t("projectMissingHint")}
+      </Blankslate>
+    );
+  }
   if (error !== undefined) {
-    return <Notice tone="error">{t("loadFailed", { reason: error })}</Notice>;
+    return <Flash error={error} />;
   }
 
   const workbenchBody =
     tab === "todos" ? (
       <div className="wb-page">
-        <ProjectTodos account={account} connection={connection} open={open} projectId={projectId} />
+        <ProjectTodos account={account} connection={connection} open={open} projectId={projectId} tree={tree} />
       </div>
     ) : treeError !== undefined ? (
       <Notice>{t("notReadYetLong")}</Notice>
@@ -459,8 +482,30 @@ function roleKey(role: TeamProjectRole): Phrase {
 
 /* ---------------------------------------------------------------- to-dos */
 
-function ProjectTodos(props: { account: ConsoleAccount; connection: TeamConnection; open: boolean; projectId: string }) {
-  const { account, connection, open, projectId } = props;
+function ProjectTodos(props: { account: ConsoleAccount; connection: TeamConnection; open: boolean; projectId: string; tree: Tree | undefined }) {
+  const { account, connection, open, projectId, tree } = props;
+  const register = useAssetRegister(projectId, tree);
+  const byId = useMemo(() => new Map((register ?? []).map((asset) => [asset.id, asset])), [register]);
+  const present = useMemo(() => new Set((tree?.files ?? []).map((file) => file.path)), [tree]);
+  // What answered an asset request, as the assets page draws it: the picture, or a player.
+  const assetPreview = (id: string) => {
+    const asset = byId.get(id);
+    if (asset === undefined || tree === undefined) return <span className="muted small">{t("todoAssetLinked")}</span>;
+    const as = assetAs(asset);
+    const url = present.has(asset.contentPath) ? rawUrl(projectId, tree.revision, asset.contentPath, as) : undefined;
+    return (
+      <span className="todo-asset">
+        {url !== undefined && as !== undefined && IMAGE_EXT.has(as) ? (
+          <img src={url} alt={asset.name} loading="lazy" />
+        ) : url !== undefined && as !== undefined && AUDIO_EXT.has(as) ? (
+          <MiniPlayer src={url} />
+        ) : (
+          <Icon name={ASSET_KIND_ICON[asset.type] ?? "file"} size={16} />
+        )}
+        <span className="todo-asset-name">{asset.name}</span>
+      </span>
+    );
+  };
   const [members, setMembers] = useState<readonly Member[]>([]);
   useEffect(() => {
     if (!open) return;
@@ -469,7 +514,7 @@ function ProjectTodos(props: { account: ConsoleAccount; connection: TeamConnecti
       .then((answer) => setMembers(answer.members))
       .catch(() => undefined);
   }, [open, connection, projectId]);
-  return <Todos connection={connection} open={open} account={account} project={projectId} members={members} />;
+  return <Todos connection={connection} open={open} account={account} project={projectId} members={members} assetPreview={assetPreview} />;
 }
 
 /* ------------------------------------------------------------- overview */
@@ -651,7 +696,7 @@ function Story({
     return () => window.removeEventListener("nlteam:scene", go);
   }, []);
 
-  if (error !== undefined) return <Notice tone="error">{t("loadFailed", { reason: error })}</Notice>;
+  if (error !== undefined) return <Flash error={error} />;
   if (library === undefined) return <p className="muted">{t("loading")}</p>;
   if (!library.supported) return <UnsupportedNotice value={library} />;
   if (library.stories.length === 0) {
@@ -1114,7 +1159,7 @@ function Blueprints({ projectId, tree }: { projectId: string; tree: Tree }) {
       .catch((caught: unknown) => setError(errorText(caught)));
   }, [projectId, tree]);
 
-  if (error !== undefined) return <Notice tone="error">{t("loadFailed", { reason: error })}</Notice>;
+  if (error !== undefined) return <Flash error={error} />;
   if (view === undefined) return <p className="muted">{t("loading")}</p>;
   if (!view.supported) return <UnsupportedNotice value={view} />;
   const shown = view.blueprints.filter((blueprint) => blueprint.graphs.length > 0);
@@ -1519,9 +1564,10 @@ function assetKindName(kind: string): string {
 }
 
 /** Every asset the revision's registers list, by name. */
-function useAssetRegister(projectId: string, tree: Tree): readonly AssetView[] | undefined {
+function useAssetRegister(projectId: string, tree: Tree | undefined): readonly AssetView[] | undefined {
   const [assets, setAssets] = useState<readonly AssetView[] | undefined>(undefined);
   useEffect(() => {
+    if (tree === undefined) return;
     const registers = tree.files.flatMap((file) => {
       const kind = assetRegisterType(file.path);
       return kind === undefined ? [] : [{ kind, path: file.path }];

@@ -15,6 +15,7 @@
  * approving is something only the person signed in to this server may do.
  * src/identity/oauth.ts holds the rules.
  */
+import { policyNumber, STUDIO_ACCESS_HOURS } from "../identity/policy.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { describeRefusal } from "../identity/bearer.js";
@@ -140,6 +141,8 @@ async function readForm(request: IncomingMessage): Promise<URLSearchParams | und
 function issue(service: TeamService, response: ServerResponse, issued: IssuedGrant): void {
   const minted = mintToken(issued.user, service.keys.signingKey, mintingConfig(service), {
     purpose: "sign-in",
+    // Studio refreshes on its own, so its token can be short: a day unless the operator says otherwise.
+    lifetimeSeconds: policyNumber(service.database, STUDIO_ACCESS_HOURS) * 3600,
     grant: issued.grantId,
     ...(service.fingerprint === undefined ? {} : { authorityFingerprint: service.fingerprint }),
   });

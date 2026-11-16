@@ -103,6 +103,7 @@ describe("migrate", () => {
       database.exec("DROP TABLE doc_snapshots");
       database.exec("DROP TABLE reviews");
       database.exec("DROP TABLE milestones");
+      database.exec("DROP TABLE webhook_deliveries");
       database.exec("DROP TABLE webhooks");
       database.exec("ALTER TABLE todos DROP COLUMN done_revision");
       database.exec("DROP TABLE activity");

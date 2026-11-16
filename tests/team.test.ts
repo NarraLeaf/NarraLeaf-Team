@@ -14,6 +14,7 @@
  * HTTP/2 secure listener that `allowHTTP1` puts in front of the same port. What
  * is left over is the protocol, and the protocol does not know which it is on.
  */
+import { POLICIES } from "../src/identity/policy.js";
 import { randomUUID } from "node:crypto";
 import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -3583,6 +3584,8 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminWebhooksCreate,
   TEAM_METHODS.adminWebhooksDelete,
   TEAM_METHODS.adminWebhooksTest,
+  TEAM_METHODS.adminWebhooksDeliveries,
+  TEAM_METHODS.adminWebhooksRedeliver,
 ];
 
 /** Both halves, which is what the gate has to cover. */
@@ -3881,6 +3884,7 @@ describe("the settings, as an operator reads them", () => {
       "edit log kept (days)",
       "sign-in token",
       "repository token",
+      ...POLICIES.map((policy) => policy.label),
     ]);
   });
 

@@ -979,6 +979,35 @@ img.avatar {
   min-width: 0;
 }
 
+.todo-answer {
+  margin: 4px 0 2px;
+}
+
+.todo-asset {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--nl-edge);
+  border-radius: var(--nl-radius-sm);
+  background: var(--nl-fill-subtle);
+  font-size: 12px;
+}
+
+.todo-asset img {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: var(--nl-radius-sm);
+}
+
+.todo-asset-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .todo-assign {
   max-width: 120px;
   padding: 3px;

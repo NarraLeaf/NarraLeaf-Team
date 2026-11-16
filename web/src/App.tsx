@@ -22,7 +22,7 @@ import { teamName, teamNameUnset, useLook, type TeamLook } from "./look";
 import { Setup, SignIn, TeamMark } from "./SignIn";
 import { projectHue, TeamHome } from "./TeamHome";
 import { Palette, type PaletteItem } from "./Palette";
-import { Blankslate, UiHost } from "./ui";
+import { Blankslate, Flash, UiHost } from "./ui";
 
 type Route =
   | { readonly screen: "home" }
@@ -615,7 +615,7 @@ function Projects({
           <p className="muted">{t("projectsLead")}</p>
         </div>
       </header>
-      {error !== undefined ? <p className="error">{t("loadFailed", { reason: error })}</p> : null}
+      {error !== undefined ? <Flash error={error} /> : null}
       {rows === undefined ? (
         <p className="muted">{t("loading")}</p>
       ) : rows.length === 0 ? (

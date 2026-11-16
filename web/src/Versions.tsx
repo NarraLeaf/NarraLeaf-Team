@@ -147,7 +147,7 @@ export function CompareWithNow({ projectId, revision, close }: { projectId: stri
         </button>
       </div>
       {error !== undefined ? (
-        <p className="error">{error}</p>
+        <Flash error={error} />
       ) : changes === undefined ? (
         <p className="muted">{t("compareLoading")}</p>
       ) : (
@@ -391,7 +391,7 @@ export function DocumentsPanel({ connection }: { connection: TeamConnection }) {
     void load();
     // Loaded once on opening; the button below and a reopen read it again.
   }, [connection]);
-  if (error !== undefined) return <p className="error">{error}</p>;
+  if (error !== undefined) return <Flash error={error} />;
   if (status === undefined) return <p className="muted">{t("loading")}</p>;
   if (!status.held) return <p className="placeholder-card">{t("docsNotHeld")}</p>;
   return (

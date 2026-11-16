@@ -21,7 +21,12 @@ import {
   deliverOne,
   emitWebhookEvent,
   findWebhook,
+  findWebhookDelivery,
+  listWebhookDeliveries,
   listWebhooks,
+  redeliver,
+  WEBHOOK_DELIVERIES_KEPT,
+  webhookDeliveryView,
   WebhookRefusal,
   webhookView,
 } from "../../collab/webhooks.js";
@@ -29,12 +34,14 @@ import { findUser, isOperator, type UserRecord } from "../../identity/users.js";
 import { findProject } from "../../projects/registry.js";
 import { projectRole } from "../../projects/members.js";
 import {
+  boundedCount,
   flag,
   MethodError,
   oneOf,
   optionalText,
   paramsObject,
   projectVisible,
+  requiredInteger,
   requiredText,
   type MethodContext,
   type TeamMethod,
@@ -375,7 +382,28 @@ export function productionMethods(): TeamMethod[] {
           actor: context.account.username,
           summary: `test from ${context.account.username}`,
         });
-        return { status };
+        return { status, ...latestError(context, hook.id) };
+      },
+    },
+    {
+      name: TEAM_METHODS.adminWebhooksDeliveries,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        requireOperator(context);
+        const read = paramsObject(params);
+        const hook = findWebhook(context.options.database, requiredText(read, "webhook", ID_LIMIT));
+        if (hook === undefined) throw new MethodError("not-found", "there is no webhook of that id");
+        return { deliveries: listWebhookDeliveries(context.options.database, hook.id, boundedCount(read, "limit", 50, WEBHOOK_DELIVERIES_KEPT)).map(webhookDeliveryView) };
+      },
+    },
+    {
+      name: TEAM_METHODS.adminWebhooksRedeliver,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        requireOperator(context);
+        const again = redeliver(context.options.database, requiredInteger(paramsObject(params), "delivery"));
+        if (again === undefined) throw new MethodError("not-found", "there is no delivery of that id");
+        return { delivery: webhookDeliveryView(again) };
       },
     },
     {
@@ -434,10 +462,38 @@ export function productionMethods(): TeamMethod[] {
           actor: context.account.username,
           summary: `test from ${context.account.username}`,
         });
-        return { status };
+        return { status, ...latestError(context, hook.id) };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsWebhooksDeliveries,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const hook = ownedWebhook(context, read);
+        return { deliveries: listWebhookDeliveries(context.options.database, hook.id, boundedCount(read, "limit", 50, WEBHOOK_DELIVERIES_KEPT)).map(webhookDeliveryView) };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsWebhooksRedeliver,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const past = findWebhookDelivery(context.options.database, requiredInteger(read, "delivery"));
+        if (past === undefined) throw new MethodError("not-found", "there is no delivery of that id");
+        ownedWebhook(context, { webhook: past.webhookId });
+        const again = redeliver(context.options.database, past.id);
+        if (again === undefined) throw new MethodError("not-found", "there is no delivery of that id");
+        return { delivery: webhookDeliveryView(again) };
       },
     },
   ];
+}
+
+/** Why the latest delivery of a webhook failed, where it did: what a test answers beside the status. */
+function latestError(context: MethodContext, webhookId: string): { error?: string } {
+  const error = listWebhookDeliveries(context.options.database, webhookId, 1)[0]?.error;
+  return error === undefined ? {} : { error };
 }
 
 /**

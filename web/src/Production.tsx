@@ -19,13 +19,14 @@ import {
   type TeamReview,
   type TeamReviewStatus,
   type TeamWebhook,
+  type TeamWebhookDelivery,
   type TeamWebhookEvent,
   type TeamWebhookFormat,
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
 import { Face } from "./Collab";
-import { ago, Blankslate, Checkbox, confirmAction, SelectPanel, toast, type SelectOption } from "./ui";
+import { ago, Blankslate, Checkbox, confirmAction, Flash, RelativeTime, SelectPanel, toast, toastError, type SelectOption } from "./ui";
 import type { TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -149,7 +150,7 @@ export function Reviews(props: {
 
   return (
     <div className="reviews">
-      {error !== undefined ? <p className="error">{error}</p> : null}
+      {error !== undefined ? <Flash error={error} /> : null}
       {canAsk ? (
         <form className="card review-new" onSubmit={(event) => void ask(event)}>
           <h3>{t("reviewAsk")}</h3>
@@ -369,7 +370,7 @@ const EVENT_PHRASE: Record<TeamWebhookEvent, Phrase> = {
  */
 export function Webhooks({ connection, projectId }: { connection: TeamConnection; projectId?: string }) {
   const scoped = projectId !== undefined;
-  const method = (name: "list" | "create" | "delete" | "test") => (scoped ? `projects.webhooks.${name}` : `admin.webhooks.${name}`);
+  const method = (name: "list" | "create" | "delete" | "test" | "deliveries" | "redeliver") => (scoped ? `projects.webhooks.${name}` : `admin.webhooks.${name}`);
   const scope = scoped ? { project: projectId } : {};
   const [hooks, setHooks] = useState<readonly TeamWebhook[] | undefined>(undefined);
   const [projects, setProjects] = useState<readonly { id: string; name: string }[]>([]);
@@ -378,14 +379,16 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
   const [project, setProject] = useState("");
   const [events, setEvents] = useState<readonly TeamWebhookEvent[]>(["version", "review-requested", "todo-assigned"]);
   const [secret, setSecret] = useState<string | undefined>(undefined);
-  const [result, setResult] = useState<Record<string, number>>({});
-  const [error, setError] = useState<string | undefined>(undefined);
+  const [result, setResult] = useState<Record<string, { status: number; error?: string }>>({});
+  const [error, setError] = useState<unknown>(undefined);
+  const [open, setOpen] = useState<string | undefined>(undefined);
+  const [logTick, setLogTick] = useState(0);
 
   const load = useCallback(() => {
     connection
       .call<{ webhooks: TeamWebhook[] }>(method("list"), scope)
       .then((answer) => setHooks(answer.webhooks))
-      .catch((caught: unknown) => setError(errorText(caught)));
+      .catch((caught: unknown) => setError(caught));
   }, [connection, projectId]);
   useEffect(() => {
     load();
@@ -410,7 +413,7 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
       setUrl("");
       load();
     } catch (caught) {
-      setError(errorText(caught));
+      setError(caught);
     }
   };
 
@@ -419,7 +422,7 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
   return (
     <div className="admin-section">
       <p className="muted">{scoped ? t("projectWebhooksLead") : t("whLead")}</p>
-      {error !== undefined ? <p className="error">{error}</p> : null}
+      {error !== undefined ? <Flash error={error} /> : null}
       {secret !== undefined ? (
         <p className="notice">
           {t("whSecret")} <code>{secret}</code>
@@ -481,22 +484,28 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
               <div className="muted small">
                 {projectName(hook.project)} · {hook.events.map((name) => t(EVENT_PHRASE[name])).join("、")}
                 {hook.lastStatus !== undefined ? ` · ${t("whLast", { status: String(hook.lastStatus) })}` : ""}
-                {result[hook.id] !== undefined ? ` · ${t("whTested", { status: String(result[hook.id]) })}` : ""}
+                {result[hook.id] !== undefined
+                  ? ` · ${t("whTested", { status: String(result[hook.id]!.status) })}${result[hook.id]!.error === undefined ? "" : ` (${deliveryError(result[hook.id]!.error!)})`}`
+                  : ""}
               </div>
               <div className="review-actions">
                 <button
                   className="ghost small"
                   onClick={() =>
                     void connection
-                      .call<{ status: number }>(method("test"), { webhook: hook.id })
+                      .call<{ status: number; error?: string }>(method("test"), { webhook: hook.id })
                       .then((answer) => {
-                        setResult({ ...result, [hook.id]: answer.status });
+                        setResult({ ...result, [hook.id]: answer });
+                        setLogTick((n) => n + 1);
                         load();
                       })
-                      .catch((caught: unknown) => setError(errorText(caught)))
+                      .catch((caught: unknown) => setError(caught))
                   }
                 >
                   {t("whTest")}
+                </button>
+                <button className="ghost small" aria-expanded={open === hook.id} onClick={() => setOpen(open === hook.id ? undefined : hook.id)}>
+                  {t("whDeliveries")}
                 </button>
                 <button
                   className="ghost small"
@@ -509,17 +518,105 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
                           toast(t("whRemoved"));
                           load();
                         })
-                        .catch((caught: unknown) => setError(errorText(caught)));
+                        .catch((caught: unknown) => setError(caught));
                     })
                   }
                 >
                   {t("remove")}
                 </button>
               </div>
+              {open === hook.id ? (
+                <DeliveryLog
+                  key={logTick}
+                  load={() => connection.call<{ deliveries: TeamWebhookDelivery[] }>(method("deliveries"), { webhook: hook.id }).then((answer) => answer.deliveries)}
+                  resend={(delivery) => connection.call(method("redeliver"), { delivery })}
+                />
+              ) : null}
             </li>
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+/** When something later is, as "in 30 seconds". */
+function soon(at: number): string {
+  const seconds = Math.max(1, Math.round((at - Date.now()) / 1000));
+  const format = new Intl.RelativeTimeFormat(navigator.language, { numeric: "auto" });
+  return seconds < 60 ? format.format(seconds, "second") : seconds < 3600 ? format.format(Math.round(seconds / 60), "minute") : format.format(Math.round(seconds / 3600), "hour");
+}
+
+/** The server's reason a delivery failed, in the reader's language where it is one we know. */
+function deliveryError(error: string): string {
+  if (error.includes("own network")) return t("whErrPrivate");
+  if (error.startsWith("no address")) return t("whErrNoAddress");
+  if (error === "no answer in time") return t("whErrTimeout");
+  if (error === "could not connect") return t("whErrConnect");
+  const answered = /^answered (\d+)$/.exec(error);
+  if (answered !== null) return t("whErrAnswered", { status: answered[1]! });
+  return error;
+}
+
+/** A delivery's answer as a word and a tone: delivered, failed, waiting to try again. */
+function deliveryState(delivery: TeamWebhookDelivery): { label: string; tone: "ok" | "bad" | "wait" } {
+  if (delivery.status >= 200 && delivery.status < 300) return { label: String(delivery.status), tone: "ok" };
+  if (delivery.nextAt !== undefined) return { label: t("whRetrying"), tone: "wait" };
+  return { label: delivery.status === 0 ? t("whNoAnswer") : String(delivery.status), tone: "bad" };
+}
+
+/** The latest deliveries of one webhook, newest first, each with "send again". */
+function DeliveryLog({ load, resend }: { load: () => Promise<TeamWebhookDelivery[]>; resend: (id: number) => Promise<unknown> }) {
+  const [deliveries, setDeliveries] = useState<readonly TeamWebhookDelivery[] | undefined>(undefined);
+  const [error, setError] = useState<unknown>(undefined);
+  const refresh = useCallback(() => {
+    load()
+      .then(setDeliveries)
+      .catch((caught: unknown) => setError(caught));
+  }, [load]);
+  useEffect(() => {
+    refresh();
+    // A retry may land while the log is open; look again now and then.
+    const timer = window.setInterval(refresh, 5_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  if (error !== undefined) return <Flash error={error} />;
+  if (deliveries === undefined) return <p className="muted small">{t("loading")}</p>;
+  if (deliveries.length === 0) return <p className="muted small">{t("whNoDeliveries")}</p>;
+  return (
+    <ul className="delivery-log">
+      {deliveries.map((delivery) => {
+        const state = deliveryState(delivery);
+        return (
+          <li key={delivery.id}>
+            <span className={`delivery-status delivery-${state.tone}`}>{state.label}</span>
+            <span className="delivery-summary">
+              <span>{t(EVENT_PHRASE[delivery.event])}</span>
+              <span className="muted small">
+                {delivery.summary}
+                {delivery.error === undefined ? "" : ` · ${deliveryError(delivery.error)}`}
+                {delivery.attempts > 1 ? ` · ${t("whAttempts", { count: String(delivery.attempts) })}` : ""}
+                {delivery.nextAt === undefined ? "" : ` · ${t("whNextTry", { when: soon(delivery.nextAt) })}`}
+              </span>
+            </span>
+            <RelativeTime at={delivery.at} />
+            <button
+              className="ghost small"
+              onClick={() =>
+                void resend(delivery.id)
+                  .then(() => {
+                    toast(t("whResent"));
+                    window.setTimeout(refresh, 800);
+                  })
+                  .catch(toastError)
+              }
+            >
+              {t("whResend")}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

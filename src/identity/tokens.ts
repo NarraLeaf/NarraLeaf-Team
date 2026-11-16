@@ -166,6 +166,11 @@ export interface MintOptions {
    */
   readonly purpose?: TokenPurpose;
   /**
+   * A shorter life than the purpose's, in seconds: what a token Studio refreshes on its own gets.
+   * Never longer than the purpose's own.
+   */
+  readonly lifetimeSeconds?: number;
+  /**
    * The resources this token is being issued for, written as the `resources`
    * claim. Given by the two exchanges a client makes; a token minted for
    * anything else opens no data connection and names none.
@@ -250,10 +255,12 @@ export function mintToken(
   }
 
   const issuedAt = Math.floor((options.now?.getTime() ?? Date.now()) / 1000);
-  const lifetimeSeconds =
+  const purposeSeconds =
     options.purpose === "repository"
       ? config.repositoryTokenLifetimeSeconds
       : config.signInTokenLifetimeSeconds;
+  const lifetimeSeconds =
+    options.lifetimeSeconds !== undefined && options.lifetimeSeconds > 0 ? Math.min(options.lifetimeSeconds, purposeSeconds) : purposeSeconds;
   const header: TokenHeader = { alg: "RS256", typ: "JWT", kid: key.kid };
   const claims: TokenClaims = {
     iss: config.issuer,

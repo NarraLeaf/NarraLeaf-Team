@@ -3742,3 +3742,77 @@ kbd {
 .avatar-row > :first-child {
   margin-right: 6px;
 }
+
+/* Webhook delivery log: one line per delivery, newest first. */
+.delivery-log {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  border: 1px solid var(--nl-edge-subtle);
+  border-radius: var(--nl-radius);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.delivery-log li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.delivery-log li + li {
+  border-top: 1px solid var(--nl-edge-subtle);
+}
+
+.delivery-summary {
+  display: grid;
+  min-width: 0;
+}
+
+.delivery-summary > .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delivery-status {
+  min-width: 52px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.delivery-ok {
+  color: rgb(var(--nl-success));
+  background: rgb(var(--nl-success) / 0.14);
+}
+
+.delivery-bad {
+  color: rgb(var(--nl-danger));
+  background: rgb(var(--nl-danger) / 0.14);
+}
+
+.delivery-wait {
+  color: rgb(var(--nl-warning));
+  background: rgb(var(--nl-warning) / 0.16);
+}
+
+@media (max-width: 640px) {
+  .delivery-log li {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .delivery-log li > time {
+    display: none;
+  }
+}
+
+/* Server settings: a rule above the first row of each group. */
+tr.group-start > td {
+  border-top: 1px solid var(--nl-edge);
+  padding-top: 14px;
+}

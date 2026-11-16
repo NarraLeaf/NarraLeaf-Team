@@ -5,7 +5,7 @@
  * Everything is a call on the socket; what each viewer may see is decided by
  * the server (src/collab/), so nothing here hides anything.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import {
   accountNotificationsTopic,
@@ -28,7 +28,7 @@ import { studioConnectLink } from "./studioLink";
 import { chooseLanguage, chosenLanguage, t, type Language, type Phrase } from "./i18n";
 import { chooseTheme, chosenTheme, type ThemeChoice } from "./theme";
 import { ago } from "./ui/time";
-import { Blankslate, Checkbox, SelectPanel, Skeleton, UnderlineNav } from "./ui";
+import { Blankslate, Checkbox, Flash, SelectPanel, Skeleton, UnderlineNav } from "./ui";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -237,12 +237,15 @@ export function Todos({
   account,
   project,
   members,
+  assetPreview,
 }: {
   connection: TeamConnection;
   open: boolean;
   account: ConsoleAccount & { readonly id?: string };
   project?: string;
   members?: readonly { username: string; displayName: string }[];
+  /** Draws the asset that answered an asset request, where the project's files are at hand. */
+  assetPreview?: (asset: string) => ReactNode;
 }) {
   const [todos, setTodos] = useState<readonly TeamTodo[] | undefined>(undefined);
   const [title, setTitle] = useState("");
@@ -333,6 +336,9 @@ export function Todos({
           ) : null}{" "}
           {todo.title}
         </div>
+        {todo.kind === "asset" && todo.asset !== undefined ? (
+          <div className="todo-answer">{assetPreview === undefined ? <span className="muted small">{t("todoAssetLinked")}</span> : assetPreview(todo.asset)}</div>
+        ) : null}
         <div className="muted small">
           {todo.visibility === "private" ? t("visibilityPrivate") : t("visibilityProject")}
           {todo.assignee !== undefined ? ` · → ${todo.assignee}` : ""}
@@ -375,7 +381,7 @@ export function Todos({
 
   return (
     <div className="todos">
-      {error !== undefined ? <p className="error">{error}</p> : null}
+      {error !== undefined ? <Flash error={error} /> : null}
       <form className="todo-new" onSubmit={(event) => void add(event)}>
         <input value={title} placeholder={t("newTodo")} onChange={(event) => setTitle(event.target.value)} maxLength={300} />
         {project !== undefined ? (

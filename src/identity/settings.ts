@@ -409,13 +409,13 @@ function withinRange(seconds: number): boolean {
 }
 
 /** The stored text of one setting, or undefined when there is no row. */
-function readSetting(database: DatabaseSync, key: string): string | undefined {
+export function readSetting(database: DatabaseSync, key: string): string | undefined {
   const row = database.prepare("SELECT value FROM settings WHERE key = ?").get(key);
   return row === undefined ? undefined : textColumn(row, "value");
 }
 
 /** Put one setting in the table, over whatever was there. */
-function writeSetting(database: DatabaseSync, key: string, value: string, at = Date.now()): void {
+export function writeSetting(database: DatabaseSync, key: string, value: string, at = Date.now()): void {
   database
     .prepare(
       `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)

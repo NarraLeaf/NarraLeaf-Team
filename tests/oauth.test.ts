@@ -269,7 +269,8 @@ describe("over HTTP", () => {
     expect(tokens.status).toBe(200);
     expect(tokens.headers["cache-control"]).toBe("no-store");
     const answer = JSON.parse(tokens.body) as { access_token: string; refresh_token: string; expires_in: number };
-    expect(answer.expires_in).toBe(team.config.signInTokenLifetimeSeconds);
+    // A day by default, the "studio access token (hours)" setting.
+    expect(answer.expires_in).toBe(Math.min(24 * 3600, team.config.signInTokenLifetimeSeconds));
 
     const identified = identifyToken(team.database, team.keys, team.config, answer.access_token);
     expect(identified.kind).toBe("identified");

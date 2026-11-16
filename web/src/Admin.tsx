@@ -484,7 +484,72 @@ export function hexChannels(hex: string): string {
   return `${(value >> 16) & 255} ${(value >> 8) & 255} ${value & 255}`;
 }
 
-function SettingsTable({ connection, settings, reload }: { connection: TeamConnection; settings: readonly TeamAdminSetting[]; reload: () => void }) {
+/** Server settings by the label the server gives them, in the reader's language. Unknown ones show as they come. */
+const SETTING_PHRASE: Record<string, Phrase> = {
+  name: "setName",
+  collaboration: "setCollaboration",
+  "repeat publishes": "setRepeatPublishes",
+  "who makes projects": "setWhoMakes",
+  "who removes projects": "setWhoRemoves",
+  "others in a new project": "setOthersInNew",
+  "edit log kept (days)": "setEditLogDays",
+  "sign-in token": "setSignInToken",
+  "repository token": "setRepositoryToken",
+  issuer: "setIssuer",
+  audience: "setAudience",
+  hostnames: "setHostnames",
+  "pinned version": "setPinnedVersion",
+  "data port": "setDataPort",
+  "storage root": "setStorageRoot",
+  fingerprint: "setFingerprint",
+  "notifications kept (days)": "setKeepNotifications",
+  "activity kept (days)": "setKeepActivity",
+  "chat kept (days)": "setKeepChat",
+  "audit kept (days)": "setKeepAudit",
+  "webhook deliveries kept (days)": "setKeepDeliveries",
+  "webhooks to private addresses": "setWebhooksPrivate",
+  "studio access token (hours)": "setStudioAccessHours",
+  "two-factor required": "setRequireTwoFactor",
+  "allowed networks": "setAllowedNetworks",
+  "project storage quota (MB)": "setStorageQuota",
+  "largest play build (MB)": "setBuildLimit",
+  "backup every (hours)": "setBackupEvery",
+  "backups kept": "setBackupKeep",
+  "public address": "setPublicUrl",
+  "smtp host": "setSmtpHost",
+  "smtp port": "setSmtpPort",
+  "smtp implicit tls": "setSmtpTls",
+  "smtp user": "setSmtpUser",
+  "smtp password": "setSmtpPassword",
+  "mail from": "setMailFrom",
+  "oidc issuer": "setOidcIssuer",
+  "oidc client id": "setOidcClientId",
+  "oidc client secret": "setOidcClientSecret",
+  "oidc creates accounts": "setOidcCreate",
+  "oidc button text": "setOidcButton",
+  "ldap url": "setLdapUrl",
+  "ldap bind dn": "setLdapBind",
+};
+const GROUP_PHRASE: Record<string, Phrase> = {
+  server: "groupServer",
+  tokens: "groupTokens",
+  identity: "groupIdentity",
+  loreserver: "groupLoreserver",
+  authority: "groupAuthority",
+  retention: "groupRetention",
+  security: "groupSecurity",
+  storage: "groupStorage",
+  backup: "groupBackup",
+  email: "groupEmail",
+  sso: "groupSso",
+};
+const settingName = (label: string) => (SETTING_PHRASE[label] === undefined ? label : t(SETTING_PHRASE[label]!));
+const groupName = (group: string) => (GROUP_PHRASE[group] === undefined ? group : t(GROUP_PHRASE[group]!));
+
+function SettingsTable({ connection, settings: given, reload }: { connection: TeamConnection; settings: readonly TeamAdminSetting[]; reload: () => void }) {
+  // Grouped, each group where it first appears, rows in the server's order within it.
+  const order = [...new Set(given.map((row) => row.group))];
+  const settings = [...given].sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
   const [editing, setEditing] = useState<{ label: string; value: string } | undefined>(undefined);
   const { run, view } = useAction();
   return (
@@ -493,10 +558,10 @@ function SettingsTable({ connection, settings, reload }: { connection: TeamConne
       {view}
       <table className="admin-table">
         <tbody>
-          {settings.map((row) => (
-            <tr key={row.label}>
-              <td className="muted">{row.group}</td>
-              <td>{row.label}</td>
+          {settings.map((row, index) => (
+            <tr key={row.label} className={index > 0 && settings[index - 1]!.group !== row.group ? "group-start" : undefined}>
+              <td className="muted">{index === 0 || settings[index - 1]!.group !== row.group ? groupName(row.group) : ""}</td>
+              <td title={row.label}>{settingName(row.label)}</td>
               <td>
                 {editing?.label === row.label ? (
                   <form

@@ -19,7 +19,7 @@ import {
   type TeamProjectRole,
 } from "@narraleaf/team-protocol";
 import { t, type Phrase } from "./i18n";
-import { SelectPanel } from "./ui";
+import { Flash, SelectPanel } from "./ui";
 import type { TeamConnection } from "./socket";
 
 export const TEMPLATE_PHRASE: Readonly<Record<TeamPermissionTemplateId, Phrase>> = {
@@ -202,7 +202,7 @@ export function AccessRequestsToDecide({ connection, project, all = false }: { c
   const settled = all ? (lists?.toDecide.filter((request) => request.status !== "pending") ?? []) : [];
   return (
     <div className="access-requests">
-      {error !== undefined ? <p className="error">{t("loadFailed", { reason: error })}</p> : null}
+      {error !== undefined ? <Flash error={error} /> : null}
       {note === undefined ? null : <p className={note.tone === "error" ? "error" : "muted small"}>{note.text}</p>}
       {lists === undefined ? (
         <p className="muted small">{t("loading")}</p>

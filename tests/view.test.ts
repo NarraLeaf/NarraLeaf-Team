@@ -5,6 +5,7 @@
 // else, and a row is found by its position and written by its key - so which
 // rows there are, and in what order, is part of the contract rather than a
 // detail of how they are drawn.
+import { policyNamed, POLICIES } from "../src/identity/policy.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -86,6 +87,7 @@ describe("the settings surface", () => {
       "edit log kept (days)",
       "sign-in token",
       "repository token",
+      ...POLICIES.map((policy) => policy.label),
     ]);
   });
 
@@ -103,7 +105,7 @@ describe("the settings surface", () => {
     const rows = settingRows(await team());
 
     for (const row of rows) {
-      expect(settingKeyOf(row.label) !== undefined).toBe(row.editable);
+      expect((settingKeyOf(row.label) ?? policyNamed(row.label)) !== undefined).toBe(row.editable);
     }
     expect(settingKeyOf("name")).toBe(SERVER_NAME_KEY);
     expect(settingKeyOf("sign-in token")).toBe(SIGN_IN_LIFETIME_KEY);

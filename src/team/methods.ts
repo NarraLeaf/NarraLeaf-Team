@@ -321,6 +321,15 @@ export function boundedCount(
   return Math.min(value, maximum);
 }
 
+/** A whole number that is there: a row id, mostly. */
+export function requiredInteger(params: Record<string, unknown>, name: string, minimum = 1): number {
+  const value = params[name];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+    throw new MethodError("bad-params", `${name} has to be a whole number of at least ${minimum}`);
+  }
+  return value;
+}
+
 /** A yes or a no, with a default. */
 export function flag(params: Record<string, unknown>, name: string, fallback: boolean): boolean {
   const value = params[name];

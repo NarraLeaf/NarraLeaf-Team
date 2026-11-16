@@ -1234,6 +1234,25 @@ export interface TeamWebhook {
   readonly lastAt?: number;
 }
 
+/** One event sent to one webhook, and how it went. Failed ones are tried again on a schedule. */
+export interface TeamWebhookDelivery {
+  readonly id: number;
+  readonly webhook: string;
+  readonly event: TeamWebhookEvent;
+  readonly project?: string;
+  readonly summary: string;
+  /** Tries so far. */
+  readonly attempts: number;
+  /** The last answer: an HTTP status, or 0 for none. */
+  readonly status: number;
+  /** Why it failed, in a few words, where it did. */
+  readonly error?: string;
+  readonly at: number;
+  readonly lastAt?: number;
+  /** When it is tried again, where it will be. */
+  readonly nextAt?: number;
+}
+
 export interface TeamNotification {
   readonly id: number;
   readonly kind: TeamNotificationKind;
@@ -1840,6 +1859,10 @@ export const TEAM_METHODS = {
   projectsWebhooksDelete: "projects.webhooks.delete",
   /** Post a test event to one of the project's now. Its owners. */
   projectsWebhooksTest: "projects.webhooks.test",
+  /** The latest deliveries of one of the project's webhooks. Its owners. */
+  projectsWebhooksDeliveries: "projects.webhooks.deliveries",
+  /** Send one of those deliveries again. Its owners. */
+  projectsWebhooksRedeliver: "projects.webhooks.redeliver",
   /** Every account, as a name beside a piece of work. */
   membersList: "members.list",
   /** The devices the caller is signed in on through the browser sign-in. */
@@ -1882,6 +1905,10 @@ export const TEAM_METHODS = {
   adminWebhooksDelete: "admin.webhooks.delete",
   /** Post a test event to one now and answer how it went. Operators. */
   adminWebhooksTest: "admin.webhooks.test",
+  /** The latest deliveries of one webhook. Operators. */
+  adminWebhooksDeliveries: "admin.webhooks.deliveries",
+  /** Send a delivery again. Operators. */
+  adminWebhooksRedeliver: "admin.webhooks.redeliver",
   /** Make a to-do. */
   todosCreate: "todos.create",
   /** Change a to-do: its status, its assignee, its words. */

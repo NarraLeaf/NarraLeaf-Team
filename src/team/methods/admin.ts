@@ -129,6 +129,7 @@ import {
 } from "../../identity/writes.js";
 import { readDuration } from "../../duration.js";
 import { settingKeyOf, settingRows } from "../../view.js";
+import { InvalidPolicyError, policyNamed, setPolicy } from "../../identity/policy.js";
 import {
   boundedCount,
   flag,
@@ -725,6 +726,21 @@ export function adminMethods(): TeamMethod[] {
       const before = settingOf(context.options, label);
       if (before === undefined) {
         throw new MethodError("not-found", `this server has no setting called ${label}`);
+      }
+      const policy = policyNamed(before.label);
+      if (policy !== undefined) {
+        if (repeat.already !== undefined) return { setting: before };
+        try {
+          const raw = read["value"];
+          if (typeof raw !== "string" || Buffer.byteLength(raw, "utf-8") > SETTING_VALUE_LIMIT) throw new MethodError("bad-params", "value has to be a string");
+          setPolicy(context.options.database, policy.key, raw);
+        } catch (error) {
+          if (error instanceof InvalidPolicyError) throw new MethodError("bad-params", error.message);
+          throw error;
+        }
+        const changed = settingOf(context.options, label) as TeamAdminSetting;
+        if (changed.value !== before.value) context.publish(TOPIC_ADMIN_SETTINGS, { kind: "setting-changed", setting: changed } satisfies TeamAdminSettingsEvent);
+        return { setting: changed };
       }
       const key = settingKeyOf(before.label);
       if (!before.editable || key === undefined) {

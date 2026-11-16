@@ -44,13 +44,12 @@ export const CODE_LIFETIME_MS = 5 * 60 * 1000;
 export const REFRESH_IDLE_MS = 90 * 24 * 60 * 60 * 1000;
 
 /*
- * An access token issued here lasts as long as any sign-in token (the stored
- * sign-in lifetime, thirty days unless changed) rather than an hour. The usual
- * reason for a short one — that a leaked token cannot be withdrawn — does not
- * hold here: every token carries its grant, and Team refuses it the moment the
- * grant is revoked. A short one would cost something real instead: a Studio
- * session re-verifies its token on every call and would be ended hourly.
- * Studio refreshes well before expiry, which rotates the refresh token.
+ * An access token issued here lasts the operator's "studio access token (hours)"
+ * setting, a day unless changed, and never longer than a sign-in token. Every
+ * token carries its grant and Team refuses it the moment the grant is revoked,
+ * so the short life is a second line, not the first: it bounds how long a copied
+ * token works if the grant is never revoked. Studio refreshes well before expiry,
+ * which rotates the refresh token.
  */
 
 /** How long a device code waits for somebody to type its user code. */

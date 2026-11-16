@@ -846,6 +846,32 @@ const MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX access_requests_by_project ON access_requests (project_id, status)",
     ],
   },
+  {
+    version: 23,
+    description: "what each webhook was sent, how it went, and when it is tried again",
+    statements: [
+      // One row per event per webhook. status is the last answer (0 for none);
+      // next_at is when it is tried again, NULL once it worked or gave up.
+      // body is what was posted, so "send again" posts exactly that.
+      `CREATE TABLE webhook_deliveries (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         webhook_id  TEXT    NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+         event       TEXT    NOT NULL,
+         project_id  TEXT,
+         summary     TEXT    NOT NULL,
+         body        TEXT    NOT NULL,
+         signature   TEXT    NOT NULL,
+         attempts    INTEGER NOT NULL DEFAULT 0,
+         status      INTEGER NOT NULL DEFAULT 0,
+         error       TEXT,
+         at          INTEGER NOT NULL,
+         last_at     INTEGER,
+         next_at     INTEGER
+       ) STRICT`,
+      "CREATE INDEX webhook_deliveries_by_hook ON webhook_deliveries (webhook_id, id)",
+      "CREATE INDEX webhook_deliveries_due ON webhook_deliveries (next_at) WHERE next_at IS NOT NULL",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */
