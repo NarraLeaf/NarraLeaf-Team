@@ -259,13 +259,53 @@ button.big {
   object-fit: cover;
 }
 
-.team-mark-letter {
+.team-mark-leaf {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgb(var(--nl-primary));
+  background: linear-gradient(140deg, rgb(var(--nl-primary)), rgb(var(--nl-primary) / 0.72));
   color: rgb(var(--nl-on-primary));
-  font-weight: 700;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14);
+}
+
+.side-brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.side-brand-setup {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgb(var(--nl-primary-ink));
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.side-brand-setup:hover {
+  text-decoration: underline;
+}
+
+.gate-powered {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: rgb(var(--nl-fg-muted));
+  font-size: 12px;
+  text-decoration: none;
+  opacity: 0.8;
+}
+
+.gate-powered:hover {
+  color: rgb(var(--nl-primary-ink));
+  opacity: 1;
 }
 
 .side-group {
@@ -993,6 +1033,62 @@ button.big {
   color: rgb(var(--nl-fg));
 }
 
+.feed-main > span:first-child .project-tag {
+  margin-left: 8px;
+  vertical-align: 1px;
+}
+
+/* A restore, as "Restored" and the short hash rather than a sentence of hex. */
+.feed-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: rgb(var(--nl-fg-muted));
+}
+
+.feed-fold {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: rgb(var(--nl-primary-ink));
+}
+
+.feed-fold:hover {
+  text-decoration: underline;
+}
+
+/* Nothing waiting: one quiet line instead of three zeros. */
+.all-clear {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--nl-radius-lg);
+  border: 1px solid var(--nl-edge-subtle);
+  font-size: 13px;
+}
+
+.all-clear > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.all-clear-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: rgb(var(--nl-success) / 0.16);
+  color: rgb(var(--nl-success));
+}
+
 .feed-quote {
   padding: 6px 10px;
   border-radius: var(--nl-radius);
@@ -1091,6 +1187,12 @@ button.big {
 
 .project-card-name {
   font-weight: 600;
+}
+
+.project-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ========================================================== project */
@@ -1386,6 +1488,41 @@ button.big {
 
 .wb-activity-label {
   display: none;
+}
+
+/* The header's "Live chat" button is the way in on a wide screen; the bar gets it on a phone. */
+.wb-activity-chat {
+  display: none;
+}
+
+.outline-toggle {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 38px;
+  margin: 8px 10px 0;
+  padding: 0 12px;
+  border: 1px solid var(--nl-control-border);
+  border-radius: var(--nl-radius);
+  background: var(--nl-control-fill);
+  color: rgb(var(--nl-fg));
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.outline-toggle > svg:first-child {
+  color: rgb(var(--nl-fg-muted));
+}
+
+.outline-toggle-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wb-main {
@@ -2508,11 +2645,71 @@ fieldset.admin-field {
     flex-direction: column;
   }
 
+  /* The scene tree is a sheet from the bottom, behind a button naming the scene. */
+  .wb .outline-toggle {
+    display: flex;
+  }
+
   .wb .story-outline {
+    position: fixed;
+    z-index: 60;
+    left: 0;
+    right: 0;
+    bottom: 0;
     width: auto;
-    max-height: 34vh;
-    border-right: 0;
-    border-bottom: 1px solid var(--nl-edge-subtle);
+    max-height: 72vh;
+    padding: 18px 0 calc(12px + env(safe-area-inset-bottom));
+    border: 0;
+    border-radius: 16px 16px 0 0;
+    background: rgb(var(--nl-surface-overlay));
+    box-shadow: var(--nl-shadow-dialog);
+    transform: translateY(100%);
+    visibility: hidden;
+    transition:
+      transform var(--nl-duration) var(--nl-ease),
+      visibility 0s linear var(--nl-duration);
+  }
+
+  .wb .story-outline::before {
+    content: "";
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--nl-edge-strong);
+  }
+
+  .wb .story-outline.is-open {
+    transform: none;
+    visibility: visible;
+    transition: transform var(--nl-duration) var(--nl-ease);
+  }
+
+  .outline-scrim {
+    position: fixed;
+    z-index: 59;
+    inset: 0;
+    background: rgb(0 0 0 / 0.36);
+  }
+
+  .wb-activity-chat {
+    display: flex;
+  }
+
+  /* The button above already names the scene, and the scene card below does again. */
+  .wb .script-title {
+    display: none;
+  }
+
+  .wb .script-head {
+    justify-content: flex-end;
+  }
+
+  .wb-tool {
+    display: none;
   }
 
   .wb .script {
@@ -3283,26 +3480,8 @@ kbd {
     display: none;
   }
 
-  .waiting {
-    flex-direction: row;
-    overflow-x: auto;
-    margin: 0 -16px;
-    padding: 0 16px 4px;
-  }
-
   .waiting-row {
-    flex: none;
-    width: 140px;
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .waiting-count {
-    font-size: 18px;
-    min-width: 0;
-    height: auto;
-    padding: 0;
-    background: none;
+    padding: 10px 12px;
   }
 }
 
@@ -3403,4 +3582,163 @@ kbd {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: rgb(var(--nl-fg-muted));
+}
+
+/* ================================================================ server status */
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.status-card-wide {
+  grid-column: 1 / -1;
+}
+
+.status-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--nl-edge-subtle);
+  color: rgb(var(--nl-fg-muted));
+}
+
+.status-card-head strong {
+  color: rgb(var(--nl-fg));
+  font-size: 14px;
+}
+
+.status-card-head .health {
+  margin-left: auto;
+}
+
+.status-card dl {
+  margin: 0;
+}
+
+.status-line {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.status-line + .status-line {
+  border-top: 1px solid var(--nl-edge-subtle);
+}
+
+.status-line dt {
+  color: rgb(var(--nl-fg-muted));
+}
+
+.status-line dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--nl-radius-pill);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.health-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.health.is-ok {
+  color: rgb(var(--nl-success));
+  background: rgb(var(--nl-success) / 0.12);
+}
+
+.health.is-ok .health-dot {
+  box-shadow: 0 0 0 3px rgb(var(--nl-success) / 0.2);
+}
+
+.health.is-down {
+  color: rgb(var(--nl-danger));
+  background: rgb(var(--nl-danger) / 0.12);
+}
+
+.status-ports {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.status-port {
+  padding: 1px 8px;
+  border-radius: var(--nl-radius-pill);
+  background: var(--nl-fill-subtle);
+  font-size: 12px;
+  color: rgb(var(--nl-fg-muted));
+}
+
+.status-port .mono {
+  color: rgb(var(--nl-fg));
+}
+
+.status-raw {
+  margin-top: 16px;
+  font-size: 13px;
+}
+
+.status-raw summary {
+  color: rgb(var(--nl-fg-muted));
+  cursor: pointer;
+}
+
+.status-raw .status-dump {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  border-radius: var(--nl-radius);
+  border: 1px solid var(--nl-edge);
+  background: rgb(var(--nl-surface-sunken));
+  max-height: 360px;
+}
+
+.not-found .blankslate {
+  overflow-wrap: anywhere;
+}
+
+/* ================================================================ personal settings */
+
+/* Each block its own card with air between them, as GitHub's settings pages do. */
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 760px;
+}
+
+.settings > h1 {
+  margin: 0 0 4px;
+}
+
+.settings-block > h2 {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--nl-edge-subtle);
+  font-size: 15px;
+}
+
+.avatar-row {
+  gap: 12px;
+}
+
+.avatar-row > :first-child {
+  margin-right: 6px;
 }

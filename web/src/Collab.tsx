@@ -830,11 +830,11 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
         <h2>{t("profile")}</h2>
         <div className="avatar-row">
           <Face name={profile?.displayName || profile?.username || "?"} url={profile?.avatarUrl} size={64} />
-          <button className="ghost" onClick={() => picker.current?.click()}>
+          <button className="btn btn-sm" onClick={() => picker.current?.click()}>
             {t("changeAvatar")}
           </button>
           {profile?.avatarUrl !== undefined ? (
-            <button className="ghost" onClick={() => void removeAvatar()}>
+            <button className="btn btn-invisible btn-sm" onClick={() => void removeAvatar()}>
               {t("removeAvatar")}
             </button>
           ) : null}

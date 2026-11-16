@@ -918,6 +918,7 @@
 }
 
 .copy-text {
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 4px;

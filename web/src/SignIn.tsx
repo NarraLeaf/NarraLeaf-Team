@@ -11,16 +11,17 @@ import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { setUp, signIn, SignInError, type ConsoleAccount } from "./api";
 import { LanguagePicker } from "./Collab";
 import { t } from "./i18n";
-import { fetchLook, type SigninLayout, type TeamLook } from "./look";
+import { Icon } from "./Icon";
+import { fetchLook, teamName, type SigninLayout, type TeamLook } from "./look";
 
 export function TeamMark({ look, size = 28 }: { look: TeamLook | undefined; size?: number }) {
   if (look?.logoUrl !== undefined) {
     return <img className="team-mark" src={look.logoUrl} alt="" style={{ width: size, height: size }} />;
   }
-  const letter = Array.from(look?.name ?? "N")[0]?.toUpperCase() ?? "N";
+  // No logo of its own: NarraLeaf's leaf, not the first letter of a name that may be an address.
   return (
-    <span className="team-mark team-mark-letter" aria-hidden="true" style={{ width: size, height: size, fontSize: Math.round(size * 0.5) }}>
-      {letter}
+    <span className="team-mark team-mark-leaf" aria-hidden="true" style={{ width: size, height: size }}>
+      <Icon name="leaf" size={Math.round(size * 0.62)} />
     </span>
   );
 }
@@ -40,7 +41,7 @@ function Frame({ look, children }: { look: TeamLook; children: ReactNode }) {
           <img src={picture} alt="" />
           <div className="gate-picture-brand">
             <TeamMark look={look} size={30} />
-            <span>{look.name}</span>
+            <span>{teamName(look.name)}</span>
           </div>
         </section>
       ) : null}
@@ -49,12 +50,15 @@ function Frame({ look, children }: { look: TeamLook; children: ReactNode }) {
           {layout === "left" || layout === "right" ? null : (
             <div className="gate-brand">
               <TeamMark look={look} />
-              <span>{look.name}</span>
+              <span>{teamName(look.name)}</span>
             </div>
           )}
           {children}
         </div>
       </div>
+      <a className="gate-powered" href="https://narraleaf.com" target="_blank" rel="noreferrer">
+        <Icon name="leaf" size={13} /> Powered by NarraLeaf
+      </a>
     </main>
   );
 }

@@ -18,7 +18,7 @@ import { Admin, ADMIN_PHRASE, ADMIN_SECTIONS, type AdminSection } from "./Admin"
 import { PROJECT_SETTINGS_SECTIONS, type ProjectSettingsSection } from "./Versions";
 import { JoinProjects } from "./Access";
 import { Icon } from "./Icon";
-import { useLook, type TeamLook } from "./look";
+import { teamName, teamNameUnset, useLook, type TeamLook } from "./look";
 import { Setup, SignIn, TeamMark } from "./SignIn";
 import { projectHue, TeamHome } from "./TeamHome";
 import { Palette, type PaletteItem } from "./Palette";
@@ -256,7 +256,9 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
     window.scrollTo(0, 0);
   }, []);
 
-  const serverName = state.kind === "open" ? state.hello.server.name : look.name;
+  const rawName = state.kind === "open" ? state.hello.server.name : look.name;
+  const serverName = teamName(rawName);
+  const nameUnset = teamNameUnset(rawName) && teamNameUnset(look.name);
   const openProject = (id: string, tab?: string) =>
     go({ screen: "project", id, tab: PROJECT_TABS.find((key) => key === tab) ?? "overview", revision: "head" });
   const followNotification = (target: NotificationTarget) => {
@@ -367,7 +369,14 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
       <nav className="side" aria-label={t("mainNav")}>
         <div className="side-brand">
           <TeamMark look={look} size={24} />
-          <span className="side-brand-name">{serverName}</span>
+          <span className="side-brand-text">
+            <span className="side-brand-name">{serverName}</span>
+            {nameUnset && account.operator ? (
+              <button className="side-brand-setup" onClick={() => go({ screen: "admin", section: "brand" })}>
+                {t("setTeamName")}
+              </button>
+            ) : null}
+          </span>
         </div>
         <button className="side-search" onClick={() => setPalette(true)}>
           <Icon name="search" />
@@ -525,7 +534,8 @@ function ConnectionBadge({ state, connection }: { state: ConnectionState; connec
     >
       <span className="dot" aria-hidden="true" />
       {t(phrase)}
-      {state.kind === "open" && latency !== undefined ? <span className="latency">{t("latency", { ms: String(latency.median) })}</span> : null}
+      {/* A good connection is just a green dot; the round trip is named only once it is slow enough to notice. */}
+      {state.kind === "open" && latency !== undefined && tone !== "ok" ? <span className="latency">{t("latency", { ms: String(latency.median) })}</span> : null}
     </span>
   );
 }

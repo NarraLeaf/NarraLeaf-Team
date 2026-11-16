@@ -6,7 +6,7 @@
  * with @narraleaf/project-view. Nothing on this page edits the project; that
  * is Studio's (docs/architecture.md, D1).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   assetRegisterType,
@@ -407,6 +407,7 @@ function Workbench(props: {
         <nav className="wb-activity" aria-label={t("workbench")}>
           <button className="wb-activity-item" onClick={() => go("overview", "head")} aria-label={t("tabOverview")} title={t("tabOverview")}>
             <Icon name="grid" size={18} />
+            <span className="wb-activity-label">{t("tabOverview")}</span>
           </button>
           {WORKBENCH_TABS.map((key) => (
             <button
@@ -422,8 +423,14 @@ function Workbench(props: {
             </button>
           ))}
           <span className="wb-spacer" />
-          <button className={chat ? "wb-activity-item active" : "wb-activity-item"} onClick={toggleChat} aria-label={t("chatTitle")} title={t("chatTitle")}>
+          <button
+            className={chat ? "wb-activity-item wb-activity-chat active" : "wb-activity-item wb-activity-chat"}
+            onClick={toggleChat}
+            aria-label={t("chatTitle")}
+            title={t("chatTitle")}
+          >
             <Icon name="chat" size={18} />
+            <span className="wb-activity-label">{t("chatShort")}</span>
           </button>
         </nav>
         <div className="wb-main">{children}</div>
@@ -747,7 +754,7 @@ function StoryBody(props: {
   const threadsOn = (blockId: string) => (sceneId === undefined ? [] : (threads.get(storyLineAnchor(sceneId, blockId)) ?? []));
   return (
     <div className="story">
-      <aside className="story-outline">
+      <Outline current={scene?.name}>
         <div className="panel-head">
           <Icon name="book" />
           <span>{t("tabStory")}</span>
@@ -784,7 +791,7 @@ function StoryBody(props: {
             ) : null}
           </>
         )}
-      </aside>
+      </Outline>
       <div className="script">
         {scene === undefined ? null : (
           <>
@@ -861,6 +868,41 @@ function StoryBody(props: {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The scene tree. Beside the script on a wide screen; on a phone it would take a
+ * third of the screen, so there it waits behind a button naming the scene you are
+ * on and rises as a sheet from the bottom, going away once you pick one.
+ */
+function Outline({ current, children }: { current: string | undefined; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+  return (
+    <>
+      <button className="outline-toggle" aria-expanded={open} onClick={() => setOpen(true)}>
+        <Icon name="menu" size={16} />
+        <span className="outline-toggle-name">{current ?? t("pickScene")}</span>
+        <Icon name="caret" size={14} />
+      </button>
+      {open ? <div className="outline-scrim" onClick={() => setOpen(false)} /> : null}
+      <aside
+        className={open ? "story-outline is-open" : "story-outline"}
+        onClick={(event) => {
+          if (event.target instanceof Element && event.target.closest(".outline-link") !== null) setOpen(false);
+        }}
+      >
+        {children}
+      </aside>
+    </>
   );
 }
 
@@ -1086,7 +1128,7 @@ function Blueprints({ projectId, tree }: { projectId: string; tree: Tree }) {
   const graph = view.blueprints.find((bp) => bp.id === picked?.blueprint)?.graphs.find((g) => g.id === picked?.graph);
   return (
     <div className="story">
-      <aside className="story-outline">
+      <Outline current={graph?.name}>
         <div className="panel-head">
           <Icon name="graph" />
           <span>{t("tabBlueprints")}</span>
@@ -1109,7 +1151,7 @@ function Blueprints({ projectId, tree }: { projectId: string; tree: Tree }) {
             ))}
           </div>
         ))}
-      </aside>
+      </Outline>
       <div className="script graph-host">{graph === undefined ? null : <GraphCanvas key={graph.id} graph={graph} />}</div>
     </div>
   );

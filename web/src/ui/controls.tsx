@@ -156,7 +156,7 @@ export function Hash({ value, length = 7 }: { value: string; length?: number }) 
 export function CopyText({ value, mono = true }: { value: string; mono?: boolean }) {
   return (
     <span className="copy-text">
-      <span className={mono ? "mono" : undefined}>{value}</span>
+      <span className={mono ? "mono" : undefined} title={value}>{value}</span>
       <button
         type="button"
         className="btn btn-invisible btn-icon btn-sm"

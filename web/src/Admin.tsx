@@ -7,7 +7,7 @@
  * view onto rules it does not itself enforce.
  */
 import { DocumentsPanel } from "./Versions";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import type {
   TeamAdminDecision,
@@ -18,8 +18,8 @@ import type {
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
-import { ActionMenu, Checkbox, confirmAction, Flash, SettingsLayout, Skeleton, Subhead, toast, type MenuAction } from "./ui";
-import type { IconName } from "./Icon";
+import { ActionMenu, Checkbox, confirmAction, CopyText, Flash, RelativeTime, SettingsLayout, Skeleton, Subhead, toast, type MenuAction } from "./ui";
+import { Icon, type IconName } from "./Icon";
 import { Face } from "./Collab";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
@@ -122,7 +122,7 @@ export function Admin({
           {open && section === "security" ? <Security connection={connection} /> : null}
           {open && section === "webhooks" ? <Webhooks connection={connection} /> : null}
           {open && section === "documents" ? <DocumentsPanel connection={connection} /> : null}
-          {open && section === "server" ? <Server connection={connection} /> : null}
+          {open && section === "server" ? <Server connection={connection} live={open} /> : null}
         </div>
       </SettingsLayout>
     </section>
@@ -595,12 +595,43 @@ function Security({ connection }: { connection: TeamConnection }) {
 
 /* --------------------------------------------------------------- server */
 
-function Server({ connection }: { connection: TeamConnection }) {
+/** A byte count as people read it: 1.4 GB, not 1503238553. */
+function formatBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${unit === 0 ? value : value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
+function StatusLine({ label, children }: { label: Phrase; children: ReactNode }) {
+  return (
+    <div className="status-line">
+      <dt>{t(label)}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
+function Health({ ok, label }: { ok: boolean; label: Phrase }) {
+  return (
+    <span className={ok ? "health is-ok" : "health is-down"}>
+      <span className="health-dot" aria-hidden="true" />
+      {t(label)}
+    </span>
+  );
+}
+
+function Server({ connection, live }: { connection: TeamConnection; live: boolean }) {
   const [status, setStatus] = useState<TeamAdminStatus | undefined>(undefined);
   useEffect(() => {
     void connection.call<TeamAdminStatus>("admin.server.status").then(setStatus);
   }, [connection]);
-  if (status === undefined) return <p className="muted">{t("loading")}</p>;
+  if (status === undefined) return <Skeleton rows={4} />;
+  const lore = status.loreserver;
   return (
     <div className="admin-section">
       <div className="stat-row">
@@ -621,7 +652,74 @@ function Server({ connection }: { connection: TeamConnection }) {
           <span className="muted">{t("auditLog")}</span>
         </div>
       </div>
-      <pre className="card status-dump">{JSON.stringify({ version: status.version, root: status.root, loreserver: status.loreserver, reach: status.reach }, null, 2)}</pre>
+      <div className="status-grid">
+        <section className="card status-card">
+          <header className="status-card-head">
+            <Icon name="server" size={16} />
+            <strong>{t("statusTeam")}</strong>
+            <Health ok={live} label={live ? "statusRunning" : "statusOffline"} />
+          </header>
+          <dl>
+            <StatusLine label="statusVersion">
+              <span className="mono">{status.version}</span>
+            </StatusLine>
+            <StatusLine label="statusRoot">
+              <CopyText value={status.root} />
+            </StatusLine>
+            <StatusLine label="statusGathered">
+              <RelativeTime at={status.gatheredAt} />
+            </StatusLine>
+          </dl>
+        </section>
+        <section className="card status-card">
+          <header className="status-card-head">
+            <Icon name="book" size={16} />
+            <strong>{t("statusLoreserver")}</strong>
+            <Health ok={lore.healthy} label={lore.healthy ? "statusHealthy" : "statusUnhealthy"} />
+          </header>
+          <dl>
+            <StatusLine label="statusVersion">
+              <span className="mono">{lore.version}</span>
+            </StatusLine>
+            <StatusLine label="statusStorage">{lore.storageBytes === undefined ? t("statusUnknownSize") : formatBytes(lore.storageBytes)}</StatusLine>
+            <StatusLine label="statusRoot">
+              <CopyText value={lore.storageRoot} />
+            </StatusLine>
+          </dl>
+        </section>
+        <section className="card status-card status-card-wide">
+          <header className="status-card-head">
+            <Icon name="link" size={16} />
+            <strong>{t("statusReach")}</strong>
+          </header>
+          <dl>
+            <StatusLine label="statusSignIn">
+              <CopyText value={status.reach.signIn} />
+            </StatusLine>
+            <StatusLine label="statusData">
+              <CopyText value={status.reach.data} />
+            </StatusLine>
+            <StatusLine label="statusFingerprint">
+              <CopyText value={status.reach.fingerprint} />
+            </StatusLine>
+            {status.reach.loopback.length === 0 ? null : (
+              <StatusLine label="statusLoopback">
+                <span className="status-ports">
+                  {status.reach.loopback.map((one) => (
+                    <span key={one.port} className="status-port" title={one.what}>
+                      <span className="mono">{one.port}</span> {one.what}
+                    </span>
+                  ))}
+                </span>
+              </StatusLine>
+            )}
+          </dl>
+        </section>
+      </div>
+      <details className="status-raw">
+        <summary>{t("statusRaw")}</summary>
+        <pre className="status-dump">{JSON.stringify(status, null, 2)}</pre>
+      </details>
     </div>
   );
 }
