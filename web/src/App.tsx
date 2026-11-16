@@ -13,48 +13,70 @@ import { t, type Phrase } from "./i18n";
 import { TeamConnection, type ConnectionState } from "./socket";
 import { Authorize, Device } from "./OAuth";
 import { ProjectPage, WORKBENCH_TABS, type ProjectTab } from "./Project";
-import { Bell, Face, Notifications, Profile, Settings, setFaceSource, useNotifications, type NotificationTarget } from "./Collab";
-import { Admin } from "./Admin";
+import { Face, MyTodos, Notifications, Profile, Settings, setFaceSource, useNotifications, type NotificationTarget } from "./Collab";
+import { Admin, ADMIN_PHRASE, ADMIN_SECTIONS, type AdminSection } from "./Admin";
+import { PROJECT_SETTINGS_SECTIONS, type ProjectSettingsSection } from "./Versions";
 import { JoinProjects } from "./Access";
 import { Icon } from "./Icon";
 import { useLook, type TeamLook } from "./look";
 import { Setup, SignIn, TeamMark } from "./SignIn";
 import { projectHue, TeamHome } from "./TeamHome";
 import { Palette, type PaletteItem } from "./Palette";
-import { UiHost } from "./ui";
+import { Blankslate, UiHost } from "./ui";
 
 type Route =
   | { readonly screen: "home" }
   | { readonly screen: "projects" }
   | { readonly screen: "me" }
+  | { readonly screen: "todos" }
   | { readonly screen: "notifications" }
-  | { readonly screen: "admin" }
+  | { readonly screen: "admin"; readonly section: AdminSection }
   | { readonly screen: "settings" }
-  | { readonly screen: "project"; readonly id: string; readonly tab: ProjectTab; readonly revision: string };
+  | { readonly screen: "notFound" }
+  | {
+      readonly screen: "project";
+      readonly id: string;
+      readonly tab: ProjectTab;
+      readonly revision: string;
+      readonly section?: ProjectSettingsSection;
+    };
 
 const PROJECT_TABS: readonly ProjectTab[] = ["overview", "story", "blueprints", "assets", "todos", "reviews", "history", "settings"];
+const PLAIN_SCREENS = ["projects", "me", "todos", "notifications", "settings"] as const;
 
+/** The screen an address names; one that names nothing is "not found", never quietly the home page. */
 function routeOf(location: Location): Route {
-  const rest = location.pathname.replace(/^\/console\/?/, "");
-  const project = /^p\/([^/]+)(?:\/([a-z]+))?/.exec(rest);
-  if (project !== null) {
-    const tab = PROJECT_TABS.find((key) => key === project[2]) ?? "overview";
+  const rest = location.pathname.replace(/^\/console\/?/, "").replace(/\/+$/, "");
+  const parts = rest === "" ? [] : rest.split("/");
+  const [first, second, third, ...more] = parts;
+  if (first === undefined) return { screen: "home" };
+  if (first === "p" && second !== undefined) {
+    const tab = third === undefined ? "overview" : PROJECT_TABS.find((key) => key === third);
+    const section = more[0];
+    if (tab === undefined) return { screen: "notFound" };
     const revision = new URLSearchParams(location.search).get("rev") ?? "head";
-    return { screen: "project", id: decodeURIComponent(project[1] ?? ""), tab, revision };
+    const base = { screen: "project", id: decodeURIComponent(second), tab, revision } as const;
+    if (section === undefined) return more.length === 0 ? base : { screen: "notFound" };
+    const known = tab === "settings" ? PROJECT_SETTINGS_SECTIONS.find((key) => key === section) : undefined;
+    return known === undefined || more.length > 1 ? { screen: "notFound" } : { ...base, section: known };
   }
-  if (rest.startsWith("projects")) return { screen: "projects" };
-  if (rest.startsWith("admin")) return { screen: "admin" };
-  if (rest.startsWith("settings")) return { screen: "settings" };
-  if (rest.startsWith("me")) return { screen: "me" };
-  if (rest.startsWith("notifications")) return { screen: "notifications" };
-  return { screen: "home" };
+  if (first === "admin" && third === undefined) {
+    const section = second === undefined ? "accounts" : ADMIN_SECTIONS.find((key) => key === second);
+    return section === undefined ? { screen: "notFound" } : { screen: "admin", section };
+  }
+  const plain = PLAIN_SCREENS.find((key) => key === first);
+  if (plain !== undefined && second === undefined) return { screen: plain };
+  return { screen: "notFound" };
 }
 
 function pathOf(route: Route): string {
   if (route.screen === "project") {
     const query = route.revision === "head" ? "" : `?rev=${encodeURIComponent(route.revision)}`;
-    return `/console/p/${encodeURIComponent(route.id)}/${route.tab}${query}`;
+    const section = route.tab === "settings" && route.section !== undefined && route.section !== "general" ? `/${route.section}` : "";
+    return `/console/p/${encodeURIComponent(route.id)}/${route.tab}${section}${query}`;
   }
+  if (route.screen === "admin") return route.section === "accounts" ? "/console/admin" : `/console/admin/${route.section}`;
+  if (route.screen === "notFound") return window.location.pathname;
   return route.screen === "home" ? "/console/" : `/console/${route.screen}`;
 }
 
@@ -247,9 +269,10 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
       }
     }
     if (target.project !== undefined) openProject(target.project, target.tab);
-    else if (target.tab === "admin" && account.operator) go({ screen: "admin" });
-    else go({ screen: target.tab === "me" ? "me" : target.tab === "projects" ? "projects" : "home" });
+    else if (target.tab === "admin" && account.operator) go({ screen: "admin", section: "requests" });
+    else go({ screen: target.tab === "me" ? "todos" : target.tab === "projects" ? "projects" : "home" });
   };
+  const { unread } = useNotifications(connection, state);
   const name = account.displayName || account.username;
   const workbench = route.screen === "project" && WORKBENCH_TABS.includes(route.tab);
   const signOutNow = () => {
@@ -261,9 +284,17 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
   const paletteItems: PaletteItem[] = [
     { id: "home", icon: "home", label: t("home"), run: () => go({ screen: "home" }) },
     { id: "notifications", icon: "bell", label: t("notifications"), run: () => go({ screen: "notifications" }) },
-    { id: "me", icon: "check", label: t("myTodos"), run: () => go({ screen: "me" }) },
+    { id: "todos", icon: "check", label: t("myTodos"), run: () => go({ screen: "todos" }) },
+    { id: "me", icon: "people", label: t("myProfile"), run: () => go({ screen: "me" }) },
     { id: "settings", icon: "gear", label: t("settings"), run: () => go({ screen: "settings" }) },
-    ...(account.operator ? [{ id: "admin", icon: "shield" as const, label: t("admin"), run: () => go({ screen: "admin" }) }] : []),
+    ...(account.operator
+      ? ADMIN_SECTIONS.map((section) => ({
+          id: `admin:${section}`,
+          icon: "shield" as const,
+          label: `${t("admin")} · ${t(ADMIN_PHRASE[section])}`,
+          run: () => go({ screen: "admin", section }),
+        }))
+      : []),
     ...projects.flatMap((project) => [
       { id: `p:${project.id}`, icon: "folder" as const, label: project.name, hint: t("projects"), run: () => openProject(project.id) },
       { id: `w:${project.id}`, icon: "workbench" as const, label: `${project.name} · ${t("enterWorkbench")}`, run: () => openProject(project.id, "story") },
@@ -277,6 +308,7 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
   const paletteView = palette ? (
     <Palette
       items={paletteItems}
+      projects={projects}
       project={currentProject === undefined ? undefined : { id: currentProject.id, name: currentProject.name }}
       openLine={openLine}
       close={() => setPalette(false)}
@@ -296,6 +328,8 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
         />
       ) : null}
       {route.screen === "me" ? <Profile connection={connection} state={state} account={account} /> : null}
+      {route.screen === "todos" ? <MyTodos connection={connection} state={state} account={account} /> : null}
+      {route.screen === "notFound" ? <NotFound home={() => go({ screen: "home" })} /> : null}
       {route.screen === "notifications" ? <Notifications connection={connection} state={state} open={followNotification} /> : null}
       {route.screen === "settings" ? <Settings connection={connection} state={state} /> : null}
       {route.screen === "projects" ? <Projects connection={connection} state={state} operator={account.operator} open={(id) => openProject(id)} /> : null}
@@ -307,11 +341,15 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
           projectId={route.id}
           tab={route.tab}
           revision={route.revision}
-          go={(tab, revision) => go({ screen: "project", id: route.id, tab, revision })}
+          section={route.section ?? "general"}
+          isOperator={account.operator}
+          go={(tab, revision, section) => go({ screen: "project", id: route.id, tab, revision, ...(section === undefined ? {} : { section }) })}
           back={() => go({ screen: "home" })}
         />
       ) : null}
-      {route.screen === "admin" ? <Admin connection={connection} state={state} me={account.username} /> : null}
+      {route.screen === "admin" ? (
+        <Admin connection={connection} state={state} me={account.username} section={route.section} go={(section) => go({ screen: "admin", section })} />
+      ) : null}
     </>
   );
 
@@ -338,8 +376,8 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
         </button>
         <div className="side-group">
           <SideLink icon="home" label="home" active={route.screen === "home"} onClick={() => go({ screen: "home" })} />
-          <Bell connection={connection} state={state} label open={followNotification} />
-          <SideLink icon="check" label="myTodos" active={route.screen === "me"} onClick={() => go({ screen: "me" })} />
+          <SideLink icon="bell" label="notifications" count={unread} active={route.screen === "notifications"} onClick={() => go({ screen: "notifications" })} />
+          <SideLink icon="check" label="myTodos" active={route.screen === "todos"} onClick={() => go({ screen: "todos" })} />
         </div>
         <div className="side-group">
           <button className="side-heading" onClick={() => go({ screen: "projects" })}>
@@ -358,11 +396,11 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
           ))}
         </div>
         <div className="side-foot">
-          {account.operator ? <SideLink icon="shield" label="admin" active={route.screen === "admin"} onClick={() => go({ screen: "admin" })} /> : null}
+          {account.operator ? <SideLink icon="shield" label="admin" active={route.screen === "admin"} onClick={() => go({ screen: "admin", section: "accounts" })} /> : null}
           <SideLink icon="gear" label="settings" active={route.screen === "settings"} onClick={() => go({ screen: "settings" })} />
           <ConnectionBadge state={state} connection={connection} />
           <div className="side-user">
-            <button className="side-user-main" onClick={() => go({ screen: "me" })}>
+            <button className={route.screen === "me" ? "side-user-main active" : "side-user-main"} title={t("myProfile")} onClick={() => go({ screen: "me" })}>
               <Face name={name} user={account.username} size={28} />
               <span className="side-link-text">{name}</span>
             </button>
@@ -374,23 +412,35 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
       </nav>
       <main className="main">{content}</main>
       {paletteView}
-      <TabBar route={route} go={go} connection={connection} state={state} name={name} user={account.username} />
+      <TabBar route={route} go={go} unread={unread} name={name} user={account.username} />
     </div>
   );
 }
 
-function SideLink({ icon, label, active, onClick }: { icon: Parameters<typeof Icon>[0]["name"]; label: Phrase; active: boolean; onClick: () => void }) {
+function SideLink({
+  icon,
+  label,
+  active,
+  onClick,
+  count,
+}: {
+  icon: Parameters<typeof Icon>[0]["name"];
+  label: Phrase;
+  active: boolean;
+  onClick: () => void;
+  count?: number;
+}) {
   return (
     <button className={active ? "side-link active" : "side-link"} aria-current={active ? "page" : undefined} onClick={onClick}>
       <Icon name={icon} />
       <span className="side-link-text">{t(label)}</span>
+      {count === undefined || count === 0 ? null : <span className="counter side-count">{count > 99 ? "99+" : count}</span>}
     </button>
   );
 }
 
 /** The phone's navigation: four places at the bottom, where a thumb is. */
-function TabBar({ route, go, connection, state, name, user }: { route: Route; go: (route: Route) => void; connection: TeamConnection; state: ConnectionState; name: string; user: string }) {
-  const { unread } = useNotifications(connection, state);
+function TabBar({ route, go, unread, name, user }: { route: Route; go: (route: Route) => void; unread: number; name: string; user: string }) {
   const tab = (screen: "home" | "projects" | "notifications" | "me", icon: Parameters<typeof Icon>[0]["name"] | undefined, label: Phrase) => {
     const active = route.screen === screen || (screen === "projects" && route.screen === "project");
     return (
@@ -480,6 +530,24 @@ function ConnectionBadge({ state, connection }: { state: ConnectionState; connec
   );
 }
 
+/** An address that names nothing: say so, and offer the way home. */
+function NotFound({ home }: { home: () => void }) {
+  return (
+    <section className="page-narrow not-found">
+      <Blankslate
+        icon="search"
+        title={t("notFoundTitle")}
+        action={
+          <button className="btn btn-primary" onClick={home}>
+            {t("backHome")}
+          </button>
+        }
+      >
+        {t("notFoundLead", { path: window.location.pathname })}
+      </Blankslate>
+    </section>
+  );
+}
 
 interface ProjectRow {
   readonly id: string;

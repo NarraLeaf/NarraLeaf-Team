@@ -11,8 +11,9 @@ import { readStoryDocument, readStoryLibrary, STORY_INDEX_PATH, type StoryRow } 
 import { projectClientsTopic, type TeamClientInstance, type TeamProjectRole, type TeamVersionRole } from "@narraleaf/team-protocol";
 
 import { fetchJson, fetchTree, type Tree } from "./files";
-import { t } from "./i18n";
-import { confirmAction, SelectPanel, toast } from "./ui";
+import { t, type Phrase } from "./i18n";
+import type { IconName } from "./Icon";
+import { confirmAction, Flash, SelectPanel, SettingsLayout, Subhead, toast } from "./ui";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
 import { AccessRequestsToDecide } from "./Access";
@@ -181,20 +182,82 @@ interface ProjectSettingsView {
 }
 
 /** A project's settings, for its owners: description, who may save and restore versions, webhooks. */
+export type ProjectSettingsSection = "general" | "members" | "requests" | "webhooks";
+export const PROJECT_SETTINGS_SECTIONS: readonly ProjectSettingsSection[] = ["general", "members", "requests", "webhooks"];
+const SETTINGS_PHRASE: Record<ProjectSettingsSection, Phrase> = {
+  general: "settingsGeneral",
+  members: "membersTitle",
+  requests: "reqTitle",
+  webhooks: "projectWebhooks",
+};
+const SETTINGS_ICON: Record<ProjectSettingsSection, IconName> = { general: "gear", members: "people", requests: "key", webhooks: "link" };
+
+/** A project's settings, each part on a page of its own, the way a repository's are. */
 export function ProjectSettings(props: {
+  connection: TeamConnection;
+  project: ProjectSettingsView;
+  section: ProjectSettingsSection;
+  go: (section: ProjectSettingsSection) => void;
+  changed: (project: ProjectSettingsView) => void;
+  removed: () => void;
+}) {
+  const { connection, project, section, go, changed, removed } = props;
+  const item = (key: ProjectSettingsSection) => ({ key, label: t(SETTINGS_PHRASE[key]), icon: SETTINGS_ICON[key] });
+  return (
+    <SettingsLayout
+      label={t("tabSettings")}
+      active={section}
+      onSelect={go}
+      groups={[
+        (["general", "members"] as const).map(item),
+        (["requests", "webhooks"] as const).map(item),
+      ]}
+    >
+      {section === "general" ? <GeneralSettings connection={connection} project={project} changed={changed} removed={removed} /> : null}
+      {section === "members" ? (
+        <div>
+          <Subhead title={t("membersTitle")}>{t("membersLead")}</Subhead>
+          <ProjectMembers connection={connection} projectId={project.id} />
+        </div>
+      ) : null}
+      {section === "requests" ? (
+        <div>
+          <Subhead title={t("reqTitle")}>{t("projectRequestsLead")}</Subhead>
+          <AccessRequestsToDecide connection={connection} project={project.id} />
+        </div>
+      ) : null}
+      {section === "webhooks" ? (
+        <div>
+          <Subhead title={t("projectWebhooks")} />
+          <Webhooks connection={connection} projectId={project.id} />
+        </div>
+      ) : null}
+    </SettingsLayout>
+  );
+}
+
+function GeneralSettings({
+  connection,
+  project,
+  changed,
+  removed,
+}: {
   connection: TeamConnection;
   project: ProjectSettingsView;
   changed: (project: ProjectSettingsView) => void;
   removed: () => void;
 }) {
-  const { connection, project, changed, removed } = props;
   const [description, setDescription] = useState(project.description);
   const [saveRole, setSaveRole] = useState<TeamVersionRole>(project.saveRole ?? "editor");
   const [restoreRole, setRestoreRole] = useState<TeamVersionRole>(project.restoreRole ?? "editor");
-  const [error, setError] = useState<string | undefined>(undefined);
+  const [failure, setFailure] = useState<unknown>(undefined);
+  const [saving, setSaving] = useState(false);
+  const dirty =
+    description.trim() !== project.description.trim() || saveRole !== (project.saveRole ?? "editor") || restoreRole !== (project.restoreRole ?? "editor");
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    setError(undefined);
+    setFailure(undefined);
+    setSaving(true);
     try {
       const answer = await connection.call<{ project: ProjectSettingsView }>("projects.update", {
         project: project.id,
@@ -205,12 +268,15 @@ export function ProjectSettings(props: {
       changed(answer.project);
       toast(t("saved"));
     } catch (caught) {
-      setError(errorText(caught));
+      setFailure(caught);
+    } finally {
+      setSaving(false);
     }
   };
-  const roleSelect = (value: TeamVersionRole, set: (role: TeamVersionRole) => void) => (
+  const roleSelect = (label: string, value: TeamVersionRole, set: (role: TeamVersionRole) => void) => (
     <SelectPanel<TeamVersionRole>
-      label={t("versionRolesTitle")}
+      label={label}
+      align="end"
       value={value}
       onChange={set}
       options={[
@@ -219,67 +285,76 @@ export function ProjectSettings(props: {
       ]}
     />
   );
+  const remove = () =>
+    void confirmAction({
+      title: t("removeProjectTitle"),
+      body: t("removeProjectConfirm", { name: project.name }),
+      confirmLabel: t("removeProject"),
+      danger: true,
+      typeToConfirm: project.name,
+    }).then((yes) => {
+      if (!yes) return;
+      void connection
+        .call("projects.forget", { project: project.id })
+        .then(() => {
+          toast(t("removedProject", { name: project.name }));
+          removed();
+        })
+        .catch((caught: unknown) => setFailure(caught));
+    });
   return (
-    <div className="project-settings">
-      <form className="card" onSubmit={(event) => void save(event)}>
-        <label>
-          {t("settingsDescription")}
+    <>
+      <form onSubmit={(event) => void save(event)}>
+        <Subhead title={t("settingsGeneral")} />
+        <div className="form-field">
+          <span className="form-label">{t("projectName")}</span>
+          <input value={project.name} readOnly disabled />
+          <span className="form-hint">{t("settingsNameFixed")}</span>
+        </div>
+        <label className="form-field">
+          <span className="form-label">{t("settingsDescription")}</span>
           <textarea value={description} rows={3} maxLength={4096} onChange={(event) => setDescription(event.target.value)} />
         </label>
-        <p className="muted small">{t("settingsNameFixed")}</p>
-        <h3>{t("versionRolesTitle")}</h3>
-        <div className="review-fields">
-          <div className="form-field">
-            <span className="form-label">{t("saveRoleLabel")}</span>
-            {roleSelect(saveRole, setSaveRole)}
+        <h3 className="form-section-title">{t("versionRolesTitle")}</h3>
+        <div className="box">
+          <div className="box-row">
+            <div className="box-row-text">
+              <strong>{t("saveRoleLabel")}</strong>
+            </div>
+            {roleSelect(t("saveRoleLabel"), saveRole, setSaveRole)}
           </div>
-          <div className="form-field">
-            <span className="form-label">{t("restoreRoleLabel")}</span>
-            {roleSelect(restoreRole, setRestoreRole)}
+          <div className="box-row">
+            <div className="box-row-text">
+              <strong>{t("restoreRoleLabel")}</strong>
+              <span>{t("restoreInStudio")}</span>
+            </div>
+            {roleSelect(t("restoreRoleLabel"), restoreRole, setRestoreRole)}
           </div>
         </div>
-        <p className="muted small">{t("restoreInStudio")}</p>
-        {error !== undefined ? <p className="error">{error}</p> : null}
-        <button className="primary" type="submit">
-          {t("save")}
-        </button>
-      </form>
-      <h2>{t("reqTitle")}</h2>
-      <AccessRequestsToDecide connection={connection} project={project.id} />
-      <h2>{t("membersTitle")}</h2>
-      <ProjectMembers connection={connection} projectId={project.id} />
-      <h2>{t("projectWebhooks")}</h2>
-      <Webhooks connection={connection} projectId={project.id} />
-      {project.mayRemove === true ? (
-        <div className="card danger-zone">
-          <h3>{t("removeProjectTitle")}</h3>
-          <p className="muted small">{t("removeProjectLead")}</p>
-          <button
-            className="btn btn-danger"
-            onClick={() =>
-              void confirmAction({
-                title: t("removeProjectTitle"),
-                body: t("removeProjectConfirm", { name: project.name }),
-                confirmLabel: t("removeProject"),
-                danger: true,
-                typeToConfirm: project.name,
-              }).then((yes) => {
-                if (!yes) return;
-                void connection
-                  .call("projects.forget", { project: project.id })
-                  .then(() => {
-                    toast(t("removedProject", { name: project.name }));
-                    removed();
-                  })
-                  .catch((caught: unknown) => setError(errorText(caught)));
-              })
-            }
-          >
-            {t("removeProject")}
+        {failure === undefined ? null : <Flash error={failure} />}
+        <div className="form-actions">
+          <button className="btn btn-primary" type="submit" disabled={!dirty || saving}>
+            {saving ? t("saving") : t("save")}
           </button>
         </div>
+      </form>
+      {project.mayRemove === true ? (
+        <div className="danger-zone">
+          <Subhead title={t("dangerZone")} danger />
+          <div className="box box-danger">
+            <div className="box-row">
+              <div className="box-row-text">
+                <strong>{t("removeProjectTitle")}</strong>
+                <span>{t("removeProjectLead")}</span>
+              </div>
+              <button className="btn btn-danger" onClick={remove}>
+                {t("removeProject")}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
-    </div>
+    </>
   );
 }
 

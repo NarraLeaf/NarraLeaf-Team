@@ -25,12 +25,14 @@ export function ActionMenu({
   label = t("moreActions"),
   align = "end",
   trigger,
+  triggerClassName,
 }: {
   actions: readonly (MenuAction | false | undefined)[];
   label?: string;
   align?: Align;
   /** The button's face; the "⋯" when not given. */
   trigger?: ReactNode;
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
@@ -72,7 +74,7 @@ export function ActionMenu({
       <button
         ref={button}
         type="button"
-        className={trigger === undefined ? "btn btn-invisible btn-icon" : "btn btn-sm"}
+        className={triggerClassName ?? (trigger === undefined ? "btn btn-invisible btn-icon" : "btn btn-sm")}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}

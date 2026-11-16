@@ -1332,3 +1332,83 @@
 .todo-new .select-button {
   flex: none;
 }
+
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+@media (max-width: 860px) {
+  .settings-nav-group {
+    flex-direction: row;
+    gap: 4px;
+  }
+}
+
+/* ------------------------------------------------ phase 3: pages and routes */
+
+.side-count {
+  margin-left: auto;
+  background: rgb(var(--nl-primary) / 0.18);
+  color: rgb(var(--nl-primary));
+}
+
+.form-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 24px 0 8px;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.not-found {
+  margin: 64px auto 0;
+}
+
+.inbox .underline-nav {
+  margin-bottom: 12px;
+}
+
+.inbox .bell-list {
+  border: 1px solid var(--nl-edge-subtle);
+  border-radius: var(--nl-radius-lg, 8px);
+  overflow: hidden;
+  max-height: none;
+}
+
+.inbox .bell-list li {
+  padding: 0;
+}
+
+.inbox .bell-list li:last-child {
+  border-bottom: 0;
+}
+
+.inbox .bell-item {
+  padding: 12px 16px;
+  border-radius: 0;
+}
+
+.btn-group > .btn-primary + .btn-primary {
+  margin-left: 0;
+  border-left: 1px solid rgb(0 0 0 / 0.18);
+}
+
+.my-todos .page-head p,
+.settings-page-lead {
+  margin: 4px 0 0;
+}
+
+.form-field + .form-field {
+  margin-top: 16px;
+}
+
+.danger-zone {
+  margin-top: 40px;
+}

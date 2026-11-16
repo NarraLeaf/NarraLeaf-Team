@@ -28,7 +28,7 @@ import { studioConnectLink } from "./studioLink";
 import { chooseLanguage, chosenLanguage, t, type Language, type Phrase } from "./i18n";
 import { chooseTheme, chosenTheme, type ThemeChoice } from "./theme";
 import { ago } from "./ui/time";
-import { Checkbox, SelectPanel } from "./ui";
+import { Blankslate, Checkbox, SelectPanel, Skeleton, UnderlineNav } from "./ui";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -473,7 +473,6 @@ function Board({
 
 export function Profile({ connection, state, account }: { connection: TeamConnection; state: ConnectionState; account: ConsoleAccount }) {
   const open = state.kind === "open";
-  const accountId = state.kind === "open" ? state.hello.account.id : undefined;
   const [days, setDays] = useState<readonly TeamActivityDay[]>([]);
   const [profile, setProfile] = useState<TeamProfile | undefined>(undefined);
   const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
@@ -533,10 +532,6 @@ export function Profile({ connection, state, account }: { connection: TeamConnec
         <section>
           <h2>{t("contributionsTitle")}</h2>
           <Heatmap days={days} />
-        </section>
-        <section>
-          <h2>{t("myTodos")}</h2>
-          <Todos connection={connection} open={open} account={{ ...account, ...(accountId === undefined ? {} : { id: accountId }) }} />
         </section>
         <section>
           <h2>{t("timeline")}</h2>
@@ -662,91 +657,55 @@ export function NotificationList({
   );
 }
 
-/** The notifications as a page of their own, for a phone. */
+/** The notifications as a page of their own: an inbox, unread first, as GitHub keeps one. */
 export function Notifications({ connection, state, open }: { connection: TeamConnection; state: ConnectionState; open?: (target: NotificationTarget) => void }) {
   const { unread, list, readAll } = useNotifications(connection, state);
+  const [filter, setFilter] = useState<"unread" | "all">("unread");
+  const shown = list === undefined ? undefined : filter === "unread" ? list.filter((n) => n.readAt === undefined) : list;
   return (
-    <section className="page-narrow">
+    <section className="page-narrow inbox">
       <header className="page-head">
-        <h1>{t("notifications")}</h1>
-        {unread > 0 ? (
-          <button className="ghost small" onClick={readAll}>
-            {t("markAllRead")}
-          </button>
-        ) : null}
+        <h1 className="page-title">{t("notifications")}</h1>
+        <button className="btn btn-sm" disabled={unread === 0} onClick={readAll}>
+          <Icon name="tick" size={14} />
+          {t("markAllRead")}
+        </button>
       </header>
-      <NotificationList list={list} connection={connection} {...(open === undefined ? {} : { open })} />
+      <UnderlineNav
+        label={t("notifications")}
+        active={filter}
+        onSelect={setFilter}
+        tabs={[
+          { key: "unread", label: t("inboxUnread"), count: unread },
+          { key: "all", label: t("inboxAll") },
+        ]}
+      />
+      {shown === undefined ? (
+        <Skeleton rows={4} />
+      ) : shown.length === 0 ? (
+        <Blankslate icon="bell" title={filter === "unread" ? t("inboxZero") : t("noNotifications")}>
+          {filter === "unread" ? t("inboxZeroLead") : t("inboxEmptyLead")}
+        </Blankslate>
+      ) : (
+        <NotificationList list={shown} connection={connection} {...(open === undefined ? {} : { open })} />
+      )}
     </section>
   );
 }
 
-/** The bell: a count of unread notifications, and the list when opened. */
-export function Bell({
-  connection,
-  state,
-  label,
-  open,
-}: {
-  connection: TeamConnection;
-  state: ConnectionState;
-  label?: boolean;
-  open?: (target: NotificationTarget) => void;
-}) {
-  const { unread, list, readAll } = useNotifications(connection, state);
-  const [shown, setShown] = useState(false);
-  const [place, setPlace] = useState<{ left: number; top: number } | undefined>(undefined);
-  const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!shown) return undefined;
-    const away = (event: MouseEvent) => {
-      if (root.current !== null && !root.current.contains(event.target as Node)) setShown(false);
-    };
-    const key = (event: KeyboardEvent) => event.key === "Escape" && setShown(false);
-    document.addEventListener("mousedown", away);
-    document.addEventListener("keydown", key);
-    return () => {
-      document.removeEventListener("mousedown", away);
-      document.removeEventListener("keydown", key);
-    };
-  }, [shown]);
+/** The to-dos of whoever is looking, across every project, as a board. */
+export function MyTodos({ connection, state, account }: { connection: TeamConnection; state: ConnectionState; account: ConsoleAccount }) {
+  const accountId = state.kind === "open" ? state.hello.account.id : undefined;
   return (
-    <div className="bell" ref={root}>
-      <button
-        className={label === true ? "side-link bell-button" : "ghost bell-button"}
-        aria-label={t("notifications")}
-        aria-expanded={shown}
-        onClick={(event) => {
-          // In the side bar the panel sits beside it, fixed, so the bar's own scrolling cannot clip it.
-          const box = event.currentTarget.getBoundingClientRect();
-          setPlace(label === true ? { left: box.right + 12, top: Math.max(8, Math.min(box.top, window.innerHeight - 420)) } : undefined);
-          setShown((value) => !value);
-        }}
-      >
-        <Icon name="bell" />
-        {label === true ? <span className="side-link-text">{t("notifications")}</span> : null}
-        {unread > 0 ? <span className="badge">{unread > 99 ? "99+" : unread}</span> : null}
-      </button>
-      {shown ? (
-        <div className="bell-panel card" style={place === undefined ? undefined : { position: "fixed", left: place.left, top: place.top }}>
-          <div className="bell-head">
-            <strong>{t("notifications")}</strong>
-            {unread > 0 ? (
-              <button className="ghost small" onClick={readAll}>
-                {t("markAllRead")}
-              </button>
-            ) : null}
-          </div>
-          <NotificationList
-            list={list}
-            connection={connection}
-            open={(target) => {
-              setShown(false);
-              open?.(target);
-            }}
-          />
+    <section className="my-todos">
+      <header className="page-head">
+        <div>
+          <h1 className="page-title">{t("myTodos")}</h1>
+          <p className="muted">{t("myTodosLead")}</p>
         </div>
-      ) : null}
-    </div>
+      </header>
+      <Todos connection={connection} open={state.kind === "open"} account={{ ...account, ...(accountId === undefined ? {} : { id: accountId }) }} />
+    </section>
   );
 }
 

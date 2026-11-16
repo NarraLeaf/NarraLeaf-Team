@@ -40,10 +40,10 @@ import { LineComments, storyLineAnchor, useStoryThreads } from "./Comments";
 import type { ConsoleAccount } from "./api";
 import { language, t, type Phrase } from "./i18n";
 import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, type Revision } from "./Production";
-import { CompareWithNow, OnlineNow, ProjectSettings } from "./Versions";
+import { CompareWithNow, OnlineNow, ProjectSettings, type ProjectSettingsSection } from "./Versions";
 import { AskForMore } from "./Access";
 import type { TeamConnection, ConnectionState } from "./socket";
-import { Checkbox, SelectPanel } from "./ui";
+import { ActionMenu, Checkbox, SelectPanel, toast } from "./ui";
 
 export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "settings";
 /** The project's own page: what it is, how it got here, and what is waiting on review. */
@@ -62,6 +62,14 @@ const TAB_PHRASE: Record<ProjectTab, Phrase> = {
   reviews: "tabReviews",
   history: "tabHistory",
   settings: "tabSettings",
+};
+
+/** What each role may do, said on the badge that shows the caller's own. */
+const ROLE_MEANING: Record<TeamProjectRole, Phrase> = {
+  owner: "roleOwnerHint",
+  editor: "roleEditorHint",
+  reviewer: "roleReviewerHint",
+  viewer: "roleViewerHint",
 };
 
 interface ProjectSummary {
@@ -109,10 +117,12 @@ export function ProjectPage(props: {
   projectId: string;
   tab: ProjectTab;
   revision: string;
-  go: (tab: ProjectTab, revision: string) => void;
+  section: ProjectSettingsSection;
+  isOperator: boolean;
+  go: (tab: ProjectTab, revision: string, section?: ProjectSettingsSection) => void;
   back: () => void;
 }) {
-  const { account, connection, state, projectId, tab, revision, go, back } = props;
+  const { account, connection, state, projectId, tab, revision, section, isOperator, go, back } = props;
   const [project, setProject] = useState<ProjectSummary | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [tree, setTree] = useState<Tree | undefined>(undefined);
@@ -239,19 +249,39 @@ export function ProjectPage(props: {
           </button>
           <span aria-hidden="true">/</span>
           <h1 className="crumb-current">{project?.name ?? "…"}</h1>
-          {project?.role === undefined ? null : <span className={`role role-${project.role}`}>{t(roleKey(project.role))}</span>}
+          {project?.role === undefined ? null : (
+            <span
+              className={`role role-${project.role}`}
+              title={isOperator && project.role === "owner" ? t("roleViaAdminHint") : t(ROLE_MEANING[project.role])}
+            >
+              {t("yourRole", { role: isOperator && project.role === "owner" ? t("roleViaAdmin") : t(roleKey(project.role)) })}
+            </span>
+          )}
         </div>
         <div className="project-actions">
           {project === undefined ? null : <AskForMore connection={connection} project={projectId} role={project.role} />}
-          <button className="button-outline studio-button" onClick={() => void openInStudio(projectId)}>
-            <Icon name="external" />
-            <span>{t("openInStudio")}</span>
-          </button>
-          <button className="enter-workbench" onClick={() => go("story", revision)}>
-            <Icon name="workbench" size={18} />
-            <span>{t("enterWorkbench")}</span>
-            <span className="enter-hint">{t("enterWorkbenchHint")}</span>
-          </button>
+          <div className="btn-group">
+            <button className="btn btn-primary" onClick={() => go("story", revision)} title={t("enterWorkbenchHint")}>
+              <Icon name="workbench" size={16} />
+              <span>{t("enterWorkbench")}</span>
+            </button>
+            <ActionMenu
+              label={t("moreWaysToOpen")}
+              trigger={<Icon name="caret" size={14} />}
+              triggerClassName="btn btn-primary btn-icon"
+              actions={[
+                { label: t("openInStudio"), icon: "external", description: t("openInStudioHint"), run: () => void openInStudio(projectId) },
+                {
+                  label: t("copyProjectLink"),
+                  icon: "link",
+                  run: () =>
+                    void navigator.clipboard
+                      ?.writeText(`${window.location.origin}/console/p/${encodeURIComponent(projectId)}`)
+                      .then(() => toast(t("copied")), () => undefined),
+                },
+              ]}
+            />
+          </div>
         </div>
       </header>
       {project?.description ? <p className="muted project-description">{project.description}</p> : null}
@@ -280,6 +310,8 @@ export function ProjectPage(props: {
         <ProjectSettings
           connection={connection}
           project={project}
+          section={section}
+          go={(next) => go("settings", revision, next)}
           changed={(next) => setProject({ ...project, ...next })}
           removed={back}
         />
@@ -295,7 +327,7 @@ export function ProjectPage(props: {
       ) : tab === "reviews" ? (
         <Reviews connection={connection} open={open} projectId={projectId} me={account.username} role={project?.role} viewAt={(id) => go("story", id)} />
       ) : (
-        <Overview connection={connection} open={open} projectId={projectId} project={project} tree={tree} enter={() => go("story", revision)} />
+        <Overview connection={connection} open={open} projectId={projectId} project={project} tree={tree} />
       )}
     </section>
   );
@@ -437,9 +469,8 @@ function Overview(props: {
   projectId: string;
   project: ProjectSummary | undefined;
   tree: Tree | undefined;
-  enter: () => void;
 }) {
-  const { connection, open, projectId, project, tree, enter } = props;
+  const { connection, open, projectId, project, tree } = props;
   const [members, setMembers] = useState<readonly Member[] | undefined>(undefined);
   useEffect(() => {
     if (!open) return;
@@ -458,9 +489,6 @@ function Overview(props: {
           {history?.lastAt !== undefined ? (
             <span className="muted small">{t("lastChangeBy", { who: history.lastBy ?? "?", when: when(history.lastAt) })}</span>
           ) : null}
-          <button className="link-button hero-link" onClick={enter}>
-            {t("openInWorkbench")} →
-          </button>
         </div>
         <dl className="hero-facts">
           <div>

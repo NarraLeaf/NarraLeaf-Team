@@ -243,3 +243,70 @@ export function Skeleton({ rows = 3 }: { rows?: number }) {
     </div>
   );
 }
+
+/* -------------------------------------------------------- settings pages */
+
+export interface SettingsSection<K extends string> {
+  readonly key: K;
+  readonly label: string;
+  readonly icon?: IconName;
+  readonly count?: number | undefined;
+}
+
+/**
+ * A settings page as GitHub draws one: its sections down the left, in groups
+ * with a rule between, and the chosen section on the right. Each section has
+ * its own address, so it can be linked to and comes back on reload.
+ */
+export function SettingsLayout<K extends string>({
+  groups,
+  active,
+  onSelect,
+  label,
+  children,
+}: {
+  groups: readonly (readonly SettingsSection<K>[])[];
+  active: K;
+  onSelect: (key: K) => void;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="settings-layout">
+      <nav className="settings-nav" aria-label={label}>
+        {groups.map((group, index) => (
+          <div key={index} className="settings-nav-group">
+            {index === 0 ? null : <div className="settings-nav-rule" role="separator" />}
+            {group.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={item.key === active ? "settings-nav-item active" : "settings-nav-item"}
+                aria-current={item.key === active ? "page" : undefined}
+                onClick={() => onSelect(item.key)}
+              >
+                {item.icon === undefined ? null : <Icon name={item.icon} size={16} />}
+                <span>{item.label}</span>
+                {item.count === undefined || item.count === 0 ? null : <span className="counter">{item.count > 99 ? "99+" : item.count}</span>}
+              </button>
+            ))}
+          </div>
+        ))}
+      </nav>
+      <div className="settings-body">{children}</div>
+    </div>
+  );
+}
+
+/** A section's heading: its title, a line on what it is for, and an action on the right. */
+export function Subhead({ title, children, action, danger = false }: { title: string; children?: ReactNode; action?: ReactNode; danger?: boolean }) {
+  return (
+    <div className="subhead">
+      <div className="subhead-text">
+        <h2 className={danger ? "danger-heading" : undefined}>{title}</h2>
+        {children === undefined ? null : <p>{children}</p>}
+      </div>
+      {action}
+    </div>
+  );
+}

@@ -18,16 +18,23 @@ import type {
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
-import { ActionMenu, Checkbox, confirmAction, Flash, toast, type MenuAction } from "./ui";
+import { ActionMenu, Checkbox, confirmAction, Flash, SettingsLayout, Skeleton, Subhead, toast, type MenuAction } from "./ui";
+import type { IconName } from "./Icon";
 import { Face } from "./Collab";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
 import { AccessRequestsToDecide } from "./Access";
 import type { ConnectionState, TeamConnection } from "./socket";
 
-type Section = "accounts" | "projects" | "requests" | "documents" | "brand" | "security" | "webhooks" | "server";
-const SECTIONS: readonly Section[] = ["accounts", "projects", "requests", "documents", "brand", "security", "webhooks", "server"];
-const SECTION_PHRASE: Record<Section, Phrase> = {
+export type AdminSection = "accounts" | "projects" | "requests" | "documents" | "brand" | "security" | "webhooks" | "server";
+/** The back office's sections, in groups: people, projects, the team itself. */
+const GROUPS: readonly (readonly AdminSection[])[] = [
+  ["accounts", "requests"],
+  ["projects", "documents", "webhooks"],
+  ["brand", "security", "server"],
+];
+export const ADMIN_SECTIONS: readonly AdminSection[] = GROUPS.flat();
+export const ADMIN_PHRASE: Record<AdminSection, Phrase> = {
   accounts: "adminAccounts",
   projects: "adminProjects",
   requests: "reqTitle",
@@ -36,6 +43,25 @@ const SECTION_PHRASE: Record<Section, Phrase> = {
   webhooks: "adminWebhooks",
   documents: "docsTitle",
   server: "adminServer",
+};
+const SECTION_ICON: Record<AdminSection, IconName> = {
+  accounts: "people",
+  requests: "key",
+  projects: "folder",
+  documents: "file",
+  webhooks: "link",
+  brand: "palette",
+  security: "lock",
+  server: "server",
+};
+/** What a section is for, said under its title; the ones without explain themselves in their first line. */
+const SECTION_LEAD: Partial<Record<AdminSection, Phrase>> = {
+  accounts: "adminAccountsLead",
+  projects: "adminProjectsLead",
+  requests: "adminRequestsLead",
+  brand: "adminBrandLead",
+  security: "adminSecurityLead",
+  server: "adminServerLead",
 };
 
 /** Run one action: a toast when it worked, a notice in the page saying why when it did not. */
@@ -56,32 +82,49 @@ function useAction() {
   return { run, view };
 }
 
-export function Admin({ connection, state, me }: { connection: TeamConnection; state: ConnectionState; me: string }) {
-  const [section, setSection] = useState<Section>("accounts");
+export function Admin({
+  connection,
+  state,
+  me,
+  section,
+  go,
+}: {
+  connection: TeamConnection;
+  state: ConnectionState;
+  me: string;
+  section: AdminSection;
+  go: (section: AdminSection) => void;
+}) {
   const open = state.kind === "open";
+  const lead = SECTION_LEAD[section];
   return (
     <section className="admin">
-      <h1>{t("admin")}</h1>
-      <nav className="tabs" role="tablist">
-        {SECTIONS.map((key) => (
-          <button key={key} role="tab" aria-selected={section === key} className={section === key ? "tab active" : "tab"} onClick={() => setSection(key)}>
-            {t(SECTION_PHRASE[key])}
-          </button>
-        ))}
-      </nav>
-      {!open ? <p className="muted">{t("connecting")}</p> : null}
-      {open && section === "accounts" ? <Accounts connection={connection} me={me} /> : null}
-      {open && section === "projects" ? <Projects connection={connection} /> : null}
-      {open && section === "requests" ? (
-        <div className="admin-section">
-          <AccessRequestsToDecide connection={connection} all />
+      <header className="page-head">
+        <h1 className="page-title">{t("admin")}</h1>
+      </header>
+      <SettingsLayout
+        label={t("admin")}
+        active={section}
+        onSelect={go}
+        groups={GROUPS.map((group) => group.map((key) => ({ key, label: t(ADMIN_PHRASE[key]), icon: SECTION_ICON[key] })))}
+      >
+        <div>
+          <Subhead title={t(ADMIN_PHRASE[section])}>{lead === undefined ? undefined : t(lead)}</Subhead>
+          {!open ? <Skeleton /> : null}
+          {open && section === "accounts" ? <Accounts connection={connection} me={me} /> : null}
+          {open && section === "projects" ? <Projects connection={connection} /> : null}
+          {open && section === "requests" ? (
+            <div className="admin-section">
+              <AccessRequestsToDecide connection={connection} all />
+            </div>
+          ) : null}
+          {open && section === "brand" ? <Brand connection={connection} /> : null}
+          {open && section === "security" ? <Security connection={connection} /> : null}
+          {open && section === "webhooks" ? <Webhooks connection={connection} /> : null}
+          {open && section === "documents" ? <DocumentsPanel connection={connection} /> : null}
+          {open && section === "server" ? <Server connection={connection} /> : null}
         </div>
-      ) : null}
-      {open && section === "brand" ? <Brand connection={connection} /> : null}
-      {open && section === "security" ? <Security connection={connection} /> : null}
-      {open && section === "webhooks" ? <Webhooks connection={connection} /> : null}
-      {open && section === "documents" ? <DocumentsPanel connection={connection} /> : null}
-      {open && section === "server" ? <Server connection={connection} /> : null}
+      </SettingsLayout>
     </section>
   );
 }
