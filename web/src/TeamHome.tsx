@@ -44,6 +44,7 @@ function lastPlace(): LastPlace | undefined {
 interface ProjectRow {
   readonly id: string;
   readonly name: string;
+  readonly title?: string;
   readonly description: string;
   readonly history?: { readonly lastAt?: number; readonly lastBy?: string };
 }
@@ -461,7 +462,7 @@ export function TeamHome(props: {
                   <button key={row.id} className="project-card" onClick={() => openProject(row.id)}>
                     <span className="project-card-head">
                       <span className="project-dot big" style={{ background: projectHue(row.id) }} />
-                      <span className="project-card-name">{row.name}</span>
+                      <span className="project-card-name">{row.title ?? row.name}</span>
                       {onlineIn(row.id) > 0 ? <span className="online-count">● {t("onlineCount", { count: String(onlineIn(row.id)) })}</span> : null}
                     </span>
                     <span className="project-card-foot">

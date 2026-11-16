@@ -114,6 +114,10 @@ export type Invocation =
       readonly displayName: string | undefined;
       readonly email: string | undefined;
     }
+  /** Take a backup of the storage root, into its backups directory. */
+  | { readonly kind: "backup"; readonly root: string }
+  /** Put a backup back, with the server stopped. */
+  | { readonly kind: "restore"; readonly root: string; readonly archive: string; readonly force: boolean }
   /** List the accounts. */
   | { readonly kind: "user-list"; readonly target: CommandTarget }
   /**
@@ -952,6 +956,37 @@ function parseInit(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation 
   };
 }
 
+/** Parse the arguments that follow `backup`. */
+function parseBackup(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
+  const result = readTokens(argv, ["--root"]);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  if (result.tokens.positionals[0] !== undefined) {
+    return error(`unexpected argument: ${result.tokens.positionals[0]}`);
+  }
+  const root = rootOf(result.tokens, env);
+  return root === undefined ? missingRoot("backup") : { kind: "backup", root };
+}
+
+/** Parse the arguments that follow `restore`. */
+function parseRestore(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
+  const result = readTokens(argv, ["--root"], ["--force"]);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  const { tokens } = result;
+  const archive = tokens.positionals[0];
+  if (archive === undefined) {
+    return error("restore needs the backup file to put back");
+  }
+  if (tokens.positionals[1] !== undefined) {
+    return error(`unexpected argument: ${tokens.positionals[1]}`);
+  }
+  const root = rootOf(tokens, env);
+  return root === undefined ? missingRoot("restore") : { kind: "restore", root, archive, force: tokens.flags.has("--force") };
+}
+
 /** Parse the arguments that follow `user`. */
 function parseUser(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const [verb, ...rest] = argv;
@@ -1582,6 +1617,10 @@ export function parseArgs(
       return parseUp(rest, env);
     case "init":
       return parseInit(rest, env);
+    case "backup":
+      return parseBackup(rest, env);
+    case "restore":
+      return parseRestore(rest, env);
     case "login":
       return parseLogin(rest, env);
     case "logout":

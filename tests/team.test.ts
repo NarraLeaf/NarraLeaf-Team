@@ -468,7 +468,9 @@ describe("opening a session", () => {
     expect([...(client.hello?.capabilities ?? [])].sort()).toEqual([
       "activity",
       "admin",
+      "api-tokens",
       "approvals",
+      "archive",
       "attachments",
       "builds",
       "chat",
@@ -488,8 +490,10 @@ describe("opening a session", () => {
       "reviews",
       "session",
       "shares",
+      "storage",
       "templates",
       "todos",
+      "two-factor",
       "voice",
       "watches",
       "webhooks",
@@ -3577,6 +3581,8 @@ const ADMIN_READS = [
   TEAM_METHODS.adminServerStatus,
   TEAM_METHODS.adminWebhooksList,
   TEAM_METHODS.adminDocumentsStatus,
+  TEAM_METHODS.adminStorageList,
+  TEAM_METHODS.adminBackupsList,
 ];
 
 /** Every method of the family that changes something. */
@@ -3599,6 +3605,9 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminWebhooksDeliveries,
   TEAM_METHODS.adminWebhooksRedeliver,
   TEAM_METHODS.adminEmailTest,
+  TEAM_METHODS.adminUsersResetLink,
+  TEAM_METHODS.adminUsersResetTwoFactor,
+  TEAM_METHODS.adminBackupsCreate,
 ];
 
 /** Both halves, which is what the gate has to cover. */

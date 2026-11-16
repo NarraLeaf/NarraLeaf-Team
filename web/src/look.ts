@@ -15,6 +15,8 @@ export interface TeamLook {
   readonly signinImageUrl?: string;
   readonly signinLayout: SigninLayout;
   readonly setupNeeded: boolean;
+  /** Single sign-on, when an operator has set it up: what its button says. */
+  readonly sso?: { readonly oidc?: string };
 }
 
 /** `#40a8c4` as the `64 168 196` the design tokens write colours in. */

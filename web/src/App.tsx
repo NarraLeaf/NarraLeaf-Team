@@ -8,7 +8,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { TOPIC_PROJECTS, type TeamProjectRole } from "@narraleaf/team-protocol";
 
-import { currentSession, signOut, type ConsoleAccount, type Watermark } from "./api";
+import { currentSession, signOut, type ConsoleAccount, type ConsoleSession, type Watermark } from "./api";
+import { EnrollGate, ResetPage } from "./Security";
 import { t, type Phrase } from "./i18n";
 import { TeamConnection, type ConnectionState } from "./socket";
 import { Authorize, Device } from "./OAuth";
@@ -24,7 +25,7 @@ import { Setup, SignIn, TeamMark } from "./SignIn";
 import { ShareView } from "./Builds";
 import { projectHue, TeamHome } from "./TeamHome";
 import { Palette, type PaletteItem } from "./Palette";
-import { Blankslate, Flash, UiHost } from "./ui";
+import { Blankslate, Checkbox, Flash, RelativeTime, UiHost } from "./ui";
 
 type Route =
   | { readonly screen: "home" }
@@ -113,7 +114,7 @@ export function App() {
 }
 
 function AppBody() {
-  const [session, setSession] = useState<{ account: ConsoleAccount; watermark: Watermark } | null | undefined>(undefined);
+  const [session, setSession] = useState<ConsoleSession | null | undefined>(undefined);
   const look = useLook();
 
   const refresh = useCallback(() => {
@@ -130,6 +131,9 @@ function AppBody() {
   // A share link is for somebody with no account: it opens whether or not anybody is signed in.
   const shared = /^\/console\/s\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
   if (shared !== null) return <ShareView token={shared[1]!} />;
+  // A reset link is for somebody who cannot sign in: it opens with no session too.
+  const reset = /^\/console\/reset\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
+  if (reset !== null) return <ResetPage token={reset[1]!} />;
   const standalone = path.startsWith("/console/oauth/authorize") ? "authorize" : path.startsWith("/console/device") ? "device" : undefined;
   if (session === null) {
     if (look.setupNeeded) {
@@ -164,12 +168,31 @@ function AppBody() {
       </>
     );
   }
+  if (session.twoFactor.required && !session.twoFactor.enabled) {
+    return <Enroll onDone={refresh} onSignedOut={() => setSession(null)} />;
+  }
   return (
     <>
       <Shell account={session.account} look={look} onSignedOut={() => setSession(null)} />
       {mark}
     </>
   );
+}
+
+/** Setting up two-step sign-in, which this server asks for before anything else. */
+function Enroll({ onDone, onSignedOut }: { onDone: () => void; onSignedOut: () => void }) {
+  const connection = useMemo(() => new TeamConnection(), []);
+  const [state, setState] = useState<ConnectionState>(connection.state);
+  useEffect(() => {
+    const stop = connection.onState(setState);
+    connection.start();
+    return () => {
+      stop();
+      connection.stop();
+    };
+  }, [connection]);
+  if (state.kind !== "open") return <div className="splash" aria-busy="true" />;
+  return <EnrollGate connection={connection} done={onDone} signOut={() => void signOut().then(onSignedOut)} />;
 }
 
 /**
@@ -196,6 +219,7 @@ function WatermarkLayer({ watermark, account }: { watermark: Watermark; account:
 interface SideProject {
   readonly id: string;
   readonly name: string;
+  readonly title?: string;
 }
 
 function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: TeamLook; onSignedOut: () => void }) {
@@ -320,7 +344,7 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
       : []),
     ...projects.flatMap((project) => [
       { id: `p:${project.id}`, icon: "folder" as const, label: project.name, hint: t("projects"), run: () => openProject(project.id) },
-      { id: `w:${project.id}`, icon: "workbench" as const, label: `${project.name} · ${t("enterWorkbench")}`, run: () => openProject(project.id, "story") },
+      { id: `w:${project.id}`, icon: "workbench" as const, label: `${project.title ?? project.name} · ${t("enterWorkbench")}`, run: () => openProject(project.id, "story") },
     ]),
   ];
   const openLine = (project: string, scene: string) => {
@@ -430,7 +454,7 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
               onClick={() => openProject(project.id)}
             >
               <span className="project-dot" style={{ background: projectHue(project.id) }} />
-              <span className="side-link-text">{project.name}</span>
+              <span className="side-link-text">{project.title ?? project.name}</span>
             </button>
           ))}
         </div>
@@ -594,7 +618,9 @@ interface ProjectRow {
   readonly name: string;
   readonly description: string;
   readonly role?: TeamProjectRole;
-  readonly history?: { readonly head?: { readonly at?: number; readonly message?: string } };
+  readonly history?: { readonly lastAt?: number; readonly lastBy?: string };
+  readonly title?: string;
+  readonly archivedAt?: number;
 }
 
 const ROLE_PHRASE: Record<TeamProjectRole, Phrase> = {
@@ -618,18 +644,19 @@ function Projects({
   const [rows, setRows] = useState<readonly ProjectRow[] | undefined>(undefined);
   const [mayCreate, setMayCreate] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [showArchived, setShowArchived] = useState(false);
   const open = state.kind === "open";
 
   const load = useCallback(() => {
     connection
-      .call<{ projects: ProjectRow[]; mayCreate?: boolean }>("projects.list")
+      .call<{ projects: ProjectRow[]; mayCreate?: boolean }>("projects.list", showArchived ? { includeArchived: true } : undefined)
       .then((answer) => {
         setRows(answer.projects);
         setMayCreate(answer.mayCreate !== false);
         setError(undefined);
       })
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)));
-  }, [connection]);
+  }, [connection, showArchived]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -644,6 +671,7 @@ function Projects({
           <h1 className="page-title">{t("projects")}</h1>
           <p className="muted">{t("projectsLead")}</p>
         </div>
+        <Checkbox checked={showArchived} onChange={setShowArchived} label={t("showArchived")} />
       </header>
       {error !== undefined ? <Flash error={error} /> : null}
       {rows === undefined ? (
@@ -653,17 +681,27 @@ function Projects({
       ) : (
         <div className="project-grid">
           {rows.map((row) => (
-            <button key={row.id} className="project-tile" onClick={() => openProject(row.id)}>
+            <button key={row.id} className={row.archivedAt === undefined ? "project-tile" : "project-tile project-tile-archived"} onClick={() => openProject(row.id)}>
               <span className="project-tile-head">
                 <span className="project-tile-mark" style={{ background: projectHue(row.id) }}>
                   {Array.from(row.name)[0]?.toUpperCase()}
                 </span>
-                <span className="project-tile-name">{row.name}</span>
+                <span className="project-tile-name" title={row.title === undefined ? undefined : row.name}>
+                  {row.title ?? row.name}
+                </span>
+                {row.archivedAt === undefined ? null : <span className="tag">{t("archived")}</span>}
                 {row.role === undefined ? null : <span className={`role role-${row.role}`}>{t(ROLE_PHRASE[row.role])}</span>}
               </span>
               <span className="muted small project-tile-desc">{row.description === "" ? t("noDescription") : row.description}</span>
               <span className="muted small">
-                {row.history?.head?.at === undefined ? t("noChangesYet") : t("lastChangeShort", { when: new Date(row.history.head.at).toLocaleString() })}
+                {row.history?.lastAt === undefined ? (
+                  t("noChangesYet")
+                ) : (
+                  <>
+                    {t("lastChangeShort", { when: "" })}
+                    <RelativeTime at={row.history.lastAt} />
+                  </>
+                )}
               </span>
             </button>
           ))}

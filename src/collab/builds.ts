@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import { booleanColumn, inTransaction, integerColumn, optionalTextColumn, textColumn, type Row } from "../identity/database.js";
+import { BUILD_LIMIT_MB, policyNumber, STORAGE_QUOTA_MB } from "../identity/policy.js";
 import { findUserById, isOperator, type UserRecord } from "../identity/users.js";
 import { maySeeProject, projectRole } from "../projects/members.js";
 import type { TeamAttachment, TeamBuild } from "../team/protocol.js";
@@ -298,4 +299,54 @@ export async function deleteAttachment(database: DatabaseSync, root: string, act
   database.prepare("DELETE FROM attachments WHERE id = ?").run(id);
   await rm(join(attachmentsDir(root, attachment.projectId), `${attachment.id}.${attachment.type}`), { force: true });
   return attachment;
+}
+
+const MEGABYTE = 1024 * 1024;
+/** The share of a quota past which a project is warned it is nearly full. */
+export const STORAGE_WARN_AT = 0.9;
+
+/** The largest build this server takes, as `storage.build_limit_mb` stands now. */
+export function buildLimitBytes(database: DatabaseSync): number {
+  return Math.max(1, policyNumber(database, BUILD_LIMIT_MB)) * MEGABYTE;
+}
+
+/** Each project's storage ceiling, or undefined when `storage.project_quota_mb` is 0 (none). */
+export function projectQuotaBytes(database: DatabaseSync): number | undefined {
+  const megabytes = policyNumber(database, STORAGE_QUOTA_MB);
+  return megabytes > 0 ? megabytes * MEGABYTE : undefined;
+}
+
+export interface StorageView {
+  readonly project: string;
+  readonly usedBytes: number;
+  readonly buildBytes: number;
+  readonly attachmentBytes: number;
+  readonly quotaBytes?: number;
+  /** Past {@link STORAGE_WARN_AT} of the quota, or over it. */
+  readonly nearlyFull: boolean;
+  readonly full: boolean;
+}
+
+export function storageView(database: DatabaseSync, projectId: string): StorageView {
+  const builds = database.prepare("SELECT COALESCE(SUM(size), 0) AS total FROM builds WHERE project_id = ?").get(projectId) as Row;
+  const pictures = database.prepare("SELECT COALESCE(SUM(size), 0) AS total FROM attachments WHERE project_id = ?").get(projectId) as Row;
+  const buildBytes = integerColumn(builds, "total");
+  const attachmentBytes = integerColumn(pictures, "total");
+  const usedBytes = buildBytes + attachmentBytes;
+  const quotaBytes = projectQuotaBytes(database);
+  return {
+    project: projectId,
+    usedBytes,
+    buildBytes,
+    attachmentBytes,
+    ...(quotaBytes === undefined ? {} : { quotaBytes }),
+    nearlyFull: quotaBytes !== undefined && usedBytes >= quotaBytes * STORAGE_WARN_AT,
+    full: quotaBytes !== undefined && usedBytes >= quotaBytes,
+  };
+}
+
+/** How many more bytes this project may take, or Infinity with no quota. */
+export function storageRoom(database: DatabaseSync, projectId: string): number {
+  const quota = projectQuotaBytes(database);
+  return quota === undefined ? Number.POSITIVE_INFINITY : Math.max(0, quota - projectStorageBytes(database, projectId));
 }

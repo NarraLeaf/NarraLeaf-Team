@@ -175,6 +175,14 @@ export const TEAM_CAPABILITIES = [
   "templates",
   /** A daily or weekly letter of what was unread, by email or to a personal Feishu or Slack address. */
   "digests",
+  /** Two-step sign-in: an authenticator app's code (RFC 6238) or a recovery code after the password. */
+  "two-factor",
+  /** Personal API tokens for scripts: per project, read-only unless made to write, expiring. */
+  "api-tokens",
+  /** A project may be archived - read-only and out of lists - and brought back; and given a title on screen. */
+  "archive",
+  /** How much a project keeps on this server (builds and attachments), against the quota. */
+  "storage",
   /**
    * A project's own channel: messages its members write to each other, kept,
    * in order, and read back a page at a time - unlike a live session's chat,
@@ -2454,6 +2462,38 @@ export const TEAM_METHODS = {
   adminServerStatus: "admin.server.status",
   /** Set or clear the team's accent colour. The logo is uploaded over HTTP. */
   adminBrandSet: "admin.brand.set",
+  /** Whether the caller has two-step sign-in, is setting it up, and how many recovery codes are left. */
+  accountTotpStatus: "account.totp.status",
+  /** Start setting two-step sign-in up: a new secret and its otpauth address, not yet in force. */
+  accountTotpBegin: "account.totp.begin",
+  /** Put it in force with a code from the app; answers ten recovery codes, once. */
+  accountTotpConfirm: "account.totp.confirm",
+  /** Turn it off, with a current code or a recovery code. */
+  accountTotpDisable: "account.totp.disable",
+  /** Ten new recovery codes, with a current code; the old ones stop working. */
+  accountTotpRecovery: "account.totp.recovery",
+  /** The caller's API tokens, without the tokens themselves. */
+  accountTokensList: "account.tokens.list",
+  /** Make an API token; the token is in this answer and never again. */
+  accountTokensCreate: "account.tokens.create",
+  /** Revoke one of the caller's API tokens. */
+  accountTokensRevoke: "account.tokens.revoke",
+  /** Archive a project: read-only, and out of lists unless they ask for archived ones. Owners. */
+  projectsArchive: "projects.archive",
+  /** Bring an archived project back. Owners. */
+  projectsRestore: "projects.restore",
+  /** How much one project keeps on this server, and its quota. Members. */
+  projectsStorage: "projects.storage",
+  /** A one-time link, good for a day, that sets a new password for an account. Operators. */
+  adminUsersResetLink: "admin.users.resetLink",
+  /** Take two-step sign-in off an account that lost its phone and its codes. Operators. */
+  adminUsersResetTwoFactor: "admin.users.resetTwoFactor",
+  /** How much every project keeps, against the quota. Operators. */
+  adminStorageList: "admin.storage.list",
+  /** The backups this server has made, newest first. Operators. */
+  adminBackupsList: "admin.backups.list",
+  /** Make a backup now. Operators. */
+  adminBackupsCreate: "admin.backups.create",
 } as const;
 
 export type TeamMethodName = (typeof TEAM_METHODS)[keyof typeof TEAM_METHODS];

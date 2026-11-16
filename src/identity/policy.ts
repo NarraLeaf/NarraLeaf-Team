@@ -65,7 +65,7 @@ export const POLICIES: readonly PolicyDefinition[] = [
   { key: REQUIRE_TWO_FACTOR, label: "two-factor required", group: "security", kind: "switch", fallback: "off" },
   { key: ALLOWED_NETWORKS, label: "allowed networks", group: "security", kind: "networks", fallback: "" },
   { key: STORAGE_QUOTA_MB, label: "project storage quota (MB)", group: "storage", kind: "number", fallback: "0", min: 0, max: 10_000_000 },
-  { key: BUILD_LIMIT_MB, label: "largest play build (MB)", group: "storage", kind: "number", fallback: "2048", min: 1, max: 100_000 },
+  { key: BUILD_LIMIT_MB, label: "largest play build (MB)", group: "storage", kind: "number", fallback: "1024", min: 1, max: 100_000 },
   { key: BACKUP_EVERY_HOURS, label: "backup every (hours)", group: "backup", kind: "number", fallback: "0", min: 0, max: 24 * 30 },
   { key: BACKUP_KEEP, label: "backups kept", group: "backup", kind: "number", fallback: "7", min: 1, max: 365 },
   { key: PUBLIC_URL, label: "public address", group: "server", kind: "text", fallback: "" },

@@ -60,6 +60,7 @@ import { loadProjectFiles } from "./authority/projectFiles.js";
 import { commitSnapshot } from "./projects/workingCopy.js";
 import { accountNotificationsTopic, projectDocTopic, projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
 import { digestJob } from "./collab/digest.js";
+import { backupJob, removePidFile, writePidFile } from "./backup.js";
 import { setNotificationAnnouncer } from "./collab/notifications.js";
 import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
@@ -210,6 +211,7 @@ export async function up(
   /** Where a live session's files wait for the machines that are short of them. */
   let blobs: TeamBlobStore | undefined;
   let housekeeping: Housekeeping | undefined;
+  let pidWritten = false;
 
   try {
     const artifact = resolveArtifact();
@@ -223,6 +225,9 @@ export async function up(
     // Identity comes up first: it is quick, and a port already taken is worth
     // discovering before a download rather than after one.
     database = await openMigratedDatabase(identity.databasePath);
+    // So `nlteam restore` can tell a server is running here and refuse.
+    await writePidFile(identity.root);
+    pidWritten = true;
     // What this server is being brought up as, written down before anything can
     // mint against it. A token's audience depends on the ports and the host
     // names, and a `nlteam token mint` run in another terminal has no command
@@ -376,6 +381,8 @@ export async function up(
     housekeeping = new Housekeeping(database);
     // Daily and weekly digests: whoever is due when the hour comes round.
     housekeeping.add(digestJob);
+    // Scheduled backups, when `backup.every_hours` asks for them.
+    housekeeping.add(backupJob(identity.root, (line) => stdout(`${line}\n`)));
     housekeeping.start();
     // Notifications written away from a request (a watched project's commit found by a refresh)
     // reach the account's open sessions through the hub, once there is one.
@@ -756,6 +763,7 @@ export async function up(
     // through a database that is about to be closed under it.
     readings?.stop();
     database?.close();
+    if (pidWritten) await removePidFile(identity.root);
   }
 }
 

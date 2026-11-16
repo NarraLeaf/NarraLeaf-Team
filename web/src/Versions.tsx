@@ -11,7 +11,7 @@ import { projectClientsTopic, type TeamClientInstance, type TeamProjectRole, typ
 
 import { t, type Phrase } from "./i18n";
 import type { IconName } from "./Icon";
-import { confirmAction, Flash, SelectPanel, SettingsLayout, Subhead, toast } from "./ui";
+import { confirmAction, Flash, RelativeTime, SelectPanel, SettingsLayout, Subhead, toast } from "./ui";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
 import { AccessRequestsToDecide } from "./Access";
@@ -76,6 +76,10 @@ interface ProjectSettingsView {
   readonly restoreRole?: TeamVersionRole;
   readonly role?: TeamProjectRole;
   readonly mayRemove?: boolean;
+  /** What people see in place of the name; the name stays the address. */
+  readonly title?: string;
+  /** When an owner archived it; an archived project takes no changes. */
+  readonly archivedAt?: number;
 }
 
 /** A project's settings, for its owners: description, who may save and restore versions, webhooks. */
@@ -152,12 +156,15 @@ function GeneralSettings({
   removed: () => void;
 }) {
   const [description, setDescription] = useState(project.description);
+  const [title, setTitle] = useState(project.title ?? "");
   const [saveRole, setSaveRole] = useState<TeamVersionRole>(project.saveRole ?? "editor");
   const [restoreRole, setRestoreRole] = useState<TeamVersionRole>(project.restoreRole ?? "editor");
   const [failure, setFailure] = useState<unknown>(undefined);
   const [saving, setSaving] = useState(false);
   const dirty =
-    description.trim() !== project.description.trim() || saveRole !== (project.saveRole ?? "editor") || restoreRole !== (project.restoreRole ?? "editor");
+    description.trim() !== project.description.trim() ||
+    title.trim() !== (project.title ?? "") ||
+    saveRole !== (project.saveRole ?? "editor") || restoreRole !== (project.restoreRole ?? "editor");
   const save = async (event: FormEvent) => {
     event.preventDefault();
     setFailure(undefined);
@@ -166,6 +173,7 @@ function GeneralSettings({
       const answer = await connection.call<{ project: ProjectSettingsView }>("projects.update", {
         project: project.id,
         description: description.trim(),
+        title: title.trim(),
         saveRole,
         restoreRole,
       });
@@ -206,10 +214,36 @@ function GeneralSettings({
         })
         .catch((caught: unknown) => setFailure(caught));
     });
+  const archived = project.archivedAt !== undefined;
+  const setArchived = () =>
+    void confirmAction(
+      archived
+        ? { title: t("unarchiveTitle"), body: t("unarchiveBody"), confirmLabel: t("unarchive") }
+        : { title: t("archiveTitle"), body: t("archiveBody", { name: project.title ?? project.name }), confirmLabel: t("archive"), danger: true },
+    ).then((yes) => {
+      if (!yes) return;
+      void connection
+        .call<{ project: ProjectSettingsView }>(archived ? "projects.restore" : "projects.archive", { project: project.id })
+        .then((answer) => {
+          changed(answer.project);
+          toast(archived ? t("unarchived") : t("archivedToast"));
+        })
+        .catch((caught: unknown) => setFailure(caught));
+    });
   return (
     <>
+      {archived ? (
+        <Flash tone="warning">
+          {t("archivedBanner")} <RelativeTime at={project.archivedAt ?? 0} />
+        </Flash>
+      ) : null}
       <form onSubmit={(event) => void save(event)}>
         <Subhead title={t("settingsGeneral")} />
+        <label className="form-field">
+          <span className="form-label">{t("projectTitle")}</span>
+          <input value={title} maxLength={120} placeholder={project.name} onChange={(event) => setTitle(event.target.value)} />
+          <span className="form-hint">{t("projectTitleHint")}</span>
+        </label>
         <div className="form-field">
           <span className="form-label">{t("projectName")}</span>
           <input value={project.name} readOnly disabled />
@@ -242,10 +276,31 @@ function GeneralSettings({
           </button>
         </div>
       </form>
-      {project.mayRemove === true ? (
-        <div className="danger-zone">
-          <Subhead title={t("dangerZone")} danger />
-          <div className="box box-danger">
+      <h3 className="form-section-title">{t("exportTitle")}</h3>
+      <div className="box">
+        <div className="box-row">
+          <div className="box-row-text">
+            <strong>{t("exportProject")}</strong>
+            <span>{t("exportLead")}</span>
+          </div>
+          <a className="btn" href={`/api/console/v1/projects/${encodeURIComponent(project.id)}/export`} download>
+            {t("exportDownload")}
+          </a>
+        </div>
+      </div>
+      <div className="danger-zone">
+        <Subhead title={t("dangerZone")} danger />
+        <div className="box box-danger">
+          <div className="box-row">
+            <div className="box-row-text">
+              <strong>{archived ? t("unarchiveTitle") : t("archiveTitle")}</strong>
+              <span>{archived ? t("unarchiveLead") : t("archiveLead")}</span>
+            </div>
+            <button className={archived ? "btn" : "btn btn-danger"} onClick={setArchived}>
+              {archived ? t("unarchive") : t("archive")}
+            </button>
+          </div>
+          {project.mayRemove === true ? (
             <div className="box-row">
               <div className="box-row-text">
                 <strong>{t("removeProjectTitle")}</strong>
@@ -255,9 +310,9 @@ function GeneralSettings({
                 {t("removeProject")}
               </button>
             </div>
-          </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </>
   );
 }

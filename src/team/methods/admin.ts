@@ -54,7 +54,12 @@
  * rather than written a second time, so that what a username may be and what
  * happens to a disabled account are answered in one place for both.
  */
-import { pageDecisions } from "../../identity/audit.js";
+import { pageDecisions, recordDecision } from "../../identity/audit.js";
+import { createBackup, listBackups, pruneBackups } from "../../backup.js";
+import { buildLimitBytes, storageView } from "../../collab/builds.js";
+import { createPasswordReset } from "../../identity/resets.js";
+import { removeTotp } from "../../identity/totp.js";
+import { listProjects } from "../../projects/registry.js";
 import { adminUserBody } from "../../identity/answers.js";
 import { SigningKeyRetirementError, type KeyStore } from "../../identity/keys.js";
 import { defaultPasswordHasher } from "../../identity/passwords.js";
@@ -130,7 +135,16 @@ import {
 } from "../../identity/writes.js";
 import { readDuration } from "../../duration.js";
 import { settingKeyOf, settingRows } from "../../view.js";
-import { InvalidPolicyError, policyNamed, setPolicy } from "../../identity/policy.js";
+import {
+  BACKUP_EVERY_HOURS,
+  BACKUP_KEEP,
+  InvalidPolicyError,
+  policyNamed,
+  policyNumber,
+  PUBLIC_URL,
+  readPolicy,
+  setPolicy,
+} from "../../identity/policy.js";
 import {
   boundedCount,
   flag,
@@ -501,6 +515,9 @@ function mintedBefore(note: RecordedWrite): TeamAdminMintedToken | undefined {
   // says what a caller that lost one does about it.
   return { username: kept.username, expiresAt: kept.expiresAt };
 }
+
+/** One backup at a time per process: two would race for the same moment's name. */
+let backupRunning = false;
 
 export function adminMethods(): TeamMethod[] {
   return [
@@ -940,9 +957,30 @@ export function adminMethods(): TeamMethod[] {
     administered(TEAM_METHODS.adminAuditList, (params: unknown, context: MethodContext) => {
       const read = paramsObject(params);
       const cursor = optionalText(read, "cursor", CURSOR_LIMIT);
+      const username = optionalText(read, "username", USERNAME_LIMIT);
+      const action = optionalText(read, "action", 120);
+      const outcome = optionalText(read, "outcome", 16);
+      if (outcome !== undefined && outcome !== "allowed" && outcome !== "refused") {
+        throw new MethodError("bad-params", "outcome is allowed or refused");
+      }
+      const moment = (name: string): number | undefined => {
+        const value = read[name];
+        if (value === undefined || value === null) return undefined;
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+          throw new MethodError("bad-params", `${name} is a time in milliseconds`);
+        }
+        return value;
+      };
+      const since = moment("since");
+      const until = moment("until");
       const page = pageDecisions(context.options.database, {
         limit: boundedCount(read, "limit", DEFAULT_AUDIT_PAGE, MAXIMUM_AUDIT_PAGE),
         ...(cursor === undefined ? {} : { before: cursor }),
+        ...(username === undefined ? {} : { username }),
+        ...(action === undefined ? {} : { action }),
+        ...(outcome === undefined ? {} : { allowed: outcome === "allowed" }),
+        ...(since === undefined ? {} : { since }),
+        ...(until === undefined ? {} : { until }),
       });
       return {
         // Newest first, because the order somebody looks for a refusal in is
@@ -950,6 +988,74 @@ export function adminMethods(): TeamMethod[] {
         decisions: page.decisions,
         ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
       };
+    }),
+    administered(TEAM_METHODS.adminUsersResetLink, (params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      const user = namedAccount(context, paramsObject(params));
+      if (user.isServiceAccount || user.disabledAt !== undefined) {
+        throw new MethodError("refused", "a disabled or service account cannot be given a reset link");
+      }
+      const made = createPasswordReset(database, user.id, context.user.id);
+      const path = `/console/reset/${made.token}`;
+      const base = readPolicy(database, PUBLIC_URL).replace(/\/+$/, "");
+      recordDecision(database, {
+        username: context.user.username,
+        resource: `account:${user.username}`,
+        allowed: true,
+        detail: "password reset link made",
+      });
+      // The link is shown once, to the admin who asked; only its hash is kept.
+      return { path, ...(base === "" ? {} : { url: `${base}${path}` }), expiresAt: made.expiresAt };
+    }),
+    administered(TEAM_METHODS.adminUsersResetTwoFactor, (params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      const user = namedAccount(context, paramsObject(params));
+      removeTotp(database, user.id);
+      recordDecision(database, {
+        username: context.user.username,
+        resource: `account:${user.username}`,
+        allowed: true,
+        detail: "two-step sign-in reset by an admin",
+      });
+      return { user: adminUserBody(user) };
+    }),
+    administered(TEAM_METHODS.adminStorageList, (_params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      return {
+        buildLimitBytes: buildLimitBytes(database),
+        projects: listProjects(database).map((project) => ({
+          ...storageView(database, project.id),
+          name: project.name,
+          ...(project.title === undefined ? {} : { title: project.title }),
+          ...(project.archivedAt === undefined ? {} : { archivedAt: project.archivedAt }),
+        })),
+      };
+    }),
+    administered(TEAM_METHODS.adminBackupsList, async (_params: unknown, context: MethodContext) => ({
+      backups: await listBackups(context.options.root),
+      everyHours: policyNumber(context.options.database, BACKUP_EVERY_HOURS),
+      keep: policyNumber(context.options.database, BACKUP_KEEP),
+    })),
+    administered(TEAM_METHODS.adminBackupsCreate, async (_params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      const root = context.options.root;
+      if (backupRunning) {
+        throw new MethodError("conflict", "a backup is being taken already");
+      }
+      backupRunning = true;
+      try {
+        const made = await createBackup(root, database);
+        await pruneBackups(root, policyNumber(database, BACKUP_KEEP));
+        recordDecision(database, {
+          username: context.user.username,
+          resource: "server:backup",
+          allowed: true,
+          detail: `backup taken: ${made.name}`,
+        });
+        return { backup: made };
+      } finally {
+        backupRunning = false;
+      }
     }),
     administered(TEAM_METHODS.adminDocumentsStatus, (_params: unknown, context: MethodContext) => {
       const database = context.options.database;

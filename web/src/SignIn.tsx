@@ -66,22 +66,76 @@ function Frame({ look, children }: { look: TeamLook; children: ReactNode }) {
 export function SignIn({ look, hint, onSignedIn }: { look: TeamLook; hint?: string | undefined; onSignedIn: (account: ConsoleAccount) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
+  const [error, setError] = useState<string | undefined>(() => ssoFailure());
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError(undefined);
     try {
-      onSignedIn(await signIn(username.trim(), password));
+      onSignedIn(await signIn(username.trim(), password, code?.trim()));
     } catch (caught) {
+      if (caught instanceof SignInError && caught.secondFactor) {
+        // The password was right: keep it, and ask for the code. A wrong code says so.
+        setError(code === undefined ? undefined : caught.message);
+        setCode("");
+        return;
+      }
       setError(caught instanceof SignInError ? caught.message : String(caught));
       setPassword("");
+      setCode(undefined);
     } finally {
       setBusy(false);
     }
   };
+
+  if (code !== undefined) {
+    return (
+      <Frame look={look}>
+        <form className="gate-form" onSubmit={(event) => void submit(event)}>
+          <div className="gate-title">
+            <h1>{t("tfaSignInTitle")}</h1>
+            <p className="muted">{t("tfaSignInLead")}</p>
+          </div>
+          <label className="field">
+            <span>{t("tfaCode")}</span>
+            <input
+              className="code-input"
+              autoComplete="one-time-code"
+              inputMode="text"
+              spellCheck={false}
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              maxLength={32}
+              required
+              autoFocus
+            />
+          </label>
+          {error === undefined ? null : (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <button className="primary big" type="submit" disabled={busy}>
+            {busy ? t("signingIn") : t("tfaVerify")}
+          </button>
+          <button
+            className="btn btn-invisible"
+            type="button"
+            onClick={() => {
+              setCode(undefined);
+              setPassword("");
+              setError(undefined);
+            }}
+          >
+            {t("back")}
+          </button>
+        </form>
+      </Frame>
+    );
+  }
 
   return (
     <Frame look={look}>
@@ -113,6 +167,11 @@ export function SignIn({ look, hint, onSignedIn }: { look: TeamLook; hint?: stri
         <button className="primary big" type="submit" disabled={busy}>
           {busy ? t("signingIn") : t("signIn")}
         </button>
+        {look.sso?.oidc === undefined ? null : (
+          <a className="btn big sso-button" href="/api/console/v1/sso/oidc/start">
+            <Icon name="key" size={15} /> {t("ssoSignIn", { name: look.sso.oidc })}
+          </a>
+        )}
         <p className="muted small">{t("forgotPassword")}</p>
         <div className="gate-foot">
           <span className="mono">{window.location.host}</span>
@@ -121,6 +180,25 @@ export function SignIn({ look, hint, onSignedIn }: { look: TeamLook; hint?: stri
       </form>
     </Frame>
   );
+}
+
+/** What a single sign-on that came back refused says, from the `?sso=` the server sent it back with. */
+function ssoFailure(): string | undefined {
+  const reason = new URLSearchParams(window.location.search).get("sso");
+  if (reason === null) return undefined;
+  window.history.replaceState(null, "", window.location.pathname);
+  switch (reason) {
+    case "unknown":
+      return t("ssoUnknown");
+    case "disabled":
+      return t("ssoDisabled");
+    case "expired":
+      return t("ssoExpired");
+    case "unreachable":
+      return t("ssoUnreachable");
+    default:
+      return t("ssoFailed");
+  }
 }
 
 type Step = "code" | "account" | "look";

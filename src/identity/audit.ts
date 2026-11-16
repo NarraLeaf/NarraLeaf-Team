@@ -276,6 +276,16 @@ export interface DecisionQuery {
    * Opaque to whoever holds it, which passes back what it was given.
    */
   readonly before?: string;
+  /** Only this account's decisions. */
+  readonly username?: string;
+  /** Only decisions whose resource or detail contains this, case aside: a project, `refused`, `reset link`. */
+  readonly action?: string;
+  /** Only the allowed ones, or only the refused ones. */
+  readonly allowed?: boolean;
+  /** Milliseconds; from this moment, inclusive. */
+  readonly since?: number;
+  /** Milliseconds; before this moment. */
+  readonly until?: number;
 }
 
 export interface DecisionPage {
@@ -295,11 +305,32 @@ export interface DecisionPage {
  */
 export function pageDecisions(database: DatabaseSync, query: DecisionQuery): DecisionPage {
   const conditions: string[] = [];
-  const values: number[] = [];
+  const values: (number | string)[] = [];
   const cursor = parseDecisionCursor(query.before);
   if (cursor !== undefined) {
     conditions.push("(at < ? OR (at = ? AND id < ?))");
     values.push(cursor.at, cursor.at, cursor.id);
+  }
+  if (query.username !== undefined) {
+    conditions.push("username = ?");
+    values.push(query.username);
+  }
+  if (query.action !== undefined && query.action !== "") {
+    const like = `%${query.action.toLowerCase().replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+    conditions.push("(lower(resource) LIKE ? ESCAPE '\\' OR lower(detail) LIKE ? ESCAPE '\\')");
+    values.push(like, like);
+  }
+  if (query.allowed !== undefined) {
+    conditions.push("allowed = ?");
+    values.push(query.allowed ? 1 : 0);
+  }
+  if (query.since !== undefined) {
+    conditions.push("at >= ?");
+    values.push(query.since);
+  }
+  if (query.until !== undefined) {
+    conditions.push("at < ?");
+    values.push(query.until);
   }
   const rows = database
     .prepare(

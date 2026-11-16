@@ -53,6 +53,12 @@ import {
   userSetAdminOverProtocol,
 } from "./user.js";
 import { VERSION } from "./version.js";
+import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { BACKUP_DIR, createBackup, pruneBackups, restoreBackup } from "./backup.js";
+import { openMigratedDatabase } from "./identity/database.js";
+import { identityLayout } from "./identity/layout.js";
+import { BACKUP_KEEP, policyNumber } from "./identity/policy.js";
 
 /**
  * Somewhere to send a chunk of already-formatted output. `process.stdout.write`
@@ -91,6 +97,11 @@ Commands:
   up                        Install and run loreserver, and serve the
                             sign-in endpoint
   init <username>           Make the first account, on a server with none
+  backup                    Write a backup of the storage root (database,
+                            keys, repositories) to <root>/backups/, while the
+                            server runs or not
+  restore <file> [--force]  Put a backup back under --root. The server must be
+                            stopped; --force moves what is there aside first
   login <server> <username>
                             Sign in to a server and keep what reaching it takes,
                             so that this machine can administer it
@@ -339,6 +350,10 @@ export async function run(
         stdout,
         stderr,
       );
+    case "backup":
+      return await backupCommand(invocation.root, stdout, stderr);
+    case "restore":
+      return await restoreCommand(invocation.root, invocation.archive, invocation.force, stdout, stderr);
     case "init":
       return await init(
         {
@@ -569,5 +584,39 @@ export async function run(
       // so the line still identifies its source in a wall of build output.
       stderr(`nlteam: ${invocation.message}\n`);
       return 2;
+  }
+}
+
+async function backupCommand(root: string, stdout: WriteText, stderr: WriteText): Promise<number> {
+  const layout = identityLayout(root);
+  let database: DatabaseSync | undefined;
+  try {
+    database = await openMigratedDatabase(layout.databasePath);
+    const made = await createBackup(layout.root, database);
+    const removed = await pruneBackups(layout.root, policyNumber(database, BACKUP_KEEP));
+    stdout(`wrote ${join(layout.root, BACKUP_DIR, made.name)} (${made.size} bytes)\n`);
+    if (removed > 0) stdout(`removed ${removed} older backup${removed === 1 ? "" : "s"}\n`);
+    return 0;
+  } catch (failure) {
+    stderr(`nlteam: ${failure instanceof Error ? failure.message : String(failure)}\n`);
+    return 1;
+  } finally {
+    database?.close();
+  }
+}
+
+async function restoreCommand(root: string, archive: string, force: boolean, stdout: WriteText, stderr: WriteText): Promise<number> {
+  try {
+    const outcome = await restoreBackup(archive, identityLayout(root).root, force);
+    if (outcome.kind === "refused") {
+      stderr(`nlteam: ${outcome.reason}\n`);
+      return 1;
+    }
+    if (outcome.movedAside !== undefined) stdout(`moved what was there to ${outcome.movedAside}\n`);
+    stdout(`restored ${outcome.files} files (${outcome.bytes} bytes); start the server with up\n`);
+    return 0;
+  } catch (failure) {
+    stderr(`nlteam: ${failure instanceof Error ? failure.message : String(failure)}\n`);
+    return 1;
   }
 }

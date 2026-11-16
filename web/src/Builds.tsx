@@ -36,6 +36,7 @@ import { fetchJson, fetchTree } from "./files";
 import { Icon } from "./Icon";
 import { t, type Phrase } from "./i18n";
 import { loadProjectData, type ProjectData } from "./projectData";
+import { StorageMeter, type StorageRow } from "./Security";
 import type { TeamConnection } from "./socket";
 import {
   ActionMenu,
@@ -153,7 +154,31 @@ function sendBuild(
   return { done, cancel: () => request.abort() };
 }
 
-function BuildUpload({ projectId, first }: { projectId: string; first: boolean }) {
+interface ProjectStorage {
+  readonly storage: Pick<StorageRow, "usedBytes" | "buildBytes" | "attachmentBytes" | "quotaBytes" | "nearlyFull" | "full">;
+  readonly buildLimitBytes: number;
+}
+
+/** How much room this project has left, and the largest build it takes. Refreshed when its builds change. */
+function useProjectStorage(connection: TeamConnection, projectId: string, builds: readonly TeamBuild[] | undefined): ProjectStorage | undefined {
+  const [answer, setAnswer] = useState<ProjectStorage | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    void connection
+      .call<ProjectStorage>("projects.storage", { project: projectId })
+      .then((next) => {
+        if (live) setAnswer(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [connection, projectId, builds]);
+  return answer;
+}
+
+function BuildUpload({ projectId, first, storage }: { projectId: string; first: boolean; storage: ProjectStorage | undefined }) {
+  const limit = storage?.buildLimitBytes ?? BUILD_MAX_BYTES;
   const [file, setFile] = useState<File | undefined>(undefined);
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
@@ -169,8 +194,8 @@ function BuildUpload({ projectId, first }: { projectId: string; first: boolean }
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (file === undefined) return;
-    if (file.size > BUILD_MAX_BYTES) {
-      toastError(new Error(t("buildTooLarge", { size: formatBytes(BUILD_MAX_BYTES) })));
+    if (file.size > limit) {
+      toastError(new Error(t("buildTooLarge", { size: formatBytes(limit) })));
       return;
     }
     const sent = sendBuild(projectId, file, { name: name.trim() || file.name, note, platform, latest }, (fraction) =>
@@ -193,6 +218,17 @@ function BuildUpload({ projectId, first }: { projectId: string; first: boolean }
 
   return (
     <form className="card build-upload" onSubmit={(event) => void submit(event)}>
+      {storage?.storage.quotaBytes === undefined ? null : (
+        <div className="build-storage">
+          <span className="muted small">{t("storageUsed")}</span>
+          <StorageMeter row={storage.storage} />
+        </div>
+      )}
+      {storage?.storage.full === true ? (
+        <Flash tone="danger">{t("storageFull")}</Flash>
+      ) : storage?.storage.nearlyFull === true ? (
+        <Flash tone="warning">{t("storageNearlyFull")}</Flash>
+      ) : null}
       <label
         className={file === undefined ? "build-drop" : "build-drop picked"}
         onDragOver={(event) => event.preventDefault()}
@@ -204,7 +240,7 @@ function BuildUpload({ projectId, first }: { projectId: string; first: boolean }
         <Icon name="upload" size={20} />
         <span>
           {file === undefined ? t("buildPick") : `${file.name} · ${formatBytes(file.size)}`}
-          <span className="muted small"> {t("buildPickHint", { size: formatBytes(BUILD_MAX_BYTES) })}</span>
+          <span className="muted small"> {t("buildPickHint", { size: formatBytes(limit) })}</span>
         </span>
         <input ref={input} type="file" hidden onChange={(event) => pick(event.target.files?.[0])} />
       </label>
@@ -292,6 +328,7 @@ function EditBuild({ connection, build, onClose }: { connection: TeamConnection;
 export function BuildsPage(props: { connection: TeamConnection; open: boolean; projectId: string; role: TeamProjectRole | undefined; me: string; operator: boolean }) {
   const { connection, open, projectId, role, me, operator } = props;
   const builds = useBuilds(connection, open, projectId);
+  const storage = useProjectStorage(connection, projectId, builds);
   const [editing, setEditing] = useState<TeamBuild | undefined>(undefined);
   const mayUpload = role === "owner" || role === "editor";
   const ordered = useMemo(() => (builds === undefined ? undefined : [...builds].sort((a, b) => Number(b.latest) - Number(a.latest) || b.createdAt - a.createdAt)), [builds]);
@@ -328,7 +365,7 @@ export function BuildsPage(props: { connection: TeamConnection; open: boolean; p
   return (
     <div className="builds-page">
       <Subhead title={t("tabBuilds")}>{t("buildsLead")}</Subhead>
-      {mayUpload ? <BuildUpload projectId={projectId} first={builds !== undefined && builds.length === 0} /> : null}
+      {mayUpload ? <BuildUpload projectId={projectId} first={builds !== undefined && builds.length === 0} storage={storage} /> : null}
       {ordered === undefined ? (
         <p className="muted">{t("loading")}</p>
       ) : ordered.length === 0 ? (

@@ -93,6 +93,7 @@ const ROLE_MEANING: Record<TeamProjectRole, Phrase> = {
 interface ProjectSummary {
   readonly id: string;
   readonly name: string;
+  readonly title?: string;
   readonly description: string;
   readonly role?: TeamProjectRole;
   readonly history?: { readonly revisions?: number; readonly lastAt?: number; readonly lastBy?: string; readonly lastMessage?: string };
@@ -300,7 +301,7 @@ export function ProjectPage(props: {
         connection={connection}
         state={state}
         projectId={projectId}
-        projectName={project?.name ?? "…"}
+        projectName={project === undefined ? "…" : (project.title ?? project.name)}
         tab={tab}
         revision={revision}
         live={tree?.revision === "current"}
@@ -319,7 +320,9 @@ export function ProjectPage(props: {
             {t("projects")}
           </button>
           <span aria-hidden="true">/</span>
-          <h1 className="crumb-current">{project?.name ?? "…"}</h1>
+          <h1 className="crumb-current" title={project?.title === undefined ? undefined : project.name}>
+            {project === undefined ? "…" : (project.title ?? project.name)}
+          </h1>
           {project?.role === undefined ? null : (
             <span
               className={`role role-${project.role}`}

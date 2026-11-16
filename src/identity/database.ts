@@ -1081,6 +1081,59 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE todos ADD COLUMN milestone_id TEXT",
     ],
   },
+  {
+    version: 28,
+    description: "two-step sign-in, recovery codes, password-reset links, API tokens, archived projects and SSO subjects",
+    statements: [
+      // The TOTP secret is base32. enabled_at is null while it is being set up and not yet confirmed.
+      // last_step is the time step last accepted, so one code cannot be spent twice.
+      `CREATE TABLE user_totp (
+         user_id    TEXT    NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+         secret     TEXT    NOT NULL,
+         enabled_at INTEGER,
+         last_step  INTEGER NOT NULL DEFAULT 0
+       ) STRICT`,
+      // Only the SHA-256 of each code is kept: the codes are random enough that no slow hash is needed.
+      `CREATE TABLE recovery_codes (
+         user_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         code_hash TEXT    NOT NULL,
+         used_at   INTEGER,
+         PRIMARY KEY (user_id, code_hash)
+       ) STRICT`,
+      `CREATE TABLE password_resets (
+         token_hash TEXT    NOT NULL PRIMARY KEY,
+         user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         created_by TEXT,
+         created_at INTEGER NOT NULL,
+         expires_at INTEGER NOT NULL,
+         used_at    INTEGER
+       ) STRICT`,
+      // projects is a JSON array of project ids, or null for every project the account may reach.
+      `CREATE TABLE api_tokens (
+         id           TEXT    NOT NULL PRIMARY KEY,
+         user_id      TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         name         TEXT    NOT NULL,
+         token_hash   TEXT    NOT NULL UNIQUE,
+         projects     TEXT,
+         can_write    INTEGER NOT NULL DEFAULT 0,
+         expires_at   INTEGER,
+         created_at   INTEGER NOT NULL,
+         last_used_at INTEGER
+       ) STRICT`,
+      "CREATE INDEX api_tokens_by_user ON api_tokens (user_id)",
+      "ALTER TABLE projects ADD COLUMN archived_at INTEGER",
+      // What a project is called on screen. The name stays what it was, because it is the end
+      // of the repository address every clone holds.
+      "ALTER TABLE projects ADD COLUMN title TEXT",
+      // Which OIDC subject an account was matched to, so a later sign-in finds it by that and not by email.
+      `CREATE TABLE sso_subjects (
+         provider TEXT NOT NULL,
+         subject  TEXT NOT NULL,
+         user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         PRIMARY KEY (provider, subject)
+       ) STRICT`,
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

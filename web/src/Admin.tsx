@@ -10,7 +10,6 @@ import { DocumentsPanel } from "./Versions";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import type {
-  TeamAdminDecision,
   TeamAdminKey,
   TeamAdminSetting,
   TeamAdminStatus,
@@ -24,14 +23,15 @@ import { Face } from "./Collab";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
 import { AccessRequestsToDecide } from "./Access";
+import { AuditPanel, BackupsPanel, makeResetLink, StoragePanel } from "./Security";
 import type { ConnectionState, TeamConnection } from "./socket";
 
-export type AdminSection = "accounts" | "projects" | "requests" | "documents" | "brand" | "security" | "webhooks" | "server";
+export type AdminSection = "accounts" | "projects" | "requests" | "documents" | "storage" | "brand" | "security" | "webhooks" | "backups" | "server";
 /** The back office's sections, in groups: people, projects, the team itself. */
 const GROUPS: readonly (readonly AdminSection[])[] = [
   ["accounts", "requests"],
-  ["projects", "documents", "webhooks"],
-  ["brand", "security", "server"],
+  ["projects", "documents", "storage", "webhooks"],
+  ["brand", "security", "backups", "server"],
 ];
 export const ADMIN_SECTIONS: readonly AdminSection[] = GROUPS.flat();
 export const ADMIN_PHRASE: Record<AdminSection, Phrase> = {
@@ -42,6 +42,8 @@ export const ADMIN_PHRASE: Record<AdminSection, Phrase> = {
   security: "adminSecurity",
   webhooks: "adminWebhooks",
   documents: "docsTitle",
+  storage: "adminStorage",
+  backups: "adminBackups",
   server: "adminServer",
 };
 const SECTION_ICON: Record<AdminSection, IconName> = {
@@ -50,6 +52,8 @@ const SECTION_ICON: Record<AdminSection, IconName> = {
   projects: "folder",
   documents: "file",
   webhooks: "link",
+  storage: "server",
+  backups: "download",
   brand: "palette",
   security: "lock",
   server: "server",
@@ -62,6 +66,8 @@ const SECTION_LEAD: Partial<Record<AdminSection, Phrase>> = {
   brand: "adminBrandLead",
   security: "adminSecurityLead",
   server: "adminServerLead",
+  storage: "adminStorageLead",
+  backups: "adminBackupsLead",
 };
 
 /** Run one action: a toast when it worked, a notice in the page saying why when it did not. */
@@ -123,6 +129,8 @@ export function Admin({
           {open && section === "webhooks" ? <Webhooks connection={connection} /> : null}
           {open && section === "documents" ? <DocumentsPanel connection={connection} /> : null}
           {open && section === "server" ? <Server connection={connection} live={open} /> : null}
+          {open && section === "storage" ? <StoragePanel connection={connection} /> : null}
+          {open && section === "backups" ? <BackupsPanel connection={connection} /> : null}
         </div>
       </SettingsLayout>
     </section>
@@ -174,6 +182,21 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
                 (yes) => yes && act("admin.users.grantAdmin", user.username),
               ),
           },
+      {
+        label: t("resetLink"),
+        icon: "link",
+        description: t("resetLinkHint"),
+        disabledReason: user.disabled ? t("resetLinkDisabled") : undefined,
+        run: () => void makeResetLink(connection, user.username).catch((caught: unknown) => void run(() => Promise.reject(caught))),
+      },
+      {
+        label: t("resetTwoFactor"),
+        icon: "lock",
+        danger: true,
+        description: t("resetTwoFactorHint"),
+        run: () =>
+          askThen({ title: t("resetTwoFactorTitle", { name }), body: t("resetTwoFactorBody"), confirmLabel: t("resetTwoFactor") }, "admin.users.resetTwoFactor", user.username),
+      },
       {
         label: t("revokeTokens"),
         icon: "lock",
@@ -622,11 +645,9 @@ function SettingsTable({ connection, settings: given, reload }: { connection: Te
 
 function Security({ connection }: { connection: TeamConnection }) {
   const [keys, setKeys] = useState<readonly TeamAdminKey[]>([]);
-  const [decisions, setDecisions] = useState<readonly TeamAdminDecision[]>([]);
   const { run, view } = useAction();
   const load = useCallback(() => {
     void connection.call<{ keys: TeamAdminKey[] }>("admin.keys.list").then((answer) => setKeys(answer.keys));
-    void connection.call<{ decisions: TeamAdminDecision[] }>("admin.audit.list", { limit: 100 }).then((answer) => setDecisions(answer.decisions));
   }, [connection]);
   useEffect(() => load(), [load]);
   return (
@@ -660,21 +681,7 @@ function Security({ connection }: { connection: TeamConnection }) {
           </tbody>
         </table>
       </div>
-      <div className="card">
-        <strong>{t("auditLog")}</strong>
-        <table className="admin-table">
-          <tbody>
-            {decisions.map((decision) => (
-              <tr key={decision.id} className={decision.allowed ? "" : "refused-row"}>
-                <td className="muted small">{new Date(decision.at).toLocaleString()}</td>
-                <td>{decision.username}</td>
-                <td>{decision.resource}</td>
-                <td className="small">{decision.detail}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <AuditPanel connection={connection} />
     </div>
   );
 }

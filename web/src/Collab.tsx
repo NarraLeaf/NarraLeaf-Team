@@ -5,6 +5,7 @@
  * Everything is a call on the socket; what each viewer may see is decided by
  * the server (src/collab/), so nothing here hides anything.
  */
+import { ApiTokens, TwoFactorPanel } from "./Security";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import {
@@ -1132,6 +1133,8 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
         </form>
       </div>
       <NotificationSettings connection={connection} open={open} />
+      {open ? <TwoFactorPanel connection={connection} /> : null}
+      {open ? <ApiTokens connection={connection} /> : null}
       <div className="card settings-block">
         <h2>{t("devices")}</h2>
         {devices.length === 0 ? (

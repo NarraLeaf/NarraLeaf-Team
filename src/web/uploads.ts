@@ -37,8 +37,10 @@ import {
   findAttachment,
   findBuild,
   mayAttach,
+  buildLimitBytes,
   mayUploadBuild,
   projectStorageBytes,
+  storageRoom,
   recordAttachment,
   recordBuild,
 } from "../collab/builds.js";
@@ -53,7 +55,6 @@ import { maySeeProject } from "../projects/members.js";
 import { findProject } from "../projects/registry.js";
 import {
   ATTACHMENT_MAX_BYTES,
-  BUILD_MAX_BYTES,
   COMMENT_BODY_LIMIT,
   projectBuildsTopic,
   projectThreadsTopic,
@@ -71,6 +72,8 @@ const IMAGE_TYPES: Readonly<Record<string, string>> = { png: "image/png", jpg: "
 /** How many notes one link takes in an hour, so an open link is not a firehose. */
 const GUEST_NOTES_PER_HOUR = 30;
 const GUEST_NAME_LIMIT = 40;
+/** Said when a project is at its storage quota. */
+const FULL = "this project has used all the storage this server gives it; delete old builds or ask an admin for more";
 
 export type Publish = (topic: string, payload: unknown) => void;
 
@@ -165,9 +168,17 @@ async function uploadBuild(
     return;
   }
   const declared = Number(request.headers["content-length"] ?? "0");
-  if (declared > BUILD_MAX_BYTES) {
+  const limit = buildLimitBytes(service.database);
+  const room = storageRoom(service.database, projectId);
+  if (declared > limit) {
     response.setHeader("connection", "close");
     refuse(response, 413, "that build is larger than this server keeps");
+    request.resume();
+    return;
+  }
+  if (declared > room || room === 0) {
+    response.setHeader("connection", "close");
+    refuse(response, 507, FULL);
     request.resume();
     return;
   }
@@ -195,7 +206,7 @@ async function uploadBuild(
     for await (const chunk of request) {
       const buffer = chunk as Buffer;
       size += buffer.length;
-      if (size > BUILD_MAX_BYTES) {
+      if (size > limit || size > room) {
         tooLarge = true;
         request.resume();
         break;
@@ -208,7 +219,11 @@ async function uploadBuild(
   }
   if (tooLarge || size === 0) {
     await rm(partial, { force: true });
-    refuse(response, tooLarge ? 413 : 400, tooLarge ? "that build is larger than this server keeps" : "that build has nothing in it");
+    if (tooLarge && size > room && size <= limit) {
+      refuse(response, 507, FULL);
+    } else {
+      refuse(response, tooLarge ? 413 : 400, tooLarge ? "that build is larger than this server keeps" : "that build has nothing in it");
+    }
     return;
   }
   await rename(partial, join(dir, id));
@@ -302,6 +317,10 @@ async function uploadAttachment(service: TeamService, request: IncomingMessage, 
     response.setHeader("connection", "close");
     refuse(response, 413, "that picture is larger than this server keeps");
     request.resume();
+    return;
+  }
+  if (bytes.length > storageRoom(service.database, projectId)) {
+    refuse(response, 507, FULL);
     return;
   }
   const type = imageKind(bytes);
