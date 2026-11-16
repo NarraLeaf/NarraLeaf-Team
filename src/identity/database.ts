@@ -872,6 +872,61 @@ const MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX webhook_deliveries_due ON webhook_deliveries (next_at) WHERE next_at IS NOT NULL",
     ],
   },
+  {
+    version: 24,
+    description: "approvals, asset locks, saved filters, to-do labels and milestone dates",
+    statements: [
+      // Where a scene or an asset stands, one row per target. target is
+      // `scene:{id}` or `asset:{id}`, never read by the server. status is
+      // draft, pending, approved or changes.
+      `CREATE TABLE approvals (
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         target      TEXT    NOT NULL,
+         status      TEXT    NOT NULL,
+         by_id       TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         note        TEXT,
+         at          INTEGER NOT NULL,
+         PRIMARY KEY (project_id, target)
+       ) STRICT`,
+      // Every change to one, oldest first: who moved it where, and why.
+      `CREATE TABLE approval_history (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         target      TEXT    NOT NULL,
+         status      TEXT    NOT NULL,
+         by_id       TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         note        TEXT,
+         at          INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE INDEX approval_history_by_target ON approval_history (project_id, target, id)",
+      // Who holds an asset, until when. An edit that touches it from anybody
+      // else is refused while expires_at is in the future.
+      `CREATE TABLE asset_locks (
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         asset_id    TEXT    NOT NULL,
+         holder_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         note        TEXT,
+         at          INTEGER NOT NULL,
+         expires_at  INTEGER NOT NULL,
+         PRIMARY KEY (project_id, asset_id)
+       ) STRICT`,
+      // An account's named searches. query is the page's own JSON, never read here.
+      `CREATE TABLE saved_filters (
+         id          TEXT    PRIMARY KEY,
+         user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         scope       TEXT    NOT NULL,
+         name        TEXT    NOT NULL,
+         query       TEXT    NOT NULL,
+         created_at  INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE UNIQUE INDEX saved_filters_by_name ON saved_filters (user_id, scope, name)",
+      // A JSON array of short words, NULL for none.
+      "ALTER TABLE todos ADD COLUMN labels TEXT",
+      // When it is meant to be reached, and whether it waits on every scene being approved.
+      "ALTER TABLE milestones ADD COLUMN due_at INTEGER",
+      "ALTER TABLE milestones ADD COLUMN gate INTEGER NOT NULL DEFAULT 0",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

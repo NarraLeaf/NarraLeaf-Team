@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
-import { integerColumn, optionalTextColumn, textColumn, type Row } from "../identity/database.js";
+import { integerColumn, optionalIntegerColumn, optionalTextColumn, textColumn, type Row } from "../identity/database.js";
 import { findUserById, type UserRecord } from "../identity/users.js";
 import { maySeeProject, projectRole } from "../projects/members.js";
 import type { TeamMilestone } from "../team/protocol.js";
@@ -19,6 +19,8 @@ export interface MilestoneRecord {
   readonly note: string | undefined;
   readonly createdBy: string | undefined;
   readonly createdAt: number;
+  readonly dueAt: number | undefined;
+  readonly gate: boolean;
 }
 
 export class MilestoneRefusal extends Error {
@@ -39,6 +41,8 @@ function toRecord(row: Row): MilestoneRecord {
     note: optionalTextColumn(row, "note"),
     createdBy: optionalTextColumn(row, "created_by"),
     createdAt: integerColumn(row, "created_at"),
+    dueAt: optionalIntegerColumn(row, "due_at"),
+    gate: optionalIntegerColumn(row, "gate") === 1,
   };
 }
 
@@ -52,6 +56,8 @@ export function milestoneView(database: DatabaseSync, milestone: MilestoneRecord
     ...(milestone.note === undefined ? {} : { note: milestone.note }),
     ...(by === undefined ? {} : { createdBy: by }),
     createdAt: milestone.createdAt,
+    ...(milestone.dueAt === undefined ? {} : { dueAt: milestone.dueAt }),
+    ...(milestone.gate ? { gate: true } : {}),
   };
 }
 
@@ -69,7 +75,7 @@ export function listMilestones(database: DatabaseSync, viewer: UserRecord, proje
 export function createMilestone(
   database: DatabaseSync,
   actor: UserRecord,
-  input: { projectId: string; name: string; revision: string; note?: string },
+  input: { projectId: string; name: string; revision: string; note?: string; dueAt?: number; gate?: boolean },
   now = Date.now(),
 ): MilestoneRecord {
   const role = projectRole(database, input.projectId, actor);
@@ -79,8 +85,10 @@ export function createMilestone(
   if (taken !== undefined) throw new MilestoneRefusal("conflict", "this project already has a milestone of that name");
   const id = randomUUID();
   database
-    .prepare("INSERT INTO milestones (id, project_id, name, revision, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(id, input.projectId, input.name, input.revision, input.note ?? null, actor.id, now);
+    .prepare(
+      "INSERT INTO milestones (id, project_id, name, revision, note, created_by, created_at, due_at, gate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .run(id, input.projectId, input.name, input.revision, input.note ?? null, actor.id, now, input.dueAt ?? null, input.gate === true ? 1 : 0);
   return findMilestone(database, id) as MilestoneRecord;
 }
 
@@ -95,4 +103,36 @@ export function deleteMilestone(database: DatabaseSync, actor: UserRecord, id: s
   }
   database.prepare("DELETE FROM milestones WHERE id = ?").run(id);
   return current;
+}
+
+/** Change what a milestone says. Whoever named it, or an owner. A `null` clears a field. */
+export function updateMilestone(
+  database: DatabaseSync,
+  actor: UserRecord,
+  id: string,
+  input: { name?: string; revision?: string; note?: string | null; dueAt?: number | null; gate?: boolean },
+): MilestoneRecord {
+  const current = findMilestone(database, id);
+  if (current === undefined || !maySeeProject(database, current.projectId, actor)) {
+    throw new MilestoneRefusal("not-found", "there is no milestone of that id");
+  }
+  if (current.createdBy !== actor.id && projectRole(database, current.projectId, actor) !== "owner") {
+    throw new MilestoneRefusal("refused", "whoever named it, or an owner, may change it");
+  }
+  const name = input.name ?? current.name;
+  if (name !== current.name) {
+    const taken = database.prepare("SELECT 1 FROM milestones WHERE project_id = ? AND name = ? AND id != ?").get(current.projectId, name, id);
+    if (taken !== undefined) throw new MilestoneRefusal("conflict", "this project already has a milestone of that name");
+  }
+  database
+    .prepare("UPDATE milestones SET name = ?, revision = ?, note = ?, due_at = ?, gate = ? WHERE id = ?")
+    .run(
+      name,
+      input.revision ?? current.revision,
+      input.note === undefined ? (current.note ?? null) : input.note,
+      input.dueAt === undefined ? (current.dueAt ?? null) : input.dueAt,
+      (input.gate ?? current.gate) ? 1 : 0,
+      id,
+    );
+  return findMilestone(database, id) as MilestoneRecord;
 }

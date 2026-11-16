@@ -16,6 +16,7 @@ import {
   type TeamActivityDay,
   type TeamNotification,
   type TeamProfile,
+  type TeamSavedFilter,
   type TeamTodo,
   type TeamTodoKind,
   type TeamTodoStatus,
@@ -28,7 +29,7 @@ import { studioConnectLink } from "./studioLink";
 import { chooseLanguage, chosenLanguage, t, type Language, type Phrase } from "./i18n";
 import { chooseTheme, chosenTheme, type ThemeChoice } from "./theme";
 import { ago } from "./ui/time";
-import { Blankslate, Checkbox, Flash, SelectPanel, Skeleton, UnderlineNav } from "./ui";
+import { Blankslate, Checkbox, Flash, SelectPanel, Skeleton, toast, toastError, UnderlineNav } from "./ui";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -155,6 +156,8 @@ export const ACTIVITY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
   milestone: "aMilestone",
   edit: "aEdit",
   version: "aVersion",
+  approved: "aApproved",
+  "sent-back": "aSentBack",
 };
 
 export function Timeline({
@@ -253,7 +256,21 @@ export function Todos({
   const [kind, setKind] = useState<TeamTodoKind>("task");
   const [locale, setLocale] = useState("");
   const [only, setOnly] = useState<TeamTodoKind | "all">("all");
+  const [label, setLabel] = useState<string | undefined>(undefined);
+  const [mine, setMine] = useState(false);
+  const [labelling, setLabelling] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const labelsInUse = useMemo(() => [...new Set((todos ?? []).flatMap((todo) => todo.labels ?? []))].sort((a, b) => a.localeCompare(b)), [todos]);
+  const filter: TodoFilter = { kind: only, ...(label === undefined ? {} : { label }), ...(mine ? { mine } : {}) };
+  const applyFilter = (next: TodoFilter) => {
+    setOnly(next.kind);
+    setLabel(next.label);
+    setMine(next.mine === true);
+  };
+  const passes = (todo: TeamTodo) =>
+    (only === "all" || (todo.kind ?? "task") === only) &&
+    (label === undefined || (todo.labels ?? []).includes(label)) &&
+    (!mine || todo.assignee === account.username || (todo.assignee === undefined && todo.owner === account.username));
 
   const load = useCallback(() => {
     connection
@@ -336,6 +353,25 @@ export function Todos({
           ) : null}{" "}
           {todo.title}
         </div>
+        {(todo.labels ?? []).length > 0 || labelling === todo.id ? (
+          <div className="todo-labels">
+            {(todo.labels ?? []).map((name) => (
+              <button key={name} className={label === name ? "todo-label active" : "todo-label"} style={{ ["--label-hue" as string]: String(labelHue(name)) }} onClick={() => setLabel(label === name ? undefined : name)}>
+                {name}
+              </button>
+            ))}
+            {labelling === todo.id ? (
+              <LabelEditor
+                labels={todo.labels ?? []}
+                known={labelsInUse}
+                done={(labels) => {
+                  setLabelling(undefined);
+                  if (labels !== undefined) void update(todo, { labels });
+                }}
+              />
+            ) : null}
+          </div>
+        ) : null}
         {todo.kind === "asset" && todo.asset !== undefined ? (
           <div className="todo-answer">{assetPreview === undefined ? <span className="muted small">{t("todoAssetLinked")}</span> : assetPreview(todo.asset)}</div>
         ) : null}
@@ -370,6 +406,11 @@ export function Todos({
             })),
           ]}
         />
+      ) : null}
+      {project !== undefined && (todo.owner === account.username || todo.assignee === account.username) && labelling !== todo.id ? (
+        <button className="btn btn-invisible btn-icon btn-sm" aria-label={t("todoLabelsEdit")} title={t("todoLabelsEdit")} onClick={() => setLabelling(todo.id)}>
+          <Icon name="tag" size={14} />
+        </button>
       ) : null}
       {todo.owner === account.username ? (
         <button className="ghost small" onClick={() => void remove(todo)}>
@@ -420,16 +461,176 @@ export function Todos({
             </button>
           ))}
         </nav>
+        <div className="todo-filters">
+          <button className={mine ? "chip active" : "chip"} aria-pressed={mine} onClick={() => setMine(!mine)}>
+            {t("todoMine")}
+          </button>
+          {labelsInUse.map((name) => (
+            <button
+              key={name}
+              className={label === name ? "chip todo-label-chip active" : "chip todo-label-chip"}
+              style={{ ["--label-hue" as string]: String(labelHue(name)) }}
+              aria-pressed={label === name}
+              onClick={() => setLabel(label === name ? undefined : name)}
+            >
+              {name}
+            </button>
+          ))}
+          <SavedFilters connection={connection} open={open} scope={`todos:${project}`} current={filter} apply={applyFilter} />
+        </div>
         {only === "translation" || only === "voice" ? <LocaleProgress todos={todos.filter((todo) => todo.kind === only)} /> : null}
-        {(() => {
-          const shown = only === "all" ? todos : todos.filter((todo) => (todo.kind ?? "task") === only);
-          return (
-        <Board todos={shown} card={card} over={over} setOver={setOver} dropOn={dropOn} />
-          );
-        })()}
+        <Board todos={todos.filter(passes)} card={card} over={over} setOver={setOver} dropOn={dropOn} />
         </>
       )}
     </div>
+  );
+}
+
+interface TodoFilter {
+  readonly kind: TeamTodoKind | "all";
+  readonly label?: string;
+  readonly mine?: boolean;
+}
+
+function readFilter(query: string): TodoFilter | undefined {
+  try {
+    const value = JSON.parse(query) as Partial<TodoFilter>;
+    return {
+      kind: typeof value.kind === "string" ? (value.kind as TodoFilter["kind"]) : "all",
+      ...(typeof value.label === "string" ? { label: value.label } : {}),
+      ...(value.mine === true ? { mine: true } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** A steady colour for a label, from its name. */
+function labelHue(name: string): number {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) % 360;
+  return hash;
+}
+
+/** Labels typed with commas between them; the ones already in use offered below. */
+function LabelEditor({ labels, known, done }: { labels: readonly string[]; known: readonly string[]; done: (labels: string[] | undefined) => void }) {
+  const [text, setText] = useState(labels.join(", "));
+  const typed = text
+    .split(/[,，]/)
+    .map((one) => one.trim())
+    .filter((one) => one !== "");
+  const offered = known.filter((one) => !typed.includes(one)).slice(0, 8);
+  return (
+    <form
+      className="label-editor"
+      onSubmit={(event) => {
+        event.preventDefault();
+        done([...new Set(typed)]);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") done(undefined);
+      }}
+    >
+      <input autoFocus value={text} placeholder={t("todoLabelsHint")} maxLength={300} onChange={(event) => setText(event.target.value)} />
+      {offered.length > 0 ? (
+        <span className="label-offers">
+          {offered.map((one) => (
+            <button key={one} type="button" className="todo-label" style={{ ["--label-hue" as string]: String(labelHue(one)) }} onClick={() => setText([...typed, one].join(", "))}>
+              + {one}
+            </button>
+          ))}
+        </span>
+      ) : null}
+      <button className="btn btn-primary btn-sm" type="submit">
+        {t("save")}
+      </button>
+      <button className="btn btn-sm" type="button" onClick={() => done(undefined)}>
+        {t("cancel")}
+      </button>
+    </form>
+  );
+}
+
+/** Filters kept by name, for this person, and a way to keep the one on screen. */
+function SavedFilters({
+  connection,
+  open,
+  scope,
+  current,
+  apply,
+}: {
+  connection: TeamConnection;
+  open: boolean;
+  scope: string;
+  current: TodoFilter;
+  apply: (filter: TodoFilter) => void;
+}) {
+  const [filters, setFilters] = useState<readonly TeamSavedFilter[]>([]);
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+  const load = useCallback(() => {
+    connection
+      .call<{ filters: TeamSavedFilter[] }>("filters.list", { scope })
+      .then((answer) => setFilters(answer.filters))
+      .catch(() => setFilters([]));
+  }, [connection, scope]);
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
+  const query = JSON.stringify(current);
+  const plain = current.kind === "all" && current.label === undefined && current.mine !== true;
+  const save = (event: FormEvent) => {
+    event.preventDefault();
+    void connection
+      .call("filters.save", { scope, name: name.trim(), query })
+      .then(() => {
+        setNaming(false);
+        setName("");
+        toast(t("filterSaved"));
+        load();
+      })
+      .catch(toastError);
+  };
+  return (
+    <span className="saved-filters">
+      {filters.map((filter) => {
+        const read = readFilter(filter.query);
+        return (
+          <span key={filter.id} className={filter.query === query ? "chip saved-filter active" : "chip saved-filter"}>
+            <button className="saved-filter-name" onClick={() => read !== undefined && apply(read)}>
+              <Icon name="search" size={12} /> {filter.name}
+            </button>
+            <button
+              className="saved-filter-remove"
+              aria-label={t("remove")}
+              onClick={() =>
+                void connection
+                  .call("filters.delete", { filter: filter.id })
+                  .then(load)
+                  .catch(toastError)
+              }
+            >
+              ×
+            </button>
+          </span>
+        );
+      })}
+      {naming ? (
+        <form className="saved-filter-new" onSubmit={save}>
+          <input autoFocus value={name} placeholder={t("filterName")} maxLength={60} onChange={(event) => setName(event.target.value)} />
+          <button className="btn btn-primary btn-sm" type="submit" disabled={name.trim() === ""}>
+            {t("save")}
+          </button>
+          <button className="btn btn-sm" type="button" onClick={() => setNaming(false)}>
+            {t("cancel")}
+          </button>
+        </form>
+      ) : plain || filters.some((filter) => filter.query === query) ? null : (
+        <button className="btn btn-invisible btn-sm" onClick={() => setNaming(true)}>
+          + {t("filterSave")}
+        </button>
+      )}
+    </span>
   );
 }
 

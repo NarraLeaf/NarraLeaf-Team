@@ -46,6 +46,8 @@ import {
   ANCHOR_FIELD_LIMIT,
   projectTodosTopic,
   TEAM_METHODS,
+  TODO_LABEL_LENGTH,
+  TODO_LABELS_LIMIT,
   type TeamNotification,
   type TeamTodosEvent,
 } from "../protocol.js";
@@ -108,6 +110,19 @@ function announceNotifications(context: MethodContext, written: Map<string, Team
 }
 
 /** The parts of a to-do the parameters name, `null` meaning "clear it". */
+/** Labels as given, trimmed, without repeats; at most {@link TODO_LABELS_LIMIT} short ones. */
+function todoLabels(value: unknown): string[] {
+  if (value === null) return [];
+  if (!Array.isArray(value) || value.some((label) => typeof label !== "string")) {
+    throw new MethodError("bad-params", "labels has to be a list of words");
+  }
+  const labels = [...new Set((value as string[]).map((label) => label.trim()).filter((label) => label !== ""))];
+  if (labels.length > TODO_LABELS_LIMIT || labels.some((label) => label.length > TODO_LABEL_LENGTH)) {
+    throw new MethodError("bad-params", `a to-do carries at most ${TODO_LABELS_LIMIT} labels of ${TODO_LABEL_LENGTH} characters`);
+  }
+  return labels;
+}
+
 function todoInput(context: MethodContext, read: Record<string, unknown>): TodoInput {
   const input: { -readonly [K in keyof TodoInput]: TodoInput[K] } = {};
   if (read["title"] !== undefined) input.title = requiredText(read, "title", TITLE_LIMIT);
@@ -129,6 +144,7 @@ function todoInput(context: MethodContext, read: Record<string, unknown>): TodoI
   if (read["kind"] !== undefined) input.kind = oneOf(read, "kind", TODO_KINDS);
   if (read["locale"] !== undefined) input.locale = read["locale"] === null ? null : requiredText(read, "locale", 35);
   if (read["asset"] !== undefined) input.asset = read["asset"] === null ? null : requiredText(read, "asset", ANCHOR_FIELD_LIMIT);
+  if (read["labels"] !== undefined) input.labels = todoLabels(read["labels"]);
   if (read["anchor"] !== undefined) {
     if (read["anchor"] === null) {
       input.anchor = null;

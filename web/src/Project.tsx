@@ -48,7 +48,9 @@ import { AskForMore } from "./Access";
 import { CallError, type TeamConnection, type ConnectionState } from "./socket";
 import { ActionMenu, Blankslate, Checkbox, Flash, SelectPanel, toast } from "./ui";
 import { ChecksPage, ComparePage, placeText } from "./Insight";
-import { assetUses, useProjectData, type Place } from "./projectData";
+import { assetUses, eachScene, useProjectData, type Place } from "./projectData";
+import { ApprovalControl, assetTarget, LockControl, MilestonePlan, sceneTarget, useApprovals, useLocks } from "./Review";
+import type { TeamApproval, TeamAssetLock } from "@narraleaf/team-protocol";
 import { describeCommand, GROUP_COLOR, GROUP_ICON, type CommandLookups } from "./storyCommands";
 
 export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "compare" | "checks" | "settings";
@@ -140,6 +142,8 @@ export function ProjectPage(props: {
   const [tree, setTree] = useState<Tree | undefined>(undefined);
   const [treeError, setTreeError] = useState<string | undefined>(undefined);
   const open = state.kind === "open";
+  const approvals = useApprovals(connection, open, projectId);
+  const locks = useLocks(connection, open, projectId);
 
   useEffect(() => {
     if (!open) return;
@@ -258,13 +262,25 @@ export function ProjectPage(props: {
         connection={connection}
         open={open}
         canWrite={project?.role !== undefined && project.role !== "viewer"}
+        role={project?.role}
+        approvals={approvals}
         remember={remember}
       />
     ) : tab === "blueprints" ? (
       <Blueprints projectId={projectId} tree={tree} />
     ) : (
       <div className="wb-page">
-        <Assets projectId={projectId} tree={tree} openAt={openAt} />
+        <Assets
+          projectId={projectId}
+          tree={tree}
+          openAt={openAt}
+          connection={connection}
+          approvals={approvals}
+          locks={locks}
+          me={account.username}
+          role={project?.role}
+          isOperator={isOperator}
+        />
       </div>
     );
 
@@ -378,7 +394,7 @@ export function ProjectPage(props: {
       ) : tab === "reviews" ? (
         <Reviews connection={connection} open={open} projectId={projectId} me={account.username} role={project?.role} viewAt={(id) => go("story", id)} />
       ) : (
-        <Overview connection={connection} open={open} projectId={projectId} project={project} tree={tree} />
+        <Overview connection={connection} open={open} projectId={projectId} project={project} tree={tree} approvals={approvals} me={account.username} />
       )}
     </section>
   );
@@ -549,8 +565,13 @@ function Overview(props: {
   projectId: string;
   project: ProjectSummary | undefined;
   tree: Tree | undefined;
+  approvals: ReadonlyMap<string, TeamApproval>;
+  me: string;
 }) {
-  const { connection, open, projectId, project, tree } = props;
+  const { connection, open, projectId, project, tree, approvals, me } = props;
+  const milestones = useMilestones(connection, open, projectId);
+  const data = useProjectData(projectId, milestones.some((milestone) => milestone.gate === true) ? tree : undefined);
+  const sceneIds = useMemo(() => (data === undefined || data instanceof Error ? undefined : eachScene(data).map((one) => one.scene.id)), [data]);
   const [members, setMembers] = useState<readonly Member[] | undefined>(undefined);
   useEffect(() => {
     if (!open) return;
@@ -592,6 +613,16 @@ function Overview(props: {
         </section>
         <aside className="overview-side">
           <OnlineNow connection={connection} open={open} projectId={projectId} />
+          <MilestonePlan
+            connection={connection}
+            open={open}
+            projectId={projectId}
+            milestones={milestones}
+            sceneIds={sceneIds}
+            approvals={approvals}
+            role={project?.role}
+            me={me}
+          />
           <section>
             <h2>{t("members")}</h2>
             <ul className="member-list">
@@ -620,6 +651,8 @@ function Story({
   connection,
   open,
   canWrite,
+  role,
+  approvals,
   remember,
 }: {
   projectId: string;
@@ -627,6 +660,8 @@ function Story({
   connection: TeamConnection;
   open: boolean;
   canWrite: boolean;
+  role: TeamProjectRole | undefined;
+  approvals: ReadonlyMap<string, TeamApproval>;
   remember: (label: string) => void;
 }) {
   const [selected, setSelected] = useState<{ blockId: string; excerpt: string } | undefined>(undefined);
@@ -760,6 +795,8 @@ function Story({
       projectId={projectId}
       revision={tree.revision === "current" ? (tree.base ?? "") : tree.revision}
       canWrite={canWrite}
+      role={role}
+      approvals={approvals}
       selected={selected}
       setSelected={setSelected}
     />
@@ -784,6 +821,8 @@ function StoryBody(props: {
   projectId: string;
   revision: string;
   canWrite: boolean;
+  role: TeamProjectRole | undefined;
+  approvals: ReadonlyMap<string, TeamApproval>;
   selected: { blockId: string; excerpt: string } | undefined;
   setSelected: (value: { blockId: string; excerpt: string } | undefined) => void;
   remember: (label: string) => void;
@@ -794,7 +833,7 @@ function StoryBody(props: {
     if (sceneName !== undefined) remember(sceneName);
   }, [sceneName, remember]);
   const { library, storyId, setStoryId, document, sceneId, setSceneId, scene, showCommands, setShowCommands, characters } = props;
-  const { connection, open, projectId, revision, canWrite, selected, setSelected, lookups, fileUrl } = props;
+  const { connection, open, projectId, revision, canWrite, selected, setSelected, lookups, fileUrl, role, approvals } = props;
   const faceOf = (character: CharacterView | undefined) => fileUrl(character?.avatarPath);
   /** Who speaks in a scene, in the order they first do, for the outline. */
   const castOf = (id: string): CharacterView[] => {
@@ -818,6 +857,7 @@ function StoryBody(props: {
         }))}
         active={id === sceneId}
         onClick={() => setSceneId(id)}
+        approval={approvals.get(sceneTarget(id))?.status}
       />
     ) : null;
   const background = scene?.backgroundAssetId === undefined ? undefined : lookups.assets.get(scene.backgroundAssetId);
@@ -888,6 +928,16 @@ function StoryBody(props: {
                 {document?.supported ? (
                   <span className="muted small">{document.chapters.find((chapter) => chapter.sceneIds.includes(sceneId ?? ""))?.name ?? ""}</span>
                 ) : null}
+                {sceneId === undefined ? null : (
+                  <ApprovalControl
+                    connection={connection}
+                    projectId={projectId}
+                    target={sceneTarget(sceneId)}
+                    approval={approvals.get(sceneTarget(sceneId))}
+                    role={role}
+                    label={scene.name}
+                  />
+                )}
               </div>
               <div className="segmented" role="group" aria-label={t("showCommands")}>
                 <button aria-pressed={showCommands} className={showCommands ? "active" : undefined} onClick={() => setShowCommands(() => true)}>
@@ -1001,7 +1051,9 @@ function SceneLink({
   cast = [],
   icon = "file",
   countLabel = "lineCount",
+  approval,
 }: {
+  approval?: string | undefined;
   name: string;
   active: boolean;
   onClick: () => void;
@@ -1014,6 +1066,7 @@ function SceneLink({
     <button className={active ? "outline-link active" : "outline-link"} aria-current={active ? "true" : undefined} onClick={onClick}>
       <Icon name={icon} size={14} />
       <span className="outline-name">{name}</span>
+      {approval === undefined || approval === "draft" ? null : <span className={`outline-approval approval-dot-${approval}`} aria-hidden="true" />}
       {cast.length === 0 ? null : (
         <span className="outline-cast" title={cast.map((one) => one.name).join("、")}>
           {cast.slice(0, 3).map((one) => (
@@ -1631,7 +1684,18 @@ function useAssetRegister(projectId: string, tree: Tree | undefined): readonly A
   return assets;
 }
 
-function Assets({ projectId, tree, openAt }: { projectId: string; tree: Tree; openAt: (place: Place, revision: string) => void }) {
+function Assets(props: {
+  projectId: string;
+  tree: Tree;
+  openAt: (place: Place, revision: string) => void;
+  connection: TeamConnection;
+  approvals: ReadonlyMap<string, TeamApproval>;
+  locks: ReadonlyMap<string, TeamAssetLock>;
+  me: string;
+  role: TeamProjectRole | undefined;
+  isOperator: boolean;
+}) {
+  const { projectId, tree, openAt, connection, approvals, locks, me, role, isOperator } = props;
   const assets = useAssetRegister(projectId, tree);
   const [type, setType] = useState<string>("");
   const present = useMemo(() => new Set(tree.files.map((file) => file.path)), [tree]);
@@ -1690,6 +1754,26 @@ function Assets({ projectId, tree, openAt }: { projectId: string; tree: Tree; op
               <div className="muted small">
                 {assetKindName(asset.type)}
                 {asset.tags.length > 0 ? ` · ${asset.tags.join(", ")}` : ""}
+              </div>
+              <div className="asset-state">
+                <ApprovalControl
+                  connection={connection}
+                  projectId={projectId}
+                  target={assetTarget(asset.id)}
+                  approval={approvals.get(assetTarget(asset.id))}
+                  role={role}
+                  label={asset.name}
+                />
+                <LockControl
+                  connection={connection}
+                  projectId={projectId}
+                  assetId={asset.id}
+                  assetName={asset.name}
+                  lock={locks.get(asset.id)}
+                  me={me}
+                  role={role}
+                  isOperator={isOperator}
+                />
               </div>
               {uses === undefined ? null : (uses.get(asset.id)?.length ?? 0) === 0 ? (
                 <div className="asset-uses muted small">{t("assetUnused")}</div>

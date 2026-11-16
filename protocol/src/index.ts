@@ -145,6 +145,10 @@ export const TEAM_CAPABILITIES = [
   "reviews",
   /** Names on revisions — "Demo 1" — that a project can be read at. */
   "milestones",
+  /** Where each scene and asset stands: draft, waiting, approved or sent back. Team state only. */
+  "approvals",
+  /** An asset held by one person for a while; edits to it from anybody else are refused. */
+  "locks",
   /**
    * A project's own channel: messages its members write to each other, kept,
    * in order, and read back a page at a time - unlike a live session's chat,
@@ -403,6 +407,16 @@ export function projectMilestonesTopic(projectId: string): string {
   return `project:${projectId}/milestones`;
 }
 
+/** Where one project's scenes and assets stand. Its members may hold it. */
+export function projectApprovalsTopic(projectId: string): string {
+  return `project:${projectId}/approvals`;
+}
+
+/** Who holds which of one project's assets. Its members may hold it. */
+export function projectLocksTopic(projectId: string): string {
+  return `project:${projectId}/locks`;
+}
+
 /** One project's applied edits, saved versions and restores. Its members may hold it. */
 export function projectDocTopic(projectId: string): string {
   return `project:${projectId}/doc`;
@@ -504,6 +518,12 @@ export const ANCHOR_FIELD_LIMIT = 512;
 export const COMMENT_BODY_LIMIT = 8 * 1024;
 /** The longest message a project's channel keeps, in UTF-8 bytes. */
 export const CHAT_BODY_LIMIT = 4 * 1024;
+/** How many labels one to-do may carry, and how long each may be. */
+export const TODO_LABELS_LIMIT = 8;
+export const TODO_LABEL_LENGTH = 32;
+/** How long an asset may be held at most, and for how long when nobody says. */
+export const ASSET_LOCK_MAX_MINUTES = 7 * 24 * 60;
+export const ASSET_LOCK_DEFAULT_MINUTES = 4 * 60;
 
 /**
  * The most a suggestion may carry.
@@ -1020,7 +1040,11 @@ export type TeamActivityKind =
    */
   | "edit"
   /** A history version saved by hand, or an older one restored. Automatic snapshots are not news. */
-  | "version";
+  | "version"
+  /** A scene or asset approved; `ref` is its target. */
+  | "approved"
+  /** A scene or asset sent back with a reason (the summary); `ref` is its target. */
+  | "sent-back";
 
 /**
  * One thing that happened, for a timeline.
@@ -1083,6 +1107,8 @@ export interface TeamTodo {
   readonly locale?: string;
   /** The asset that answered an `asset` to-do, by id. Never read by the server. */
   readonly asset?: string;
+  /** Short words to sort it by — "bug", "art", "chapter 2". At most {@link TODO_LABELS_LIMIT}. */
+  readonly labels?: readonly string[];
   readonly dueAt?: number;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -1169,11 +1195,70 @@ export interface TeamMilestone {
   readonly note?: string;
   readonly createdBy?: string;
   readonly createdAt: number;
+  /** When it is meant to be reached. */
+  readonly dueAt?: number;
+  /**
+   * It is not reached until every scene is approved. The server keeps the flag; the console
+   * works the share out from the project's files and the approvals.
+   */
+  readonly gate?: boolean;
 }
 
 export type TeamMilestonesEvent =
   | { readonly kind: "milestone-set"; readonly milestone: TeamMilestone }
   | { readonly kind: "milestone-removed"; readonly milestone: string };
+
+/* ------------------------------------------------------------ approvals */
+
+/**
+ * `draft` is still being made; `pending` waits on a reviewer; `approved` and `changes` are the
+ * verdict. Only Team's own record: the project's files are never touched by it.
+ */
+export const TEAM_APPROVAL_STATUSES = ["draft", "pending", "approved", "changes"] as const;
+export type TeamApprovalStatus = (typeof TEAM_APPROVAL_STATUSES)[number];
+
+/** Where one scene or asset stands. `target` is `scene:{id}` or `asset:{id}`, never parsed. */
+export interface TeamApproval {
+  readonly project: string;
+  readonly target: string;
+  readonly status: TeamApprovalStatus;
+  /** Who moved it there, by username. */
+  readonly by?: string;
+  /** Why — required when it is sent back. */
+  readonly note?: string;
+  readonly at: number;
+}
+
+export type TeamApprovalsEvent = { readonly kind: "approval-set"; readonly approval: TeamApproval };
+
+/* ---------------------------------------------------------------- locks */
+
+/** Somebody holds one asset of a project until `expiresAt`. */
+export interface TeamAssetLock {
+  readonly project: string;
+  readonly asset: string;
+  /** Who holds it, by username. */
+  readonly holder: string;
+  readonly note?: string;
+  readonly at: number;
+  readonly expiresAt: number;
+}
+
+export type TeamLocksEvent =
+  | { readonly kind: "lock-set"; readonly lock: TeamAssetLock }
+  | { readonly kind: "lock-released"; readonly project: string; readonly asset: string };
+
+/* -------------------------------------------------------- saved filters */
+
+/** A search one account named and keeps. `query` is the page's own JSON, never read by the server. */
+export interface TeamSavedFilter {
+  readonly id: string;
+  /** Which list it filters: `todos`, `threads`, ... */
+  readonly scope: string;
+  readonly name: string;
+  readonly query: string;
+  readonly createdAt: number;
+}
 
 /* ------------------------------------------------------------- webhooks */
 
@@ -1897,6 +1982,26 @@ export const TEAM_METHODS = {
   milestonesCreate: "milestones.create",
   /** Take a name off. Owners, or whoever put it there. */
   milestonesDelete: "milestones.delete",
+  /** Change a milestone's name, note, due date or gate. Owners, or whoever put it there. */
+  milestonesUpdate: "milestones.update",
+  /** Where every scene and asset of a project stands. */
+  approvalsList: "approvals.list",
+  /** Move one: editors to draft or pending, reviewers and owners to approved or changes. */
+  approvalsSet: "approvals.set",
+  /** Every change one scene or asset went through, oldest first. */
+  approvalsHistory: "approvals.history",
+  /** Who holds which of a project's assets, and until when. */
+  assetsLocks: "assets.locks",
+  /** Hold an asset for a while. Editors who may change assets. */
+  assetsLock: "assets.lock",
+  /** Let go of one: its holder, a project owner, or an operator. */
+  assetsUnlock: "assets.unlock",
+  /** The caller's saved filters, optionally for one list. */
+  filtersList: "filters.list",
+  /** Save a filter under a name, replacing one of that name. */
+  filtersSave: "filters.save",
+  /** Forget a saved filter. */
+  filtersDelete: "filters.delete",
   /** The webhooks this server posts to. Operators. */
   adminWebhooksList: "admin.webhooks.list",
   /** Add one; answers its signing secret, once. Operators. */
@@ -2071,6 +2176,8 @@ export const CONTRACT = {
     projectTodos: "project:{project}/todos",
     projectReviews: "project:{project}/reviews",
     projectMilestones: "project:{project}/milestones",
+    projectApprovals: "project:{project}/approvals",
+    projectLocks: "project:{project}/locks",
     projectChat: "project:{project}/chat",
     projectDoc: "project:{project}/doc",
     accountTodos: "account:{account}/todos",

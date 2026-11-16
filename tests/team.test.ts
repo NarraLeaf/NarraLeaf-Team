@@ -468,10 +468,12 @@ describe("opening a session", () => {
     expect([...(client.hello?.capabilities ?? [])].sort()).toEqual([
       "activity",
       "admin",
+      "approvals",
       "chat",
       "clients",
       "comments",
       "live",
+      "locks",
       "milestones",
       "notifications",
       "oauth",
@@ -5310,6 +5312,30 @@ describe("a team project's documents, with this server as their authority", () =
     // Given the story back, the same edit goes through.
     setProjectMember(team.database, { projectId: project, userId: bobId, role: "editor", areas: ["story", "characters"] });
     expect(await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"))).toMatchObject({ kind: "effect" });
+  });
+
+  it("refuses an edit to an asset somebody else holds, and lets it through once they let go", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    const editAsset = {
+      project,
+      clientId: "client-asset",
+      document: { doc: "assets", assetType: "image" },
+      op: { op: "update-asset", assetId: "bg-1", patch: { name: "Harbour" } },
+    };
+    expect(await ada.value(TEAM_METHODS.assetsLock, { project, asset: "bg-1", minutes: 30 })).toMatchObject({ lock: { holder: "ada" } });
+    expect(await bob.value(TEAM_METHODS.assetsLocks, { project })).toMatchObject({ locks: [{ asset: "bg-1", holder: "ada" }] });
+    const refused = await bob.call(TEAM_METHODS.docIntent, editAsset);
+    expect(refused.code).toBe("refused");
+    expect(refused.message).toMatch(/holds asset bg-1/);
+    // A story edit touches no asset, and goes through.
+    expect(await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"))).toMatchObject({ kind: "effect" });
+    // The holder is not kept out of their own asset.
+    expect((await ada.call(TEAM_METHODS.docIntent, { ...editAsset, clientId: "client-asset-ada" })).message ?? "").not.toMatch(/holds asset/);
+
+    expect((await bob.call(TEAM_METHODS.assetsUnlock, { project, asset: "bg-1" })).code).toBe("refused");
+    await ada.value(TEAM_METHODS.assetsUnlock, { project, asset: "bg-1" });
+    expect((await bob.call(TEAM_METHODS.docIntent, { ...editAsset, clientId: "client-asset-2" })).message ?? "").not.toMatch(/holds asset/);
   });
 
   it("saves a version on request, with the label an author gave it", async () => {

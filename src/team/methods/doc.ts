@@ -26,7 +26,10 @@ import {
   isTeamFilePath,
   projectAreaOf,
   projectDocumentPath,
+  projectOpClaimKeys,
 } from "../../../studio-kernel/vendor/kernel.js";
+import { lockedAgainst } from "../../collab/locks.js";
+import { findUserById } from "../../identity/users.js";
 import {
   boundedCount,
   MethodError,
@@ -245,6 +248,7 @@ export function docMethods(): TeamMethod[] {
           throw new MethodError("bad-params", "basedOn has to be a whole number, zero or more");
         }
         requireArea(context, projectId, areaOfEdit(document as DocIntent["document"]));
+        requireUnlocked(context, projectId, document as DocIntent["document"], op as DocIntent["op"]);
         const intent: DocIntent = {
           clientId,
           accountId: context.user.id,
@@ -373,6 +377,28 @@ function editableProject(context: MethodContext, read: Record<string, unknown>):
 }
 
 /** The area an edit reaches, or undefined when its address names no file (the authority refuses it anyway). */
+/** The assets an edit writes, by id, as the kernel names its claims (`asset:{id}`). */
+function assetsOfEdit(document: DocIntent["document"], op: DocIntent["op"]): string[] {
+  try {
+    return projectOpClaimKeys(document, op)
+      .filter((key) => key.startsWith("asset:"))
+      .map((key) => key.slice("asset:".length));
+  } catch {
+    return [];
+  }
+}
+
+/** Refuse an edit to an asset somebody else holds. */
+function requireUnlocked(context: MethodContext, projectId: string, document: DocIntent["document"], op: DocIntent["op"]): void {
+  const held = lockedAgainst(context.options.database, projectId, context.user.id, assetsOfEdit(document, op));
+  if (held === undefined) return;
+  const holder = findUserById(context.options.database, held.holderId);
+  throw new MethodError(
+    "refused",
+    `${holder?.displayName || holder?.username || "somebody"} holds asset ${held.assetId} until ${new Date(held.expiresAt).toISOString()}`,
+  );
+}
+
 function areaOfEdit(document: DocIntent["document"]): ProjectArea | undefined {
   try {
     return projectAreaOf(projectDocumentPath(document));

@@ -41,6 +41,7 @@ export interface TodoRecord {
   readonly kind: TeamTodoKind;
   readonly locale: string | undefined;
   readonly asset: string | undefined;
+  readonly labels: readonly string[];
 }
 
 /** Why a to-do could not be written, in the caller's terms. */
@@ -51,6 +52,20 @@ export class TodoRefusal extends Error {
   ) {
     super(message);
   }
+}
+
+function readLabels(text: string | undefined): readonly string[] {
+  if (text === undefined) return [];
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed.filter((label): label is string => typeof label === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLabels(labels: readonly string[] | undefined): string | null {
+  return labels === undefined || labels.length === 0 ? null : JSON.stringify(labels);
 }
 
 function toRecord(row: Row): TodoRecord {
@@ -78,6 +93,7 @@ function toRecord(row: Row): TodoRecord {
     kind: (TODO_KINDS as readonly string[]).includes(textColumn(row, "kind")) ? (textColumn(row, "kind") as TeamTodoKind) : "task",
     locale: optionalTextColumn(row, "locale"),
     asset: optionalTextColumn(row, "asset"),
+    labels: readLabels(optionalTextColumn(row, "labels")),
   };
 }
 
@@ -128,6 +144,7 @@ export function todoView(database: DatabaseSync, todo: TodoRecord): TeamTodo {
     kind: todo.kind,
     ...(todo.locale === undefined ? {} : { locale: todo.locale }),
     ...(todo.asset === undefined ? {} : { asset: todo.asset }),
+    ...(todo.labels.length === 0 ? {} : { labels: todo.labels }),
   };
 }
 
@@ -146,6 +163,7 @@ export interface TodoInput {
   readonly locale?: string | null;
   /** The asset that answered an asset request. */
   readonly asset?: string | null;
+  readonly labels?: readonly string[];
 }
 
 /** Check that a to-do's shape holds together, for the caller making it so. */
@@ -203,8 +221,8 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
   database
     .prepare(
       `INSERT INTO todos (id, owner_id, assignee_id, project_id, document, element, revision, title, body, status,
-                          visibility, due_at, created_at, updated_at, done_at, kind, locale, asset)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                          visibility, due_at, created_at, updated_at, done_at, kind, locale, asset, labels)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -225,6 +243,7 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
       kind,
       locale ?? null,
       input.asset ?? null,
+      writeLabels(input.labels),
     );
   return findTodo(database, id) as TodoRecord;
 }
@@ -272,7 +291,7 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
     .prepare(
       `UPDATE todos SET assignee_id = ?, project_id = ?, document = ?, element = ?, revision = ?, title = ?, body = ?,
                         status = ?, visibility = ?, due_at = ?, updated_at = ?, done_at = ?, done_revision = ?,
-                        kind = ?, locale = ?, asset = ? WHERE id = ?`,
+                        kind = ?, locale = ?, asset = ?, labels = ? WHERE id = ?`,
     )
     .run(
       next.assigneeId ?? null,
@@ -291,6 +310,7 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
       kind,
       locale ?? null,
       input.asset === undefined ? (current.asset ?? null) : input.asset,
+      input.labels === undefined ? writeLabels(current.labels) : writeLabels(input.labels),
       id,
     );
   return findTodo(database, id) as TodoRecord;

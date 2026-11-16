@@ -59,7 +59,7 @@ const FILTER_PHRASE: Record<Filter, Phrase> = {
 };
 const FILTER_KINDS: Record<Exclude<Filter, "all">, readonly TeamActivity["kind"][]> = {
   story: ["edit", "commit"],
-  comments: ["thread", "comment", "resolve", "review"],
+  comments: ["thread", "comment", "resolve", "review", "approved", "sent-back"],
   todos: ["todo-created", "todo-done"],
   versions: ["version", "milestone"],
 };
@@ -83,6 +83,8 @@ const FEED_TAB: Record<TeamActivity["kind"], string> = {
   review: "reviews",
   "todo-created": "todos",
   "todo-done": "todos",
+  approved: "story",
+  "sent-back": "story",
 };
 
 /** The phrase for several of one kind of thing in a row, where one phrase cannot count them. */
@@ -97,6 +99,8 @@ const MANY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
   milestone: "aMilestoneMany",
   edit: "aEdit",
   version: "aVersionMany",
+  approved: "aApprovedMany",
+  "sent-back": "aSentBackMany",
 };
 
 /** Someone in the feed: a team account where one matches, else the name a git commit carries. */
