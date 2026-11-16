@@ -61,7 +61,7 @@ const FILTER_KINDS: Record<Exclude<Filter, "all">, readonly TeamActivity["kind"]
   story: ["edit", "commit"],
   comments: ["thread", "comment", "resolve", "review", "approved", "sent-back"],
   todos: ["todo-created", "todo-done"],
-  versions: ["version", "milestone"],
+  versions: ["version", "milestone", "build"],
 };
 
 /** A stable colour for a project, so its tag is the same on every page. */
@@ -85,6 +85,7 @@ const FEED_TAB: Record<TeamActivity["kind"], string> = {
   "todo-done": "todos",
   approved: "story",
   "sent-back": "story",
+  build: "builds",
 };
 
 /** The phrase for several of one kind of thing in a row, where one phrase cannot count them. */
@@ -101,6 +102,7 @@ const MANY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
   version: "aVersionMany",
   approved: "aApprovedMany",
   "sent-back": "aSentBackMany",
+  build: "aBuildMany",
 };
 
 /** Someone in the feed: a team account where one matches, else the name a git commit carries. */

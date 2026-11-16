@@ -15,6 +15,7 @@ import { confirmAction, Flash, SelectPanel, SettingsLayout, Subhead, toast } fro
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
 import { AccessRequestsToDecide } from "./Access";
+import { ShareLinks } from "./Builds";
 import type { TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -78,15 +79,16 @@ interface ProjectSettingsView {
 }
 
 /** A project's settings, for its owners: description, who may save and restore versions, webhooks. */
-export type ProjectSettingsSection = "general" | "members" | "requests" | "webhooks";
-export const PROJECT_SETTINGS_SECTIONS: readonly ProjectSettingsSection[] = ["general", "members", "requests", "webhooks"];
+export type ProjectSettingsSection = "general" | "members" | "requests" | "shares" | "webhooks";
+export const PROJECT_SETTINGS_SECTIONS: readonly ProjectSettingsSection[] = ["general", "members", "requests", "shares", "webhooks"];
 const SETTINGS_PHRASE: Record<ProjectSettingsSection, Phrase> = {
   general: "settingsGeneral",
   members: "membersTitle",
   requests: "reqTitle",
+  shares: "shareTitle",
   webhooks: "projectWebhooks",
 };
-const SETTINGS_ICON: Record<ProjectSettingsSection, IconName> = { general: "gear", members: "people", requests: "key", webhooks: "link" };
+const SETTINGS_ICON: Record<ProjectSettingsSection, IconName> = { general: "gear", members: "people", requests: "key", shares: "external", webhooks: "link" };
 
 /** A project's settings, each part on a page of its own, the way a repository's are. */
 export function ProjectSettings(props: {
@@ -106,7 +108,7 @@ export function ProjectSettings(props: {
       onSelect={go}
       groups={[
         (["general", "members"] as const).map(item),
-        (["requests", "webhooks"] as const).map(item),
+        (["requests", "shares", "webhooks"] as const).map(item),
       ]}
     >
       {section === "general" ? <GeneralSettings connection={connection} project={project} changed={changed} removed={removed} /> : null}
@@ -120,6 +122,12 @@ export function ProjectSettings(props: {
         <div>
           <Subhead title={t("reqTitle")}>{t("projectRequestsLead")}</Subhead>
           <AccessRequestsToDecide connection={connection} project={project.id} />
+        </div>
+      ) : null}
+      {section === "shares" ? (
+        <div>
+          <Subhead title={t("shareTitle")}>{t("shareLead")}</Subhead>
+          <ShareLinks connection={connection} projectId={project.id} />
         </div>
       ) : null}
       {section === "webhooks" ? (

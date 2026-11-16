@@ -47,15 +47,16 @@ import { OnlineNow, ProjectSettings, type ProjectSettingsSection } from "./Versi
 import { AskForMore } from "./Access";
 import { CallError, type TeamConnection, type ConnectionState } from "./socket";
 import { ActionMenu, Blankslate, Checkbox, Flash, SelectPanel, toast } from "./ui";
+import { BuildsPage } from "./Builds";
 import { ChecksPage, ComparePage, placeText } from "./Insight";
 import { assetUses, eachScene, useProjectData, type Place } from "./projectData";
 import { ApprovalControl, assetTarget, LockControl, MilestonePlan, sceneTarget, useApprovals, useLocks } from "./Review";
 import type { TeamApproval, TeamAssetLock } from "@narraleaf/team-protocol";
 import { describeCommand, GROUP_COLOR, GROUP_ICON, type CommandLookups } from "./storyCommands";
 
-export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "compare" | "checks" | "settings";
+export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "compare" | "checks" | "builds" | "settings";
 /** The project's own page: what it is, how it got here, and what is waiting on review. */
-const TABS: readonly ProjectTab[] = ["overview", "history", "reviews", "checks"];
+const TABS: readonly ProjectTab[] = ["overview", "history", "reviews", "checks", "builds"];
 /** Shown to the project's owners only. */
 const OWNER_TABS: readonly ProjectTab[] = [...TABS, "settings"];
 /** What opens in the workbench, Studio's layout, read-only. */
@@ -71,6 +72,7 @@ const TAB_PHRASE: Record<ProjectTab, Phrase> = {
   history: "tabHistory",
   compare: "tabCompare",
   checks: "tabChecks",
+  builds: "tabBuilds",
   settings: "tabSettings",
 };
 
@@ -381,6 +383,8 @@ export function ProjectPage(props: {
         <ComparePage connection={connection} open={open} projectId={projectId} range={range} setRange={compare} openAt={openAt} />
       ) : tab === "checks" ? (
         <ChecksPage projectId={projectId} tree={tree} openAt={openAt} />
+      ) : tab === "builds" ? (
+        <BuildsPage connection={connection} open={open} projectId={projectId} role={project?.role} me={account.username} operator={account.operator} />
       ) : tab === "history" ? (
         <History
           connection={connection}

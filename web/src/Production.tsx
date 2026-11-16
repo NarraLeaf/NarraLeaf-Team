@@ -362,6 +362,7 @@ const EVENT_PHRASE: Record<TeamWebhookEvent, Phrase> = {
   "review-answered": "whReviewAnswered",
   milestone: "whMilestone",
   version: "whVersion",
+  build: "whBuild",
 };
 
 /**

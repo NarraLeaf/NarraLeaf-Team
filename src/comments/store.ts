@@ -696,6 +696,9 @@ export function countComments(database: DatabaseSync, threadId: string): number 
 export function nameResolver(database: DatabaseSync): (userId: string) => string | undefined {
   const known = new Map<string, string | undefined>();
   return (userId) => {
+    // A note left through a share link is signed by the name the guest gave, kept as
+    // `guest:{name}` and shown as that: there is no account behind it to look up.
+    if (userId.startsWith("guest:")) return userId;
     if (!known.has(userId)) {
       known.set(userId, findUserById(database, userId)?.username);
     }

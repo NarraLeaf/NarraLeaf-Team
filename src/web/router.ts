@@ -40,6 +40,7 @@ import { serveConsole, type ConsoleOptions } from "./console.js";
 import { serveOAuth } from "./oauth.js";
 import { serveProjectFiles } from "./files.js";
 import { serveAvatars } from "./avatars.js";
+import { serveUploads } from "./uploads.js";
 import { serveStudioApi } from "./studio.js";
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -122,6 +123,10 @@ export function webHandler(
     }
 
     if (options.console !== undefined && serveAvatars(options.console.service, request, response, path)) {
+      return;
+    }
+
+    if (options.console !== undefined && serveUploads(options.console.service, options.console.publish, request, response, path)) {
       return;
     }
 

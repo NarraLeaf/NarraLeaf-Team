@@ -927,6 +927,57 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE milestones ADD COLUMN gate INTEGER NOT NULL DEFAULT 0",
     ],
   },
+  {
+    version: 25,
+    description: "playable builds, pictures beside comments, and read-only share links",
+    statements: [
+      // A build's bytes live at builds/{project}/{id} under the storage root;
+      // this row is what is known about them. The server never opens the file.
+      `CREATE TABLE builds (
+         id           TEXT    PRIMARY KEY,
+         project_id   TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         name         TEXT    NOT NULL,
+         note         TEXT,
+         revision     TEXT,
+         platform     TEXT,
+         file         TEXT    NOT NULL,
+         size         INTEGER NOT NULL,
+         sha256       TEXT    NOT NULL,
+         uploaded_by  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at   INTEGER NOT NULL,
+         latest       INTEGER NOT NULL DEFAULT 0
+       ) STRICT`,
+      "CREATE INDEX builds_by_project ON builds (project_id, created_at)",
+      // A picture at attachments/{project}/{id}.{type}, checked by its magic number.
+      `CREATE TABLE attachments (
+         id           TEXT    PRIMARY KEY,
+         project_id   TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         type         TEXT    NOT NULL,
+         size         INTEGER NOT NULL,
+         uploaded_by  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at   INTEGER NOT NULL
+       ) STRICT`,
+      // Only the token's SHA-256 is kept; the token is shown once. paths is a
+      // JSON array the console worked out, NULL for the whole project.
+      `CREATE TABLE share_links (
+         id             TEXT    PRIMARY KEY,
+         project_id     TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         token_hash     TEXT    NOT NULL UNIQUE,
+         label          TEXT    NOT NULL,
+         scope          TEXT    NOT NULL,
+         revision       TEXT    NOT NULL,
+         paths          TEXT,
+         allow_comments INTEGER NOT NULL DEFAULT 0,
+         expires_at     INTEGER,
+         revoked_at     INTEGER,
+         created_by     TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at     INTEGER NOT NULL,
+         last_used_at   INTEGER,
+         uses           INTEGER NOT NULL DEFAULT 0
+       ) STRICT`,
+      "CREATE INDEX share_links_by_project ON share_links (project_id, created_at)",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

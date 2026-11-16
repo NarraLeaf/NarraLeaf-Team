@@ -469,6 +469,8 @@ describe("opening a session", () => {
       "activity",
       "admin",
       "approvals",
+      "attachments",
+      "builds",
       "chat",
       "clients",
       "comments",
@@ -481,6 +483,7 @@ describe("opening a session", () => {
       "password-sign-in",
       "reviews",
       "session",
+      "shares",
       "todos",
       "webhooks",
     ]);

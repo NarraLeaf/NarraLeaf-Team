@@ -80,6 +80,8 @@ export interface ConsoleOptions {
    * than serving nothing.
    */
   readonly root?: string;
+  /** Tell the sessions on a topic something happened: an upload, a guest's note. Absent in a test that does not listen. */
+  readonly publish?: (topic: string, payload: unknown) => void;
 }
 
 /**

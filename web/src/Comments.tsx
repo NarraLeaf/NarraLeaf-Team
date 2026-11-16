@@ -6,14 +6,14 @@
  * `revision` is the revision the comment was written against. A thread written
  * here shows in Studio's scene editor on the same line, and the reverse.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import { projectThreadsTopic, type TeamComment, type TeamThread } from "@narraleaf/team-protocol";
 
 import { Face } from "./Collab";
 import { Icon } from "./Icon";
 import { t } from "./i18n";
-import { RelativeTime, toastError } from "./ui";
+import { RelativeTime, toast, toastError } from "./ui";
 import type { TeamConnection } from "./socket";
 
 /** The anchor document for one story. */
@@ -59,6 +59,63 @@ export function useStoryThreads(connection: TeamConnection, open: boolean, proje
     return connection.subscribe(projectThreadsTopic(projectId), () => void load());
   }, [open, load, connection, projectId]);
   return threads;
+}
+
+/** Whether a name is a guest's, who wrote through a share link. */
+export function isGuest(author: string | undefined): boolean {
+  return author?.startsWith("guest:") === true;
+}
+
+/** Who wrote something, as a reader sees it: a guest's own name with a mark saying they are one. */
+export function authorName(author: string | undefined): string {
+  if (author === undefined) return t("someoneGone");
+  return isGuest(author) ? t("guestAuthor", { name: author.slice("guest:".length) }) : author;
+}
+
+const ATTACHMENT_TOKEN = /\[\[attachment:([0-9a-f-]{36})\]\]/g;
+
+/** A comment's text, with the pictures put beside it shown where they were put. */
+export function CommentBody({ projectId, body }: { projectId: string; body: string }) {
+  const parts: ReactNode[] = [];
+  let at = 0;
+  for (const match of body.matchAll(ATTACHMENT_TOKEN)) {
+    if (match.index > at) parts.push(body.slice(at, match.index));
+    const url = `/api/team/v1/projects/${encodeURIComponent(projectId)}/attachments/${match[1]}`;
+    parts.push(
+      <a key={`${match.index}`} className="note-picture" href={url} target="_blank" rel="noreferrer">
+        <img src={url} alt={t("attachmentAlt")} loading="lazy" />
+      </a>,
+    );
+    at = match.index + match[0].length;
+  }
+  if (at < body.length) parts.push(body.slice(at));
+  return <>{parts}</>;
+}
+
+/** Put a pasted or dropped picture beside a comment; answers the token to write into its text. */
+export async function uploadAttachment(projectId: string, file: Blob): Promise<string> {
+  const response = await fetch(`/api/team/v1/projects/${encodeURIComponent(projectId)}/attachments`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "content-type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  const answer = (await response.json().catch(() => ({}))) as { attachment?: { id: string }; error?: string };
+  if (!response.ok || answer.attachment === undefined) throw new Error(answer.error ?? response.statusText);
+  return `[[attachment:${answer.attachment.id}]]`;
+}
+
+/** A textarea's paste handler that sends any picture in the clipboard and writes its token in. */
+export function pastePicture(projectId: string, setBody: (update: (body: string) => string) => void) {
+  return (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const file = [...event.clipboardData.files].find((item) => item.type.startsWith("image/"));
+    if (file === undefined) return;
+    event.preventDefault();
+    toast(t("attachmentUploading"));
+    uploadAttachment(projectId, file)
+      .then((token) => setBody((body) => `${body}${body === "" || body.endsWith("\n") ? "" : "\n"}${token}\n`))
+      .catch(toastError);
+  };
 }
 
 /** ⌘/Ctrl+Enter sends, the way GitHub's comment boxes do. */
@@ -122,14 +179,14 @@ function ThreadView({ connection, thread, canWrite }: { connection: TeamConnecti
       {comments === undefined ? <p className="muted small">{t("loading")}</p> : null}
       {(comments ?? []).map((comment) => (
         <article key={comment.id} className="note">
-          <Face name={comment.author ?? "?"} user={comment.author} size={24} />
+          <Face name={authorName(comment.author)} {...(isGuest(comment.author) ? {} : { user: comment.author })} size={24} />
           <div className="note-main">
             <div className="note-head">
-              <strong>{comment.author ?? t("someoneGone")}</strong>
+              <strong>{authorName(comment.author)}</strong>
               <RelativeTime at={comment.createdAt} />
             </div>
             <div className={comment.deletedAt === undefined ? "note-text" : "note-text muted"}>
-              {comment.deletedAt === undefined ? comment.body : t("commentDeleted")}
+              {comment.deletedAt === undefined ? <CommentBody projectId={thread.project} body={comment.body} /> : t("commentDeleted")}
             </div>
           </div>
         </article>
@@ -142,6 +199,7 @@ function ThreadView({ connection, thread, canWrite }: { connection: TeamConnecti
             rows={body === "" ? 1 : 3}
             onChange={(event) => setBody(event.target.value)}
             onKeyDown={sendOnModEnter}
+            onPaste={pastePicture(thread.project, setBody)}
             maxLength={16000}
           />
           {body.trim() === "" ? null : (
@@ -244,6 +302,7 @@ export function LineComments(props: {
               rows={3}
               onChange={(event) => setBody(event.target.value)}
               onKeyDown={sendOnModEnter}
+              onPaste={pastePicture(projectId, setBody)}
               maxLength={16000}
             />
             <div className="note-reply-actions">

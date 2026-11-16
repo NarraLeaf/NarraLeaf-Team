@@ -19,7 +19,9 @@ export interface Tree {
   readonly total: number;
 }
 
+/** A project's files, or - as `share:<token>` - what a share link shows of one. */
 function base(project: string): string {
+  if (project.startsWith("share:")) return `/api/team/v1/share/${encodeURIComponent(project.slice("share:".length))}`;
   return `/api/team/v1/projects/${encodeURIComponent(project)}`;
 }
 

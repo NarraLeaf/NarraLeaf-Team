@@ -20,6 +20,7 @@ import { JoinProjects } from "./Access";
 import { Icon } from "./Icon";
 import { teamName, teamNameUnset, useLook, type TeamLook } from "./look";
 import { Setup, SignIn, TeamMark } from "./SignIn";
+import { ShareView } from "./Builds";
 import { projectHue, TeamHome } from "./TeamHome";
 import { Palette, type PaletteItem } from "./Palette";
 import { Blankslate, Flash, UiHost } from "./ui";
@@ -43,7 +44,7 @@ type Route =
       readonly range?: string;
     };
 
-const PROJECT_TABS: readonly ProjectTab[] = ["overview", "story", "blueprints", "assets", "todos", "reviews", "history", "compare", "checks", "settings"];
+const PROJECT_TABS: readonly ProjectTab[] = ["overview", "story", "blueprints", "assets", "todos", "reviews", "history", "compare", "checks", "builds", "settings"];
 const PLAIN_SCREENS = ["projects", "me", "todos", "notifications", "settings"] as const;
 
 /** The screen an address names; one that names nothing is "not found", never quietly the home page. */
@@ -117,6 +118,9 @@ function AppBody() {
     return <div className="splash" aria-busy="true" />;
   }
   const path = window.location.pathname;
+  // A share link is for somebody with no account: it opens whether or not anybody is signed in.
+  const shared = /^\/console\/s\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
+  if (shared !== null) return <ShareView token={shared[1]!} />;
   const standalone = path.startsWith("/console/oauth/authorize") ? "authorize" : path.startsWith("/console/device") ? "device" : undefined;
   if (session === null) {
     if (look.setupNeeded) {

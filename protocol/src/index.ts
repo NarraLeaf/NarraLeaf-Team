@@ -150,6 +150,15 @@ export const TEAM_CAPABILITIES = [
   /** An asset held by one person for a while; edits to it from anybody else are refused. */
   "locks",
   /**
+   * Playable builds kept beside a project: uploaded to `PUT /api/team/v1/projects/{project}/builds`
+   * and downloaded from it, never unpacked or run by the server.
+   */
+  "builds",
+  /** Pictures put beside a comment (a playtest screenshot), at `/api/team/v1/projects/{project}/attachments`. */
+  "attachments",
+  /** Read-only links for somebody without an account, opened at `/console/s/{token}`. */
+  "shares",
+  /**
    * A project's own channel: messages its members write to each other, kept,
    * in order, and read back a page at a time - unlike a live session's chat,
    * which only the people in the room at that moment ever see.
@@ -412,6 +421,11 @@ export function projectApprovalsTopic(projectId: string): string {
   return `project:${projectId}/approvals`;
 }
 
+/** One project's playable builds. Its members may hold it. */
+export function projectBuildsTopic(projectId: string): string {
+  return `project:${projectId}/builds`;
+}
+
 /** Who holds which of one project's assets. Its members may hold it. */
 export function projectLocksTopic(projectId: string): string {
   return `project:${projectId}/locks`;
@@ -524,6 +538,11 @@ export const TODO_LABEL_LENGTH = 32;
 /** How long an asset may be held at most, and for how long when nobody says. */
 export const ASSET_LOCK_MAX_MINUTES = 7 * 24 * 60;
 export const ASSET_LOCK_DEFAULT_MINUTES = 4 * 60;
+/** The largest build one upload may be, and the largest picture beside a comment. */
+export const BUILD_MAX_BYTES = 1024 * 1024 * 1024;
+export const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+/** How long a share link may last at most, in days. */
+export const SHARE_LINK_MAX_DAYS = 365;
 
 /**
  * The most a suggestion may carry.
@@ -1044,7 +1063,9 @@ export type TeamActivityKind =
   /** A scene or asset approved; `ref` is its target. */
   | "approved"
   /** A scene or asset sent back with a reason (the summary); `ref` is its target. */
-  | "sent-back";
+  | "sent-back"
+  /** A playable build uploaded; `ref` is `build:{id}`, the summary its name. */
+  | "build";
 
 /**
  * One thing that happened, for a timeline.
@@ -1248,6 +1269,79 @@ export type TeamLocksEvent =
   | { readonly kind: "lock-set"; readonly lock: TeamAssetLock }
   | { readonly kind: "lock-released"; readonly project: string; readonly asset: string };
 
+/* --------------------------------------------------------------- builds */
+
+/** One playable build kept beside a project. The bytes are at `/api/team/v1/projects/{project}/builds/{id}`. */
+export interface TeamBuild {
+  readonly id: string;
+  readonly project: string;
+  readonly name: string;
+  readonly note?: string;
+  /** The revision it was built from, where the uploader said. */
+  readonly revision?: string;
+  /** What it runs on, as the uploader put it: `windows`, `mac`, `web`... Never interpreted. */
+  readonly platform?: string;
+  /** The file's own name, for the download. */
+  readonly file: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly uploadedBy?: string;
+  readonly createdAt: number;
+  /** The one build of the project to play now. At most one is. */
+  readonly latest: boolean;
+}
+
+export type TeamBuildsEvent =
+  | { readonly kind: "build-set"; readonly build: TeamBuild }
+  | { readonly kind: "build-removed"; readonly build: string };
+
+/** A picture kept beside a comment. Its bytes are at `/api/team/v1/projects/{project}/attachments/{id}`. */
+export interface TeamAttachment {
+  readonly id: string;
+  readonly project: string;
+  readonly type: "png" | "jpg" | "webp";
+  readonly size: number;
+  readonly uploadedBy?: string;
+  readonly createdAt: number;
+}
+
+/* ---------------------------------------------------------- share links */
+
+/**
+ * A read-only link for somebody without an account.
+ *
+ * `paths` is the files it shows, worked out by the console when the link was made (a story's
+ * document and what it needs), or absent for the whole project; the server holds the visitor to
+ * that list without reading any of the files. The token itself is shown once, at creation.
+ */
+export interface TeamShareLink {
+  readonly id: string;
+  readonly project: string;
+  readonly label: string;
+  /** What the console calls it: `project`, or `story:{id}`. Never read by the server. */
+  readonly scope: string;
+  readonly revision: string;
+  readonly paths?: readonly string[];
+  readonly allowComments: boolean;
+  readonly expiresAt?: number;
+  readonly revokedAt?: number;
+  readonly createdBy?: string;
+  readonly createdAt: number;
+  readonly lastUsedAt?: number;
+  readonly uses: number;
+}
+
+/** What a visitor's page is told about the link it was opened from. */
+export interface TeamShareView {
+  readonly project: string;
+  readonly projectName: string;
+  readonly label: string;
+  readonly scope: string;
+  readonly revision: string;
+  readonly allowComments: boolean;
+  readonly expiresAt?: number;
+}
+
 /* -------------------------------------------------------- saved filters */
 
 /** A search one account named and keeps. `query` is the page's own JSON, never read by the server. */
@@ -1273,6 +1367,8 @@ export const TEAM_WEBHOOK_EVENTS = [
   "milestone",
   /** A history version saved by hand, or restored. Automatic snapshots post nothing. */
   "version",
+  /** A playable build uploaded. */
+  "build",
 ] as const;
 export type TeamWebhookEvent = (typeof TEAM_WEBHOOK_EVENTS)[number];
 
@@ -2002,6 +2098,20 @@ export const TEAM_METHODS = {
   filtersSave: "filters.save",
   /** Forget a saved filter. */
   filtersDelete: "filters.delete",
+  /** A project's builds, newest first. Uploading one is an HTTP PUT, not a call. */
+  buildsList: "builds.list",
+  /** Change a build's name, note, revision, platform, or make it the one to play. Editors and owners. */
+  buildsUpdate: "builds.update",
+  /** Remove a build and its file. Owners, or whoever uploaded it. */
+  buildsDelete: "builds.delete",
+  /** Take a picture away from beside its comment. Whoever put it there, or an owner. */
+  attachmentsDelete: "attachments.delete",
+  /** A project's share links. Owners. */
+  sharesList: "shares.list",
+  /** Make a share link; the answer carries the token, which is never shown again. Owners. */
+  sharesCreate: "shares.create",
+  /** Stop a share link working. Owners. */
+  sharesRevoke: "shares.revoke",
   /** The webhooks this server posts to. Operators. */
   adminWebhooksList: "admin.webhooks.list",
   /** Add one; answers its signing secret, once. Operators. */
@@ -2178,6 +2288,7 @@ export const CONTRACT = {
     projectMilestones: "project:{project}/milestones",
     projectApprovals: "project:{project}/approvals",
     projectLocks: "project:{project}/locks",
+    projectBuilds: "project:{project}/builds",
     projectChat: "project:{project}/chat",
     projectDoc: "project:{project}/doc",
     accountTodos: "account:{account}/todos",

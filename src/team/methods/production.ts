@@ -18,6 +18,8 @@ import {
 import { APPROVAL_STATUSES, ApprovalRefusal, approvalHistory, approvalView, listApprovals, setApproval } from "../../collab/approvals.js";
 import { listLocks, lockAsset, LockRefusal, lockView, unlockAsset } from "../../collab/locks.js";
 import { deleteFilter, FilterRefusal, listFilters, saveFilter } from "../../collab/filters.js";
+import { BuildRefusal, buildView, deleteAttachment, deleteBuild, listBuilds, updateBuild } from "../../collab/builds.js";
+import { createShare, listShares, revokeShare, ShareRefusal, shareLinkView } from "../../collab/shares.js";
 import { createReview, findReview, listReviews, REVIEW_STATUSES, ReviewRefusal, reviewView, updateReview } from "../../collab/reviews.js";
 import {
   createWebhook,
@@ -54,6 +56,7 @@ import {
   accountNotificationsTopic,
   ANCHOR_FIELD_LIMIT,
   projectApprovalsTopic,
+  projectBuildsTopic,
   projectChatTopic,
   projectLocksTopic,
   projectMilestonesTopic,
@@ -62,6 +65,7 @@ import {
   TEAM_WEBHOOK_EVENTS,
   TEAM_WEBHOOK_FORMATS,
   type TeamApprovalsEvent,
+  type TeamBuildsEvent,
   type TeamChatEvent,
   type TeamLocksEvent,
   type TeamMilestonesEvent,
@@ -98,7 +102,9 @@ function refused(error: unknown): never {
     error instanceof ChatRefusal ||
     error instanceof ApprovalRefusal ||
     error instanceof LockRefusal ||
-    error instanceof FilterRefusal
+    error instanceof FilterRefusal ||
+    error instanceof BuildRefusal ||
+    error instanceof ShareRefusal
   ) {
     throw new MethodError(error.code, error.message);
   }
@@ -119,6 +125,12 @@ function optionalTime(read: Record<string, unknown>, key: string): number | null
     throw new MethodError("bad-params", `${key} has to be a time in milliseconds, or null`);
   }
   return value;
+}
+
+/** A short text, `null` to clear it, or absent to leave it. */
+function nullableText(read: Record<string, unknown>, key: string, limit: number): string | null | undefined {
+  if (read[key] === null) return null;
+  return optionalText(read, key, limit);
 }
 
 function requireOperator(context: MethodContext): void {
@@ -489,6 +501,134 @@ export function productionMethods(): TeamMethod[] {
           context.publish(projectLocksTopic(projectId), { kind: "lock-released", project: projectId, asset } satisfies TeamLocksEvent);
         }
         return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.buildsList,
+      capability: "builds",
+      handle: (params: unknown, context: MethodContext) => {
+        const projectId = projectRef(context, requiredText(paramsObject(params), "project", ID_LIMIT));
+        try {
+          return { builds: listBuilds(context.options.database, context.user, projectId).map((build) => buildView(context.options.database, build)) };
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.buildsUpdate,
+      capability: "builds",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const id = requiredText(read, "build", ID_LIMIT);
+        const name = optionalText(read, "name", NAME_LIMIT + 40);
+        const note = nullableText(read, "note", 2000);
+        const revision = nullableText(read, "revision", ID_LIMIT);
+        const platform = nullableText(read, "platform", 40);
+        if (typeof revision === "string" && !/^[A-Za-z0-9]{8,128}$/.test(revision)) throw new MethodError("bad-params", "that is not a revision id");
+        let changed;
+        try {
+          changed = updateBuild(context.options.database, context.user, id, {
+            ...(name === undefined ? {} : { name }),
+            ...(note === undefined ? {} : { note }),
+            ...(revision === undefined ? {} : { revision }),
+            ...(platform === undefined ? {} : { platform }),
+            ...(read["latest"] === undefined ? {} : { latest: flag(read, "latest", false) }),
+          });
+        } catch (error) {
+          refused(error);
+        }
+        const topic = projectBuildsTopic(changed.build.projectId);
+        if (changed.unset !== undefined) {
+          context.publish(topic, { kind: "build-set", build: buildView(context.options.database, changed.unset) } satisfies TeamBuildsEvent);
+        }
+        const view = buildView(context.options.database, changed.build);
+        context.publish(topic, { kind: "build-set", build: view } satisfies TeamBuildsEvent);
+        return { build: view };
+      },
+    },
+    {
+      name: TEAM_METHODS.buildsDelete,
+      capability: "builds",
+      handle: async (params: unknown, context: MethodContext) => {
+        const id = requiredText(paramsObject(params), "build", ID_LIMIT);
+        let gone;
+        try {
+          gone = await deleteBuild(context.options.database, context.options.root, context.user, id);
+        } catch (error) {
+          refused(error);
+        }
+        context.publish(projectBuildsTopic(gone.projectId), { kind: "build-removed", build: gone.id } satisfies TeamBuildsEvent);
+        return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.attachmentsDelete,
+      capability: "attachments",
+      handle: async (params: unknown, context: MethodContext) => {
+        const id = requiredText(paramsObject(params), "attachment", ID_LIMIT);
+        try {
+          await deleteAttachment(context.options.database, context.options.root, context.user, id);
+        } catch (error) {
+          refused(error);
+        }
+        return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.sharesList,
+      capability: "shares",
+      handle: (params: unknown, context: MethodContext) => {
+        const projectId = projectRef(context, requiredText(paramsObject(params), "project", ID_LIMIT));
+        try {
+          return { shares: listShares(context.options.database, context.user, projectId).map((share) => shareLinkView(context.options.database, share)) };
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.sharesCreate,
+      capability: "shares",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
+        const label = optionalText(read, "label", 120);
+        const scope = optionalText(read, "scope", 256);
+        const revision = optionalText(read, "revision", ID_LIMIT);
+        const rawPaths = read["paths"];
+        if (rawPaths !== undefined && rawPaths !== null && (!Array.isArray(rawPaths) || rawPaths.some((p) => typeof p !== "string"))) {
+          throw new MethodError("bad-params", "paths has to be a list of paths");
+        }
+        const days = read["days"] === undefined || read["days"] === null ? undefined : requiredInteger(read, "days");
+        let made;
+        try {
+          made = createShare(context.options.database, context.user, {
+            projectId,
+            ...(label === undefined ? {} : { label }),
+            ...(scope === undefined ? {} : { scope }),
+            ...(revision === undefined ? {} : { revision }),
+            ...(Array.isArray(rawPaths) ? { paths: rawPaths as string[] } : {}),
+            allowComments: flag(read, "allowComments", false),
+            ...(days === undefined ? {} : { days }),
+          });
+        } catch (error) {
+          refused(error);
+        }
+        // The token is in this answer and nowhere else, ever: only its hash is kept.
+        return { share: shareLinkView(context.options.database, made.share), token: made.token };
+      },
+    },
+    {
+      name: TEAM_METHODS.sharesRevoke,
+      capability: "shares",
+      handle: (params: unknown, context: MethodContext) => {
+        const id = requiredText(paramsObject(params), "share", ID_LIMIT);
+        try {
+          return { share: shareLinkView(context.options.database, revokeShare(context.options.database, context.user, id)) };
+        } catch (error) {
+          refused(error);
+        }
       },
     },
     {

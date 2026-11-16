@@ -500,7 +500,7 @@ export async function up(
       identity: identityRoutes,
       studio,
       blobs: { store: blobStore, presence: socket.presence, service: studio },
-      console: { service: studio, root: consoleRoot() },
+      console: { service: studio, root: consoleRoot(), publish: (topic, payload) => socket.hub.publish(topic, payload) },
     });
     const upgradeTeam = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
       if (team?.handleUpgrade(request, socket, head) === true) {

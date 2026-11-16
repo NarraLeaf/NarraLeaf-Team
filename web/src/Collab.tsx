@@ -158,6 +158,7 @@ export const ACTIVITY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
   version: "aVersion",
   approved: "aApproved",
   "sent-back": "aSentBack",
+  build: "aBuild",
 };
 
 export function Timeline({
