@@ -21,6 +21,7 @@ import { useLook, type TeamLook } from "./look";
 import { Setup, SignIn, TeamMark } from "./SignIn";
 import { projectHue, TeamHome } from "./TeamHome";
 import { Palette, type PaletteItem } from "./Palette";
+import { UiHost } from "./ui";
 
 type Route =
   | { readonly screen: "home" }
@@ -63,6 +64,15 @@ export function BrandMark({ logo }: { logo?: string | undefined }) {
 }
 
 export function App() {
+  return (
+    <>
+      <AppBody />
+      <UiHost />
+    </>
+  );
+}
+
+function AppBody() {
   const [session, setSession] = useState<{ account: ConsoleAccount; watermark: Watermark } | null | undefined>(undefined);
   const look = useLook();
 

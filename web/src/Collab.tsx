@@ -27,21 +27,14 @@ import { Icon } from "./Icon";
 import { studioConnectLink } from "./studioLink";
 import { chooseLanguage, chosenLanguage, t, type Language, type Phrase } from "./i18n";
 import { chooseTheme, chosenTheme, type ThemeChoice } from "./theme";
+import { ago } from "./ui/time";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
 }
 
-export function ago(at: number): string {
-  const seconds = Math.round((Date.now() - at) / 1000);
-  const format = new Intl.RelativeTimeFormat(navigator.language, { numeric: "auto" });
-  if (seconds < 60) return format.format(-seconds, "second");
-  if (seconds < 3600) return format.format(-Math.round(seconds / 60), "minute");
-  if (seconds < 86400) return format.format(-Math.round(seconds / 3600), "hour");
-  if (seconds < 86400 * 30) return format.format(-Math.round(seconds / 86400), "day");
-  return new Date(at).toLocaleDateString();
-}
+export { ago };
 
 /*
  * Faces by username. Most places only know who did something, not where their
