@@ -12,6 +12,7 @@ import { projectClientsTopic, type TeamClientInstance, type TeamProjectRole, typ
 
 import { fetchJson, fetchTree, type Tree } from "./files";
 import { t } from "./i18n";
+import { confirmAction, SelectPanel, toast } from "./ui";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
 import { AccessRequestsToDecide } from "./Access";
@@ -190,7 +191,6 @@ export function ProjectSettings(props: {
   const [description, setDescription] = useState(project.description);
   const [saveRole, setSaveRole] = useState<TeamVersionRole>(project.saveRole ?? "editor");
   const [restoreRole, setRestoreRole] = useState<TeamVersionRole>(project.restoreRole ?? "editor");
-  const [note, setNote] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -203,16 +203,21 @@ export function ProjectSettings(props: {
         restoreRole,
       });
       changed(answer.project);
-      setNote(t("saved"));
+      toast(t("saved"));
     } catch (caught) {
       setError(errorText(caught));
     }
   };
   const roleSelect = (value: TeamVersionRole, set: (role: TeamVersionRole) => void) => (
-    <select value={value} onChange={(event) => set(event.target.value as TeamVersionRole)}>
-      <option value="editor">{t("roleEditorsUp")}</option>
-      <option value="owner">{t("roleOwnersOnly")}</option>
-    </select>
+    <SelectPanel<TeamVersionRole>
+      label={t("versionRolesTitle")}
+      value={value}
+      onChange={set}
+      options={[
+        { value: "editor", label: t("roleEditorsUp") },
+        { value: "owner", label: t("roleOwnersOnly") },
+      ]}
+    />
   );
   return (
     <div className="project-settings">
@@ -224,21 +229,20 @@ export function ProjectSettings(props: {
         <p className="muted small">{t("settingsNameFixed")}</p>
         <h3>{t("versionRolesTitle")}</h3>
         <div className="review-fields">
-          <label>
-            {t("saveRoleLabel")}
+          <div className="form-field">
+            <span className="form-label">{t("saveRoleLabel")}</span>
             {roleSelect(saveRole, setSaveRole)}
-          </label>
-          <label>
-            {t("restoreRoleLabel")}
+          </div>
+          <div className="form-field">
+            <span className="form-label">{t("restoreRoleLabel")}</span>
             {roleSelect(restoreRole, setRestoreRole)}
-          </label>
+          </div>
         </div>
         <p className="muted small">{t("restoreInStudio")}</p>
         {error !== undefined ? <p className="error">{error}</p> : null}
         <button className="primary" type="submit">
           {t("save")}
         </button>
-        {note !== undefined ? <span className="muted small"> {note}</span> : null}
       </form>
       <h2>{t("reqTitle")}</h2>
       <AccessRequestsToDecide connection={connection} project={project.id} />
@@ -251,14 +255,25 @@ export function ProjectSettings(props: {
           <h3>{t("removeProjectTitle")}</h3>
           <p className="muted small">{t("removeProjectLead")}</p>
           <button
-            className="danger"
-            onClick={() => {
-              if (!window.confirm(t("removeProjectConfirm", { name: project.name }))) return;
-              void connection
-                .call("projects.forget", { project: project.id })
-                .then(removed)
-                .catch((caught: unknown) => setError(errorText(caught)));
-            }}
+            className="btn btn-danger"
+            onClick={() =>
+              void confirmAction({
+                title: t("removeProjectTitle"),
+                body: t("removeProjectConfirm", { name: project.name }),
+                confirmLabel: t("removeProject"),
+                danger: true,
+                typeToConfirm: project.name,
+              }).then((yes) => {
+                if (!yes) return;
+                void connection
+                  .call("projects.forget", { project: project.id })
+                  .then(() => {
+                    toast(t("removedProject", { name: project.name }));
+                    removed();
+                  })
+                  .catch((caught: unknown) => setError(errorText(caught)));
+              })
+            }
           >
             {t("removeProject")}
           </button>

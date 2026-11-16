@@ -18,6 +18,8 @@ import type {
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
+import { ActionMenu, Checkbox, confirmAction, Flash, toast, type MenuAction } from "./ui";
+import { Face } from "./Collab";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
 import { AccessRequestsToDecide } from "./Access";
@@ -36,28 +38,25 @@ const SECTION_PHRASE: Record<Section, Phrase> = {
   server: "adminServer",
 };
 
-function errorText(caught: unknown): string {
-  return caught instanceof Error ? caught.message : String(caught);
-}
-
-/** Run one action and say what came of it. */
+/** Run one action: a toast when it worked, a notice in the page saying why when it did not. */
 function useAction() {
-  const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | undefined>(undefined);
+  const [failure, setFailure] = useState<unknown>(undefined);
   const run = useCallback(async (work: () => Promise<unknown>, done?: string) => {
     try {
       await work();
-      setNote(done === undefined ? undefined : { text: done, tone: "ok" });
+      setFailure(undefined);
+      if (done !== undefined) toast(done);
       return true;
     } catch (caught) {
-      setNote({ text: errorText(caught), tone: "error" });
+      setFailure(caught);
       return false;
     }
   }, []);
-  const view = note === undefined ? null : <p className={note.tone === "error" ? "error" : "muted small"}>{note.text}</p>;
+  const view = failure === undefined ? null : <Flash error={failure} />;
   return { run, view };
 }
 
-export function Admin({ connection, state }: { connection: TeamConnection; state: ConnectionState }) {
+export function Admin({ connection, state, me }: { connection: TeamConnection; state: ConnectionState; me: string }) {
   const [section, setSection] = useState<Section>("accounts");
   const open = state.kind === "open";
   return (
@@ -71,7 +70,7 @@ export function Admin({ connection, state }: { connection: TeamConnection; state
         ))}
       </nav>
       {!open ? <p className="muted">{t("connecting")}</p> : null}
-      {open && section === "accounts" ? <Accounts connection={connection} /> : null}
+      {open && section === "accounts" ? <Accounts connection={connection} me={me} /> : null}
       {open && section === "projects" ? <Projects connection={connection} /> : null}
       {open && section === "requests" ? (
         <div className="admin-section">
@@ -89,8 +88,9 @@ export function Admin({ connection, state }: { connection: TeamConnection; state
 
 /* ------------------------------------------------------------- accounts */
 
-function Accounts({ connection }: { connection: TeamConnection }) {
+function Accounts({ connection, me }: { connection: TeamConnection; me: string }) {
   const [users, setUsers] = useState<readonly TeamAdminUser[]>([]);
+  const [query, setQuery] = useState("");
   const [form, setForm] = useState({ username: "", displayName: "", password: "" });
   const { run, view } = useAction();
   const load = useCallback(() => {
@@ -98,6 +98,68 @@ function Accounts({ connection }: { connection: TeamConnection }) {
   }, [connection]);
   useEffect(() => load(), [load]);
   const act = (method: string, username: string) => void run(() => connection.call(method, { username }).then(load), t("done"));
+  /** Ask first, then act: the dangerous ones on the "⋯" menu. */
+  const askThen = (options: Parameters<typeof confirmAction>[0], method: string, username: string) =>
+    void confirmAction({ danger: true, ...options }).then((yes) => yes && act(method, username));
+  const actions = (user: TeamAdminUser): MenuAction[] => {
+    const name = user.displayName || user.username;
+    const self = user.username === me;
+    const creator = user.groups.includes("project-creator");
+    const list: MenuAction[] = [];
+    if (!user.operator) {
+      list.push({
+        label: creator ? t("disallowCreate") : t("allowCreate"),
+        icon: "plus",
+        run: () =>
+          void run(() => connection.call("admin.users.setCreator", { username: user.username, creator: !creator }).then(load), t("done")),
+      });
+    }
+    list.push(
+      user.operator
+        ? {
+            label: t("revokeAdmin"),
+            icon: "key",
+            danger: true,
+            disabledReason: self ? t("notOnYourself") : undefined,
+            run: () => askThen({ title: t("revokeAdminTitle", { name }), body: t("revokeAdminBody"), confirmLabel: t("revokeAdmin") }, "admin.users.revokeAdmin", user.username),
+          }
+        : {
+            label: t("grantAdmin"),
+            icon: "key",
+            run: () =>
+              void confirmAction({ title: t("grantAdminTitle", { name }), body: t("grantAdminBody"), confirmLabel: t("grantAdmin") }).then(
+                (yes) => yes && act("admin.users.grantAdmin", user.username),
+              ),
+          },
+      {
+        label: t("revokeTokens"),
+        icon: "lock",
+        danger: true,
+        description: t("revokeTokensHint"),
+        run: () =>
+          askThen({ title: t("revokeTokensTitle", { name }), body: t("revokeTokensBody"), confirmLabel: t("revokeTokens") }, "admin.users.revokeTokens", user.username),
+      },
+      user.disabled
+        ? { label: t("enable"), icon: "tick", run: () => act("admin.users.enable", user.username) }
+        : {
+            label: t("disable"),
+            icon: "close",
+            danger: true,
+            disabledReason: self ? t("notOnYourself") : undefined,
+            run: () =>
+              askThen(
+                { title: t("disableTitle", { name }), body: t("disableBody"), confirmLabel: t("disable"), typeToConfirm: user.username },
+                "admin.users.disable",
+                user.username,
+              ),
+          },
+    );
+    return list;
+  };
+  const shown = users.filter((user) => {
+    const q = query.trim().toLowerCase();
+    return q === "" || user.username.toLowerCase().includes(q) || user.displayName.toLowerCase().includes(q);
+  });
   const create = async (event: FormEvent) => {
     event.preventDefault();
     const ok = await run(
@@ -130,70 +192,47 @@ function Accounts({ connection }: { connection: TeamConnection }) {
             required
             autoComplete="new-password"
           />
-          <button className="primary" type="submit">
+          <button className="btn btn-primary" type="submit">
             {t("add")}
           </button>
         </div>
       </form>
       {view}
+      <div className="table-tools">
+        <input type="search" placeholder={t("filterAccounts")} value={query} onChange={(event) => setQuery(event.target.value)} aria-label={t("filterAccounts")} />
+        <span className="muted small">{t("accountCount", { count: String(users.length) })}</span>
+      </div>
       <table className="admin-table">
         <thead>
           <tr>
-            <th>{t("username")}</th>
-            <th>{t("displayName")}</th>
+            <th>{t("account")}</th>
             <th>{t("status")}</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {users.map((user) => (
+          {shown.map((user) => (
             <tr key={user.id} className={user.disabled ? "disabled" : ""}>
               <td>
-                {user.username}
-                {user.operator ? <span className="tag">{t("operator")}</span> : null}
-                {user.serviceAccount ? <span className="tag">service</span> : null}
-                {!user.operator && user.groups.includes("project-creator") ? <span className="tag">{t("mayCreateProjects")}</span> : null}
+                <span className="member-cell">
+                  <Face name={user.displayName || user.username} user={user.username} size={28} />
+                  <span className="member-cell-text">
+                    <strong>
+                      {user.displayName || user.username}
+                      {user.username === me ? <span className="muted small"> {t("youMark")}</span> : null}
+                    </strong>
+                    <span className="muted small">@{user.username}</span>
+                  </span>
+                  {user.operator ? <span className="tag">{t("operator")}</span> : null}
+                  {user.serviceAccount ? <span className="tag">service</span> : null}
+                  {!user.operator && user.groups.includes("project-creator") ? <span className="tag">{t("mayCreateProjects")}</span> : null}
+                </span>
               </td>
-              <td>{user.displayName}</td>
-              <td className="muted">{user.disabled ? t("disabledLabel") : t("activeLabel")}</td>
+              <td>
+                <span className={user.disabled ? "status-dot off" : "status-dot on"}>{user.disabled ? t("disabledLabel") : t("activeLabel")}</span>
+              </td>
               <td className="admin-actions">
-                {user.disabled ? (
-                  <button className="ghost small" onClick={() => act("admin.users.enable", user.username)}>
-                    {t("enable")}
-                  </button>
-                ) : (
-                  <button className="ghost small" onClick={() => act("admin.users.disable", user.username)}>
-                    {t("disable")}
-                  </button>
-                )}
-                {user.operator ? (
-                  <button className="ghost small" onClick={() => act("admin.users.revokeAdmin", user.username)}>
-                    {t("revokeAdmin")}
-                  </button>
-                ) : (
-                  <button className="ghost small" onClick={() => act("admin.users.grantAdmin", user.username)}>
-                    {t("grantAdmin")}
-                  </button>
-                )}
-                {user.operator ? null : (
-                  <button
-                    className="ghost small"
-                    onClick={() =>
-                      void run(
-                        () =>
-                          connection
-                            .call("admin.users.setCreator", { username: user.username, creator: !user.groups.includes("project-creator") })
-                            .then(load),
-                        t("done"),
-                      )
-                    }
-                  >
-                    {user.groups.includes("project-creator") ? t("disallowCreate") : t("allowCreate")}
-                  </button>
-                )}
-                <button className="ghost small" onClick={() => act("admin.users.revokeTokens", user.username)}>
-                  {t("revokeTokens")}
-                </button>
+                <ActionMenu actions={actions(user)} />
               </td>
             </tr>
           ))}
@@ -378,10 +417,7 @@ function Brand({ connection }: { connection: TeamConnection }) {
         </fieldset>
 
         <strong className="admin-subhead">{t("watermark")}</strong>
-        <label className="admin-check">
-          <input type="checkbox" checked={watermarkOn} onChange={(event) => setWatermarkOn(event.target.checked)} />
-          <span>{t("watermarkOn")}</span>
-        </label>
+        <Checkbox className="admin-check" checked={watermarkOn} onChange={setWatermarkOn} label={t("watermarkOn")} />
         <label className="admin-field">
           <span className="muted small">{t("watermarkText")}</span>
           <input value={watermarkText} onChange={(event) => setWatermarkText(event.target.value)} maxLength={64} placeholder={t("watermarkTextHint")} />

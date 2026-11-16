@@ -24,6 +24,8 @@ import {
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
+import { Face } from "./Collab";
+import { ago, Checkbox, confirmAction, SelectPanel, toast, type SelectOption } from "./ui";
 import type { TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -133,8 +135,12 @@ export function Reviews(props: {
       .call("reviews.update", { review: review.id, status, ...(verdicts[review.id] ? { verdictNote: verdicts[review.id] } : {}) })
       .catch((caught: unknown) => setError(errorText(caught)));
 
-  const label = (revision: Revision) =>
-    `${revision.id.slice(0, 8)} ${(revisionTitle(revision) || (isAutoVersion(revision) ? t("versionAuto") : "")).slice(0, 50)}`;
+  const option = (revision: Revision): SelectOption<string> => ({
+    value: revision.id,
+    label: (revisionTitle(revision) || (isAutoVersion(revision) ? t("versionAuto") : revision.id.slice(0, 7))).slice(0, 60),
+    description: [revision.id.slice(0, 7), revision.by, revision.at === undefined ? undefined : ago(revision.at)].filter(Boolean).join(" · "),
+    icon: isAutoVersion(revision) ? "history" : "flag",
+  });
   // Automatic snapshots come every few minutes; the versions somebody named are what a review is about.
   const picked = new Set([draft.toRevision, draft.fromRevision]);
   const choices = revisions.filter((revision) => showAuto || !isAutoVersion(revision) || picked.has(revision.id));
@@ -149,49 +155,59 @@ export function Reviews(props: {
           <h3>{t("reviewAsk")}</h3>
           <input value={draft.title} placeholder={t("reviewTitle")} maxLength={300} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
           <div className="review-fields">
-            <label>
-              {t("reviewer")}
-              <select value={draft.reviewer} onChange={(event) => setDraft({ ...draft, reviewer: event.target.value })}>
-                <option value="">—</option>
-                {members
+            <div className="form-field">
+              <span className="form-label">{t("reviewer")}</span>
+              <SelectPanel
+                label={t("reviewer")}
+                placeholder={t("reviewPickReviewer")}
+                filterFrom={6}
+                value={draft.reviewer === "" ? undefined : draft.reviewer}
+                onChange={(reviewer) => setDraft({ ...draft, reviewer })}
+                options={members
                   .filter((member) => member.username !== me)
-                  .map((member) => (
-                    <option key={member.username} value={member.username}>
-                      {member.displayName || member.username}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label>
-              {t("reviewFrom")}
-              <select value={draft.fromRevision} onChange={(event) => setDraft({ ...draft, fromRevision: event.target.value })}>
-                <option value="">{t("reviewFromStart")}</option>
-                {choices.map((revision) => (
-                  <option key={revision.id} value={revision.id}>
-                    {label(revision)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {t("reviewTo")}
-              <select value={draft.toRevision} onChange={(event) => setDraft({ ...draft, toRevision: event.target.value })}>
-                <option value="">—</option>
-                {choices.map((revision) => (
-                  <option key={revision.id} value={revision.id}>
-                    {label(revision)}
-                  </option>
-                ))}
-              </select>
-            </label>
+                  .map((member) => ({
+                    value: member.username,
+                    label: member.displayName || member.username,
+                    ...(member.displayName ? { description: `@${member.username}` } : {}),
+                    leading: <Face name={member.displayName || member.username} user={member.username} size={18} />,
+                  }))}
+              />
+            </div>
+            <div className="form-field">
+              <span className="form-label">{t("reviewFrom")}</span>
+              <SelectPanel
+                label={t("reviewFrom")}
+                filterFrom={10}
+                value={draft.fromRevision}
+                onChange={(fromRevision) => setDraft({ ...draft, fromRevision })}
+                options={[{ value: "", label: t("reviewFromStart"), icon: "history" }, ...choices.map(option)]}
+                footer={<Checkbox checked={showAuto} onChange={setShowAuto} label={<span className="small">{t("showAuto")}</span>} />}
+              />
+            </div>
+            <div className="form-field">
+              <span className="form-label">{t("reviewTo")}</span>
+              <SelectPanel
+                label={t("reviewTo")}
+                placeholder={t("reviewPickVersion")}
+                filterFrom={10}
+                value={draft.toRevision === "" ? undefined : draft.toRevision}
+                onChange={(toRevision) => setDraft({ ...draft, toRevision })}
+                options={choices.map(option)}
+                footer={<Checkbox checked={showAuto} onChange={setShowAuto} label={<span className="small">{t("showAuto")}</span>} />}
+              />
+            </div>
           </div>
-          <label className="small">
-            <input type="checkbox" checked={showAuto} onChange={(event) => setShowAuto(event.target.checked)} /> {t("showAuto")}
-          </label>
           <textarea value={draft.note} placeholder={t("reviewNote")} rows={2} onChange={(event) => setDraft({ ...draft, note: event.target.value })} />
-          <button className="primary" type="submit" disabled={!ready}>
-            {t("reviewSend")}
-          </button>
+          <div className="review-new-foot">
+            {ready ? null : (
+              <span className="muted small">
+                {draft.title.trim() === "" ? t("reviewNeedTitle") : draft.reviewer === "" ? t("reviewNeedReviewer") : t("reviewNeedVersion")}
+              </span>
+            )}
+            <button className="btn btn-primary" type="submit" disabled={!ready}>
+              {t("reviewSend")}
+            </button>
+          </div>
         </form>
       ) : null}
       {reviews === undefined ? (
@@ -396,7 +412,6 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
     }
   };
 
-  const toggle = (name: TeamWebhookEvent) => setEvents(events.includes(name) ? events.filter((e) => e !== name) : [...events, name]);
   const projectName = (id: string | undefined) => (id === undefined ? t("whAllProjects") : (projects.find((p) => p.id === id)?.name ?? id));
 
   return (
@@ -411,36 +426,40 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
       <form className="card webhook-new" onSubmit={(event) => void add(event)}>
         <input value={url} placeholder="https://…" onChange={(event) => setUrl(event.target.value)} />
         <div className="review-fields">
-          <label>
-            {t("whFormat")}
-            <select value={format} onChange={(event) => setFormat(event.target.value as TeamWebhookFormat)}>
-              {TEAM_WEBHOOK_FORMATS.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {scoped ? null : <label>
-            {t("projects")}
-            <select value={project} onChange={(event) => setProject(event.target.value)}>
-              <option value="">{t("whAllProjects")}</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>}
+          <div className="form-field">
+            <span className="form-label">{t("whFormat")}</span>
+            <SelectPanel
+              label={t("whFormat")}
+              value={format}
+              onChange={setFormat}
+              options={TEAM_WEBHOOK_FORMATS.map((name) => ({ value: name, label: name }))}
+            />
+          </div>
+          {scoped ? null : (
+            <div className="form-field">
+              <span className="form-label">{t("projects")}</span>
+              <SelectPanel
+                label={t("projects")}
+                value={project}
+                onChange={setProject}
+                options={[{ value: "", label: t("whAllProjects") }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
+              />
+            </div>
+          )}
+          <div className="form-field">
+            <span className="form-label">{t("whEvents")}</span>
+            <SelectPanel<TeamWebhookEvent>
+              multiple
+              label={t("whEvents")}
+              placeholder={t("whPickEvents")}
+              allLabel={t("whEveryEvent")}
+              value={events}
+              onChange={setEvents}
+              options={TEAM_WEBHOOK_EVENTS.map((name) => ({ value: name, label: t(EVENT_PHRASE[name]) }))}
+            />
+          </div>
         </div>
-        <div className="webhook-events">
-          {TEAM_WEBHOOK_EVENTS.map((name) => (
-            <label key={name} className="small">
-              <input type="checkbox" checked={events.includes(name)} onChange={() => toggle(name)} /> {t(EVENT_PHRASE[name])}
-            </label>
-          ))}
-        </div>
-        <button className="primary" type="submit" disabled={url.trim() === "" || events.length === 0}>
+        <button className="btn btn-primary" type="submit" disabled={url.trim() === "" || events.length === 0}>
           {t("add")}
         </button>
       </form>
@@ -477,7 +496,18 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
                 </button>
                 <button
                   className="ghost small"
-                  onClick={() => void connection.call(method("delete"), { webhook: hook.id }).then(load).catch((caught: unknown) => setError(errorText(caught)))}
+                  onClick={() =>
+                    void confirmAction({ title: t("whRemoveTitle"), body: hook.url, confirmLabel: t("remove"), danger: true }).then((yes) => {
+                      if (!yes) return;
+                      void connection
+                        .call(method("delete"), { webhook: hook.id })
+                        .then(() => {
+                          toast(t("whRemoved"));
+                          load();
+                        })
+                        .catch((caught: unknown) => setError(errorText(caught)));
+                    })
+                  }
                 >
                   {t("remove")}
                 </button>

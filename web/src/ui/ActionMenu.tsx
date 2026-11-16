@@ -124,7 +124,7 @@ export function ActionMenu({
                     ref={(element) => {
                       if (index === active) element?.focus();
                     }}
-                    className={`menu-item${item.danger === true ? " danger" : ""}${index === active ? " active" : ""}`}
+                    className={`menu-item${item.danger === true ? " is-danger" : ""}${index === active ? " is-active" : ""}`}
                     aria-disabled={item.disabledReason !== undefined}
                     title={item.disabledReason}
                     onPointerEnter={() => setActive(index)}

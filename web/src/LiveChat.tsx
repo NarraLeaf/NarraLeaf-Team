@@ -28,6 +28,7 @@ import type { ConsoleAccount } from "./api";
 import { Face } from "./Collab";
 import { Icon } from "./Icon";
 import { t } from "./i18n";
+import { SelectPanel } from "./ui";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 /** Studio's own bound for one line (src/shared/live/presence.ts there). */
@@ -358,16 +359,21 @@ export function LiveChat({ connection, state, projectId, account }: { connection
       ) : (
         <>
           {sessions.length > 1 ? (
-            <label className="chat-pick">
+            <div className="chat-pick">
               <span className="muted small">{t("chatSession")}</span>
-              <select value={picked} onChange={(event) => setPicked(event.target.value)} disabled={joined === "yes"}>
-                {sessions.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.title ?? t("chatSessionBy", { who: s.openedBy })}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <SelectPanel
+                label={t("chatSession")}
+                size="small"
+                value={picked}
+                onChange={setPicked}
+                disabled={joined === "yes"}
+                options={sessions.map((s) => ({
+                  value: s.id,
+                  label: s.title ?? t("chatSessionBy", { who: s.openedBy }),
+                  description: s.title === undefined ? undefined : t("chatSessionBy", { who: s.openedBy }),
+                }))}
+              />
+            </div>
           ) : null}
           {session !== undefined ? (
             <div className="chat-members">

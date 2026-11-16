@@ -311,7 +311,7 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
           back={() => go({ screen: "home" })}
         />
       ) : null}
-      {route.screen === "admin" ? <Admin connection={connection} state={state} /> : null}
+      {route.screen === "admin" ? <Admin connection={connection} state={state} me={account.username} /> : null}
     </>
   );
 

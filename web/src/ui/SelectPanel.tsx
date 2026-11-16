@@ -40,6 +40,8 @@ interface Common<V extends string> {
   readonly className?: string;
   /** Said under the list, as how the choice is used. */
   readonly footer?: ReactNode;
+  /** What the button says when every option is chosen. */
+  readonly allLabel?: string;
 }
 
 interface Single<V extends string> extends Common<V> {
@@ -55,7 +57,7 @@ interface Multiple<V extends string> extends Common<V> {
 }
 
 export function SelectPanel<V extends string>(props: Single<V> | Multiple<V>) {
-  const { options, label, placeholder, filterFrom = 8, align = "start", disabled, size = "medium", renderButton, className, footer } = props;
+  const { options, label, placeholder, filterFrom = 8, align = "start", disabled, size = "medium", renderButton, className, footer, allLabel } = props;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -81,6 +83,7 @@ export function SelectPanel<V extends string>(props: Single<V> | Multiple<V>) {
   const summary = (() => {
     const labels = options.filter((option) => chosen.has(option.value)).map((option) => option.label);
     if (labels.length === 0) return placeholder ?? t("selectNone");
+    if (allLabel !== undefined && labels.length === options.length && labels.length > 1) return allLabel;
     if (labels.length <= 2) return labels.join(", ");
     return t("selectMany", { first: labels[0] ?? "", count: String(labels.length - 1) });
   })();

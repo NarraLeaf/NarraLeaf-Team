@@ -28,6 +28,7 @@ import { studioConnectLink } from "./studioLink";
 import { chooseLanguage, chosenLanguage, t, type Language, type Phrase } from "./i18n";
 import { chooseTheme, chosenTheme, type ThemeChoice } from "./theme";
 import { ago } from "./ui/time";
+import { Checkbox, SelectPanel } from "./ui";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -346,19 +347,23 @@ export function Todos({
         </div>
       </div>
       {project !== undefined && todo.owner === account.username && members !== undefined && todo.visibility === "project" ? (
-        <select
+        <SelectPanel
           className="todo-assign"
-          aria-label={t("assignTo")}
+          size="small"
+          align="end"
+          label={t("assignTo")}
           value={todo.assignee ?? ""}
-          onChange={(event) => void update(todo, { assignee: event.target.value === "" ? null : event.target.value })}
-        >
-          <option value="">{t("nobody")}</option>
-          {members.map((member) => (
-            <option key={member.username} value={member.username}>
-              {member.displayName || member.username}
-            </option>
-          ))}
-        </select>
+          onChange={(username) => void update(todo, { assignee: username === "" ? null : username })}
+          options={[
+            { value: "", label: t("nobody") },
+            ...members.map((member) => ({
+              value: member.username,
+              label: member.displayName || member.username,
+              description: member.displayName ? `@${member.username}` : undefined,
+              leading: <Face name={member.displayName || member.username} user={member.username} size={18} />,
+            })),
+          ]}
+        />
       ) : null}
       {todo.owner === account.username ? (
         <button className="ghost small" onClick={() => void remove(todo)}>
@@ -374,22 +379,19 @@ export function Todos({
       <form className="todo-new" onSubmit={(event) => void add(event)}>
         <input value={title} placeholder={t("newTodo")} onChange={(event) => setTitle(event.target.value)} maxLength={300} />
         {project !== undefined ? (
-          <select className="todo-kind" aria-label={t("todoKind")} value={kind} onChange={(event) => setKind(event.target.value as TeamTodoKind)}>
-            {KINDS.map((name) => (
-              <option key={name} value={name}>
-                {t(KIND_PHRASE[name])}
-              </option>
-            ))}
-          </select>
+          <SelectPanel
+            className="todo-kind"
+            label={t("todoKind")}
+            value={kind}
+            onChange={setKind}
+            options={KINDS.map((name) => ({ value: name, label: t(KIND_PHRASE[name]) }))}
+          />
         ) : null}
         {project !== undefined && (kind === "translation" || kind === "voice") ? (
           <input className="todo-locale" value={locale} placeholder={t("todoLocale")} maxLength={35} onChange={(event) => setLocale(event.target.value)} />
         ) : null}
         {project !== undefined ? (
-          <label className="muted small todo-share">
-            <input type="checkbox" checked={shared} onChange={(event) => setShared(event.target.checked)} />
-            {t("visibilityProject")}
-          </label>
+          <Checkbox className="todo-share" checked={shared} onChange={setShared} label={t("visibilityProject")} />
         ) : null}
         <button className="primary" type="submit">
           {t("add")}
@@ -783,14 +785,20 @@ function Appearance() {
 export function LanguagePicker() {
   const current = chosenLanguage();
   return (
-    <label className="setting-row">
+    <div className="setting-row">
       <span>{t("languageLabel")}</span>
-      <select value={current ?? ""} onChange={(event) => chooseLanguage(event.target.value === "" ? undefined : (event.target.value as Language))}>
-        <option value="">{t("languageAuto")}</option>
-        <option value="zh">中文</option>
-        <option value="en">English</option>
-      </select>
-    </label>
+      <SelectPanel<"" | Language>
+        label={t("languageLabel")}
+        align="end"
+        value={current ?? ""}
+        onChange={(chosen) => chooseLanguage(chosen === "" ? undefined : chosen)}
+        options={[
+          { value: "", label: t("languageAuto") },
+          { value: "zh", label: "中文" },
+          { value: "en", label: "English" },
+        ]}
+      />
+    </div>
   );
 }
 

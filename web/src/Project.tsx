@@ -43,6 +43,7 @@ import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, ty
 import { CompareWithNow, OnlineNow, ProjectSettings } from "./Versions";
 import { AskForMore } from "./Access";
 import type { TeamConnection, ConnectionState } from "./socket";
+import { Checkbox, SelectPanel } from "./ui";
 
 export type ProjectTab = "overview" | "story" | "blueprints" | "assets" | "todos" | "reviews" | "history" | "settings";
 /** The project's own page: what it is, how it got here, and what is waiting on review. */
@@ -657,13 +658,14 @@ function StoryBody(props: {
           <span>{t("tabStory")}</span>
         </div>
         {library.stories.length > 1 ? (
-          <select value={storyId} onChange={(event) => setStoryId(event.target.value)}>
-            {library.stories.map((story) => (
-              <option key={story.id} value={story.id}>
-                {story.name}
-              </option>
-            ))}
-          </select>
+          <SelectPanel
+            className="story-pick"
+            label={t("storyPick")}
+            size="small"
+            value={storyId}
+            onChange={setStoryId}
+            options={library.stories.map((story) => ({ value: story.id, label: story.name, icon: "book" }))}
+          />
         ) : null}
         {document === undefined ? (
           <p className="muted">{t("loading")}</p>
@@ -1349,10 +1351,17 @@ function History(props: {
   const hidden = revisions.length - shown.length;
   return (
     <>
-      <label className="small history-toggle">
-        <input type="checkbox" checked={showAuto} onChange={(event) => setShowAuto(event.target.checked)} /> {t("showAuto")}
-        {!showAuto && hidden > 0 ? <span className="muted"> ({hidden})</span> : null}
-      </label>
+      <Checkbox
+        className="small history-toggle"
+        checked={showAuto}
+        onChange={setShowAuto}
+        label={
+          <>
+            {t("showAuto")}
+            {!showAuto && hidden > 0 ? <span className="muted"> ({hidden})</span> : null}
+          </>
+        }
+      />
       {comparing !== undefined ? <CompareWithNow projectId={projectId} revision={comparing} close={() => setComparing(undefined)} /> : null}
       <ol className="history">
         {shown.map((revision) => {

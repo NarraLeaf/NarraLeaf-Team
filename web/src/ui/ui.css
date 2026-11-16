@@ -556,21 +556,21 @@
   color: rgb(var(--nl-fg-muted));
 }
 
-.menu-item.active,
+.menu-item.is-active,
 .menu-item:focus-visible {
   outline: none;
   background: var(--nl-fill);
 }
 
-.menu-item.danger {
+.menu-item.is-danger {
   color: rgb(var(--nl-danger));
 }
 
-.menu-item.danger > .icon {
+.menu-item.is-danger > .icon {
   color: currentColor;
 }
 
-.menu-item.danger.active {
+.menu-item.is-danger.is-active {
   background: rgb(var(--nl-danger) / 0.12);
 }
 
@@ -579,7 +579,7 @@
   cursor: not-allowed;
 }
 
-.menu-item[aria-disabled="true"].active {
+.menu-item[aria-disabled="true"].is-active {
   background: var(--nl-fill-subtle);
 }
 
@@ -1236,4 +1236,99 @@
   color: rgb(var(--nl-fg-muted));
   font-size: var(--nl-text-xs);
   font-weight: 600;
+}
+
+/* ============================================================ table rows */
+
+/* A person in a table: their face, their name, their @username under it. */
+.member-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.member-cell-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+
+.member-cell-text strong {
+  font-weight: 600;
+}
+
+/* A filter box and a count above a table. */
+.table-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 8px;
+}
+
+.table-tools input[type="search"] {
+  flex: 0 1 320px;
+}
+
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--nl-text-sm);
+  color: rgb(var(--nl-fg-muted));
+}
+
+.status-dot::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgb(var(--nl-success));
+}
+
+.status-dot.off::before {
+  background: rgb(var(--nl-fg-subtle));
+}
+
+.admin-table td.admin-actions {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ===================================================== forms in the pages */
+
+.review-fields {
+  align-items: flex-end;
+}
+
+.review-fields > .form-field {
+  flex: 1 1 180px;
+}
+
+.review-fields .select-button,
+.review-new .select-button {
+  width: 100%;
+}
+
+.review-new-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.wb .story-outline .story-pick {
+  margin: 10px 12px 0;
+  width: calc(100% - 24px);
+}
+
+.chat-pick .select-button {
+  width: 100%;
+}
+
+.todo-new .select-button {
+  flex: none;
 }

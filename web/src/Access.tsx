@@ -19,6 +19,7 @@ import {
   type TeamProjectRole,
 } from "@narraleaf/team-protocol";
 import { t, type Phrase } from "./i18n";
+import { SelectPanel } from "./ui";
 import type { TeamConnection } from "./socket";
 
 export const TEMPLATE_PHRASE: Readonly<Record<TeamPermissionTemplateId, Phrase>> = {
@@ -89,21 +90,23 @@ export function TemplateSelect({
   change,
   choices = ALL_TEMPLATES,
   custom = false,
+  size = "small",
 }: {
   value: TeamPermissionTemplateId | undefined;
   change: (id: TeamPermissionTemplateId) => void;
   choices?: readonly TeamPermissionTemplateId[];
   custom?: boolean;
+  size?: "small" | "medium";
 }) {
   return (
-    <select value={value ?? ""} onChange={(event) => change(event.target.value as TeamPermissionTemplateId)}>
-      {value === undefined || custom ? <option value="">{t("tplCustom")}</option> : null}
-      {choices.map((id) => (
-        <option key={id} value={id} title={t(TEMPLATE_HINT[id])}>
-          {t(TEMPLATE_PHRASE[id])}
-        </option>
-      ))}
-    </select>
+    <SelectPanel
+      label={t("tplLabel")}
+      size={size}
+      value={custom ? undefined : value}
+      placeholder={t("tplCustom")}
+      onChange={change}
+      options={choices.map((id) => ({ value: id, label: t(TEMPLATE_PHRASE[id]), description: t(TEMPLATE_HINT[id]) }))}
+    />
   );
 }
 
