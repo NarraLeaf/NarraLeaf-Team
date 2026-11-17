@@ -898,6 +898,19 @@ fieldset.admin-field.layout-choice > :not(.layout-option) {
 
 /* ============================================================ home */
 
+.beta-notice {
+  margin-bottom: 20px;
+}
+
+.beta-notice .flash {
+  align-items: center;
+}
+
+.beta-notice .flash a {
+  color: rgb(var(--nl-primary-ink));
+  text-decoration: underline;
+}
+
 .continue-card {
   width: 100%;
   display: flex;

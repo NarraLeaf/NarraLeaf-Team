@@ -10,7 +10,7 @@ import type { ConsoleAccount } from "./api";
 import { ACTIVITY_PHRASE, ago, Face, useNotifications } from "./Collab";
 import { Icon } from "./Icon";
 import { t, type Phrase } from "./i18n";
-import { Hash } from "./ui";
+import { Flash, Hash } from "./ui";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 /** Where somebody last read in the workbench, kept in this browser by the workbench. */
@@ -39,6 +39,48 @@ function lastPlace(): LastPlace | undefined {
   } catch {
     return undefined;
   }
+}
+
+const BETA_KEY = "nlteam.betaNoticeDismissed";
+const ISSUES_URL = "https://github.com/NarraLeaf/NarraLeaf-Team/issues";
+
+/** The console is a beta: say so on the home page until the person asks not to see it again. */
+function BetaNotice() {
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return localStorage.getItem(BETA_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (hidden) return null;
+  const dismiss = () => {
+    try {
+      localStorage.setItem(BETA_KEY, "1");
+    } catch {
+      /* a private window: hide it for this visit only */
+    }
+    setHidden(true);
+  };
+  const [before, after = ""] = t("betaNotice").split("{link}");
+  return (
+    <div className="beta-notice">
+      <Flash
+        tone="warning"
+        action={
+          <button className="btn btn-sm" type="button" onClick={dismiss}>
+            {t("dontShowAgain")}
+          </button>
+        }
+      >
+        {before}
+        <a href={ISSUES_URL} target="_blank" rel="noreferrer">
+          {t("betaNoticeLink")}
+        </a>
+        {after}
+      </Flash>
+    </div>
+  );
 }
 
 interface ProjectRow {
@@ -315,6 +357,8 @@ export function TeamHome(props: {
           </div>
         ) : null}
       </header>
+
+      <BetaNotice />
 
       {placeProject !== undefined ? (
         <button className="continue-card" onClick={() => openProject(placeProject.project, placeProject.tab)}>
