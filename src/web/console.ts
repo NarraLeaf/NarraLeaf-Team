@@ -217,7 +217,7 @@ function serveApi(service: TeamService, request: IncomingMessage, response: Serv
       watermark: storedWatermark(service.database),
       // Required and not on: the console shows the setup page and nothing else.
       twoFactor: {
-        required: twoFactorRequired(service.database),
+        required: twoFactorRequired(service.database, identified.user.id),
         enabled: totpEnabled(service.database, identified.user.id),
       },
     });

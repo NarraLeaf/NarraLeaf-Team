@@ -12,6 +12,7 @@ import {
   revokeApiToken,
   type ApiTokenRecord,
 } from "../../identity/apitokens.js";
+import { apiTokenAccess } from "../../identity/accountPolicy.js";
 import { recordDecision } from "../../identity/audit.js";
 import { storedServerName } from "../../identity/settings.js";
 import {
@@ -60,7 +61,7 @@ export function securityMethods(): TeamMethod[] {
       capability: "two-factor",
       handle: (_params: unknown, context: MethodContext) => ({
         ...totpState(context.options.database, context.user.id),
-        required: twoFactorRequired(context.options.database),
+        required: twoFactorRequired(context.options.database, context.user.id),
       }),
     },
     {
@@ -97,8 +98,8 @@ export function securityMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const database = context.options.database;
         const code = requiredText(paramsObject(params), "code", CODE_LIMIT);
-        if (twoFactorRequired(database)) {
-          throw new MethodError("refused", "this server asks every account for two-step sign-in, so it cannot be turned off");
+        if (twoFactorRequired(database, context.user.id)) {
+          throw new MethodError("refused", "two-step sign-in is required for this account, so it cannot be turned off");
         }
         if (!verifySecondFactor(database, context.user.id, code)) {
           throw new MethodError("refused", "that code is not right");
@@ -160,7 +161,18 @@ export function securityMethods(): TeamMethod[] {
         if (days !== undefined && (typeof days !== "number" || !Number.isInteger(days) || days < 0 || days > 3650)) {
           throw new MethodError("bad-params", "expiresInDays is a whole number from 0 (never) to 3650");
         }
-        const lifetime = days === undefined ? 90 : days;
+        const allowed = apiTokenAccess(database, context.user.id);
+        if (allowed.access === "off") {
+          throw new MethodError("refused", "an admin has turned personal API tokens off for your account");
+        }
+        if (allowed.access === "read" && flag(read, "write", false)) {
+          throw new MethodError("refused", "an admin allows your account read-only API tokens only");
+        }
+        const max = allowed.maxDays;
+        if (max !== undefined && days !== undefined && (days === 0 || days > max)) {
+          throw new MethodError("refused", `an admin allows your account API tokens of at most ${max} days`);
+        }
+        const lifetime = days === undefined ? (max === undefined ? 90 : Math.min(90, max)) : days;
         let made;
         try {
           made = createApiToken(database, context.user.id, {

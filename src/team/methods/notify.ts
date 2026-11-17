@@ -16,6 +16,7 @@ import { PushRefusal, pushToAccount, subscribe, unsubscribe, vapidKeys } from ".
 import { isReaction, REACTION_TARGETS_LIMIT, reactionsOnMany, targetInProject, toggleReaction, type ReactionTarget } from "../../collab/reactions.js";
 import { listWatches, setWatch, WatchRefusal } from "../../collab/watches.js";
 import { WebhookRefusal } from "../../collab/webhooks.js";
+import { accountPolicy, FIXED_BY_ADMIN } from "../../identity/accountPolicy.js";
 import { findUserById } from "../../identity/users.js";
 import { projectRole } from "../../projects/members.js";
 import { findProject } from "../../projects/registry.js";
@@ -105,6 +106,18 @@ export function notifyMethods(): TeamMethod[] {
           ...(read["digest"] === undefined ? {} : { digest: oneOf(read, "digest", TEAM_DIGEST_FREQUENCIES) }),
           ...(hookRaw === undefined ? {} : { hook: hookRaw === null || hookRaw.trim() === "" ? null : hookRaw.trim() }),
         };
+        const fixed = accountPolicy(context.options.database, context.user.id).policy;
+        const before = readPrefs(context.options.database, currentUser(context));
+        const switchChanged = (change.switches ?? []).some(
+          (entry) => before.switches.find((each) => each.category === entry.category && each.channel === entry.channel)?.enabled !== entry.enabled,
+        );
+        if (
+          (fixed.notificationSwitches !== undefined && switchChanged) ||
+          (fixed.digest !== undefined && change.digest !== undefined && change.digest !== before.digest) ||
+          (fixed.hook !== undefined && change.hook !== undefined && (change.hook ?? "") !== (before.hook ?? ""))
+        ) {
+          throw new MethodError("refused", FIXED_BY_ADMIN);
+        }
         try {
           writePrefs(context.options.database, context.user.id, change);
         } catch (error) {

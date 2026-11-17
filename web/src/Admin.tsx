@@ -24,18 +24,20 @@ import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
 import { AccessRequestsToDecide } from "./Access";
 import { AuditPanel, BackupsPanel, makeResetLink, StoragePanel } from "./Security";
+import { AccountPolicyDialog, PolicyTemplates } from "./Policy";
 import type { ConnectionState, TeamConnection } from "./socket";
 
-export type AdminSection = "accounts" | "projects" | "requests" | "documents" | "storage" | "brand" | "security" | "webhooks" | "backups" | "server";
+export type AdminSection = "accounts" | "policies" | "projects" | "requests" | "documents" | "storage" | "brand" | "security" | "webhooks" | "backups" | "server";
 /** The back office's sections, in groups: people, projects, the team itself. */
 const GROUPS: readonly (readonly AdminSection[])[] = [
-  ["accounts", "requests"],
+  ["accounts", "policies", "requests"],
   ["projects", "documents", "storage", "webhooks"],
   ["brand", "security", "backups", "server"],
 ];
 export const ADMIN_SECTIONS: readonly AdminSection[] = GROUPS.flat();
 export const ADMIN_PHRASE: Record<AdminSection, Phrase> = {
   accounts: "adminAccounts",
+  policies: "adminPolicies",
   projects: "adminProjects",
   requests: "reqTitle",
   brand: "adminBrand",
@@ -48,6 +50,7 @@ export const ADMIN_PHRASE: Record<AdminSection, Phrase> = {
 };
 const SECTION_ICON: Record<AdminSection, IconName> = {
   accounts: "people",
+  policies: "shield",
   requests: "key",
   projects: "folder",
   documents: "file",
@@ -61,6 +64,7 @@ const SECTION_ICON: Record<AdminSection, IconName> = {
 /** What a section is for, said under its title; the ones without explain themselves in their first line. */
 const SECTION_LEAD: Partial<Record<AdminSection, Phrase>> = {
   accounts: "adminAccountsLead",
+  policies: "adminPoliciesLead",
   projects: "adminProjectsLead",
   requests: "adminRequestsLead",
   brand: "adminBrandLead",
@@ -118,6 +122,7 @@ export function Admin({
           <Subhead title={t(ADMIN_PHRASE[section])}>{lead === undefined ? undefined : t(lead)}</Subhead>
           {!open ? <Skeleton /> : null}
           {open && section === "accounts" ? <Accounts connection={connection} me={me} /> : null}
+          {open && section === "policies" ? <PolicyTemplates connection={connection} /> : null}
           {open && section === "projects" ? <Projects connection={connection} /> : null}
           {open && section === "requests" ? (
             <div className="admin-section">
@@ -143,6 +148,7 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
   const [users, setUsers] = useState<readonly TeamAdminUser[]>([]);
   const [query, setQuery] = useState("");
   const [form, setForm] = useState({ username: "", displayName: "", password: "" });
+  const [policyFor, setPolicyFor] = useState<TeamAdminUser | undefined>(undefined);
   const { run, view } = useAction();
   const load = useCallback(() => {
     void connection.call<{ users: TeamAdminUser[] }>("admin.users.list", { limit: 200 }).then((answer) => setUsers(answer.users));
@@ -165,6 +171,12 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
           void run(() => connection.call("admin.users.setCreator", { username: user.username, creator: !creator }).then(load), t("done")),
       });
     }
+    list.push({
+      label: t("policyMenu"),
+      icon: "shield",
+      description: user.policy === undefined ? t("policyMenuHint") : (user.policy.templateName ?? t("policyCustom")),
+      run: () => setPolicyFor(user),
+    });
     list.push(
       user.operator
         ? {
@@ -292,6 +304,11 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
                   {user.operator ? <span className="tag">{t("operator")}</span> : null}
                   {user.serviceAccount ? <span className="tag">service</span> : null}
                   {!user.operator && user.groups.includes("project-creator") ? <span className="tag">{t("mayCreateProjects")}</span> : null}
+                  {user.policy === undefined ? null : (
+                    <span className="tag" title={t("policyMenu")}>
+                      <Icon name="shield" size={12} /> {user.policy.templateName ?? t("policyCustom")}
+                    </span>
+                  )}
                 </span>
               </td>
               <td>
@@ -304,6 +321,15 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
           ))}
         </tbody>
       </table>
+      {policyFor === undefined ? null : (
+        <AccountPolicyDialog
+          connection={connection}
+          usernames={[policyFor.username]}
+          title={t("policyFor", { name: policyFor.displayName || policyFor.username })}
+          onClose={() => setPolicyFor(undefined)}
+          onSaved={load}
+        />
+      )}
     </div>
   );
 }

@@ -364,6 +364,11 @@
   outline: none;
 }
 
+/* A menu or picker opened from inside a dialog sits over that dialog, not under it. */
+.dialog-backdrop ~ .overlay {
+  z-index: 1150;
+}
+
 @keyframes overlay-in {
   from {
     opacity: 0;

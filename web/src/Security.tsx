@@ -5,9 +5,10 @@
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
-import type { TeamAdminDecision } from "@narraleaf/team-protocol";
+import type { TeamAccountPolicy, TeamAdminDecision } from "@narraleaf/team-protocol";
 
 import { t } from "./i18n";
+import { LockedNote } from "./Locked";
 import { Checkbox, confirmAction, CopyText, Flash, RelativeTime, SelectPanel, Skeleton, Subhead, toast, toastError } from "./ui";
 import { formatBytes } from "./Builds";
 import type { TeamConnection } from "./socket";
@@ -228,13 +229,20 @@ interface ApiToken {
 }
 
 /** Personal API tokens: made here, shown once, kept only as a hash. */
-export function ApiTokens({ connection }: { connection: TeamConnection }) {
+export function ApiTokens({ connection, policy }: { connection: TeamConnection; policy?: TeamAccountPolicy | undefined }) {
+  const access = policy?.apiTokens ?? "on";
+  const maxDays = policy?.apiTokenMaxDays;
+  /** The lifetimes on offer: none longer than the policy allows, and "never" only when nothing is said. */
+  const lifetimes = [...new Set([...["7", "30", "90", "365"].filter((value) => maxDays === undefined || Number(value) <= maxDays), ...(maxDays === undefined ? ["0"] : [String(maxDays)])])].sort(
+    (a, b) => (a === "0" ? Infinity : Number(a)) - (b === "0" ? Infinity : Number(b)),
+  );
   const [tokens, setTokens] = useState<readonly ApiToken[] | undefined>(undefined);
   const [projects, setProjects] = useState<readonly { id: string; name: string }[]>([]);
   const [name, setName] = useState("");
   const [scope, setScope] = useState<readonly string[]>([]);
   const [write, setWrite] = useState(false);
-  const [days, setDays] = useState("90");
+  const [chosenDays, setDays] = useState("90");
+  const days = lifetimes.includes(chosenDays) ? chosenDays : (lifetimes.at(-1) ?? "7");
   const [made, setMade] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
   const load = useCallback(() => {
@@ -250,7 +258,7 @@ export function ApiTokens({ connection }: { connection: TeamConnection }) {
     try {
       const answer = await connection.call<{ token: string }>("account.tokens.create", {
         name: name.trim(),
-        write,
+        write: write && access === "on",
         expiresInDays: Number(days),
         ...(scope.length === 0 ? {} : { projects: scope }),
       });
@@ -317,6 +325,11 @@ export function ApiTokens({ connection }: { connection: TeamConnection }) {
           ))}
         </ul>
       )}
+      {access === "off" ? (
+        <p className="small">
+          <LockedNote>{t("tokensOff")}</LockedNote>
+        </p>
+      ) : (
       <form className="stack token-form" onSubmit={(event) => void create(event)}>
         <h3 className="form-section-title">{t("tokenNew")}</h3>
         <label className="form-field">
@@ -340,18 +353,30 @@ export function ApiTokens({ connection }: { connection: TeamConnection }) {
           <SelectPanel<string>
             label={t("tokenLifetime")}
             value={days}
-            options={["7", "30", "90", "365", "0"].map((value) => ({ value, label: value === "0" ? t("tokenNoExpiry") : t("tokenDays", { count: value }) }))}
+            options={lifetimes.map((value) => ({ value, label: value === "0" ? t("tokenNoExpiry") : t("tokenDays", { count: value }) }))}
             onChange={setDays}
             align="end"
           />
         </div>
-        <Checkbox checked={write} onChange={setWrite} label={t("tokenWriteLabel")} description={t("tokenWriteHint")} />
+        <Checkbox
+          checked={write && access === "on"}
+          onChange={setWrite}
+          disabled={access !== "on"}
+          label={t("tokenWriteLabel")}
+          description={access === "on" ? t("tokenWriteHint") : <LockedNote>{t("tokensReadOnly")}</LockedNote>}
+        />
+        {maxDays === undefined ? null : (
+          <p className="small">
+            <LockedNote>{t("tokensMaxDays", { count: String(maxDays) })}</LockedNote>
+          </p>
+        )}
         <div className="form-actions">
           <button className="btn btn-primary" type="submit" disabled={name.trim() === ""}>
             {t("tokenCreate")}
           </button>
         </div>
       </form>
+      )}
     </div>
   );
 }

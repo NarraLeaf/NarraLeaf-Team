@@ -371,7 +371,7 @@ function cookieUser(service: TeamService, request: IncomingMessage, response: Se
     refuse(response, 401, describeWebSessionRefusal(identified.reason, describeRefusal));
     return undefined;
   }
-  if (twoFactorRequired(service.database) && !totpEnabled(service.database, identified.user.id)) {
+  if (twoFactorRequired(service.database, identified.user.id) && !totpEnabled(service.database, identified.user.id)) {
     refuse(response, 403, "set up two-step sign-in first");
     return undefined;
   }

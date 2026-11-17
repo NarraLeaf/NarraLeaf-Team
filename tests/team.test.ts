@@ -466,6 +466,7 @@ describe("opening a session", () => {
     // No history here, because this harness has read no repositories. Announced
     // from what the build serves rather than written down beside it.
     expect([...(client.hello?.capabilities ?? [])].sort()).toEqual([
+      "account-policy",
       "activity",
       "admin",
       "api-tokens",
@@ -491,6 +492,7 @@ describe("opening a session", () => {
       "session",
       "shares",
       "storage",
+      "studio-config",
       "templates",
       "todos",
       "two-factor",
@@ -3583,7 +3585,11 @@ const ADMIN_READS = [
   TEAM_METHODS.adminDocumentsStatus,
   TEAM_METHODS.adminStorageList,
   TEAM_METHODS.adminBackupsList,
+  TEAM_METHODS.adminPoliciesList,
 ];
+
+/** Reads that need an account named, so are only tested at the gate. */
+const ADMIN_LOOKUPS = [TEAM_METHODS.adminUsersPolicy];
 
 /** Every method of the family that changes something. */
 const ADMIN_WRITES = [
@@ -3608,10 +3614,13 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminUsersResetLink,
   TEAM_METHODS.adminUsersResetTwoFactor,
   TEAM_METHODS.adminBackupsCreate,
+  TEAM_METHODS.adminPoliciesSave,
+  TEAM_METHODS.adminPoliciesDelete,
+  TEAM_METHODS.adminUsersPolicySet,
 ];
 
 /** Both halves, which is what the gate has to cover. */
-const ADMIN_METHODS = [...ADMIN_READS, ...ADMIN_WRITES];
+const ADMIN_METHODS = [...ADMIN_READS, ...ADMIN_LOOKUPS, ...ADMIN_WRITES];
 
 describe("who may administer a server", () => {
   it("names every method of the family in the lists the gate is tested against", () => {
@@ -5682,5 +5691,60 @@ describe("permission templates and asking for access", () => {
     await root.value(TEAM_METHODS.accessRequestsDecide, { id, approve: true });
     expect((await bob.value(TEAM_METHODS.projectsList))["mayCreate"]).toBe(true);
     expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { kind: "creator" })).code).toBe("conflict");
+  });
+});
+
+describe("account policies", () => {
+  it("fixes what a template says, keeps the account from changing it, and lets it go when cleared", async () => {
+    const { ada, bob } = await administered();
+
+    const saved = await ada.value(TEAM_METHODS.adminPoliciesSave, {
+      name: "contractors",
+      policy: { displayName: { value: "Contractor" }, digest: { value: "daily" }, apiTokens: "off", studioConfig: "read" },
+    });
+    const template = saved["template"] as { id: string; accounts: number };
+    expect(template.accounts).toBe(0);
+    await ada.value(TEAM_METHODS.adminUsersPolicySet, { username: "bob", template: template.id });
+
+    const view = await bob.value(TEAM_METHODS.accountPolicy);
+    expect(view["template"]).toEqual({ id: template.id, name: "contractors" });
+    expect((view["policy"] as Record<string, unknown>)["apiTokens"]).toBe("off");
+
+    // Written onto the account, then held there.
+    expect(((await bob.value(TEAM_METHODS.accountProfileGet))["profile"] as Record<string, unknown>)["displayName"]).toBe("Contractor");
+    expect((await bob.call(TEAM_METHODS.accountProfileUpdate, { displayName: "Bobby" })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountProfileUpdate, { displayName: "Contractor" })).code).toBeUndefined();
+    expect((await bob.call(TEAM_METHODS.notificationsPrefsSet, { digest: "weekly" })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci" })).code).toBe("refused");
+    expect((await bob.value(TEAM_METHODS.accountStudioConfig))["access"]).toBe("read");
+
+    const listed = await ada.value(TEAM_METHODS.adminUsersList);
+    const row = (listed["users"] as { username: string; policy?: { templateName?: string } }[]).find((user) => user.username === "bob");
+    expect(row?.policy?.templateName).toBe("contractors");
+
+    // Deleting the template leaves bob with its settings as his own.
+    await ada.value(TEAM_METHODS.adminPoliciesDelete, { id: template.id });
+    const after = await ada.value(TEAM_METHODS.adminUsersPolicy, { username: "bob" });
+    expect(after["template"]).toBeUndefined();
+    expect(after["custom"]).toBe(true);
+    expect((after["policy"] as Record<string, unknown>)["apiTokens"]).toBe("off");
+
+    await ada.value(TEAM_METHODS.adminUsersPolicySet, { username: "bob", clear: true });
+    expect((await bob.call(TEAM_METHODS.accountProfileUpdate, { displayName: "Bobby" })).code).toBeUndefined();
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci" })).code).toBeUndefined();
+  });
+
+  it("caps an API token's lifetime and its reach, and refuses a policy it cannot read", async () => {
+    const { ada, bob } = await administered();
+    await ada.value(TEAM_METHODS.adminUsersPolicySet, { usernames: ["bob"], policy: { apiTokens: "read", apiTokenMaxDays: 30 } });
+
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci", write: true })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci", expiresInDays: 60 })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci", expiresInDays: 30 })).code).toBeUndefined();
+
+    expect((await ada.call(TEAM_METHODS.adminUsersPolicySet, { username: "bob", policy: { apiTokens: "sometimes" } })).code).toBe("bad-params");
+    expect((await ada.call(TEAM_METHODS.adminPoliciesSave, { name: "", policy: {} })).code).toBe("bad-params");
+    await ada.value(TEAM_METHODS.adminPoliciesSave, { name: "same", policy: {} });
+    expect((await ada.call(TEAM_METHODS.adminPoliciesSave, { name: "same", policy: {} })).code).toBe("bad-params");
   });
 });

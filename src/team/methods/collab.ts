@@ -25,6 +25,7 @@ import {
   type TodoInput,
   type TodoRecord,
 } from "../../collab/todos.js";
+import { accountPolicy, FIXED_BY_ADMIN } from "../../identity/accountPolicy.js";
 import { findUser, findUserById, type UserRecord } from "../../identity/users.js";
 import { profileBody } from "../../projects/answers.js";
 import { findProject } from "../../projects/registry.js";
@@ -196,6 +197,16 @@ export function collabMethods(): TeamMethod[] {
           throw new MethodError("bad-params", "timezone has to be an IANA time zone such as Asia/Shanghai");
         }
         const database = context.options.database;
+        const fixed = accountPolicy(database, context.user.id).policy;
+        const now = findUserById(database, context.user.id) ?? context.user;
+        // A fixed field the page sends back unchanged is fine: the settings page saves all three at once.
+        if (
+          (fixed.displayName !== undefined && displayName !== undefined && displayName !== now.displayName) ||
+          (fixed.bio !== undefined && bio !== undefined && bio !== (now.bio ?? "")) ||
+          (fixed.timezone !== undefined && timezone !== undefined && timezone !== (now.timezone ?? ""))
+        ) {
+          throw new MethodError("refused", FIXED_BY_ADMIN);
+        }
         if (timezone !== undefined) database.prepare("UPDATE users SET timezone = ? WHERE id = ?").run(timezone === "" ? null : timezone, context.user.id);
         if (displayName !== undefined) database.prepare("UPDATE users SET display_name = ? WHERE id = ?").run(displayName, context.user.id);
         if (bio !== undefined) database.prepare("UPDATE users SET bio = ? WHERE id = ?").run(bio === "" ? null : bio, context.user.id);

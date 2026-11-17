@@ -269,7 +269,7 @@ async function answerSignIn(
   // A server that asks every account for a second step is set up in the
   // console, which can show the secret and take the first code; Studio can
   // only take codes. Until then, Studio is told where to go.
-  if (twoFactorRequired(options.database) && !totpEnabled(options.database, outcome.user.id)) {
+  if (twoFactorRequired(options.database, outcome.user.id) && !totpEnabled(options.database, outcome.user.id)) {
     sendJson(response, 403, { error: ENROLL_FIRST_MESSAGE, enrollTwoFactor: true });
     return;
   }

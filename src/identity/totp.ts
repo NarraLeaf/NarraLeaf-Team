@@ -12,7 +12,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
-import { REQUIRE_TWO_FACTOR, policySwitch } from "./policy.js";
+import { accountRequiresTwoFactor } from "./accountPolicy.js";
 
 const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 /** Thirty seconds, the period every authenticator app assumes. */
@@ -246,7 +246,7 @@ export function removeTotp(database: DatabaseSync, userId: string): void {
   database.prepare("DELETE FROM recovery_codes WHERE user_id = ?").run(userId);
 }
 
-/** Whether this server asks everybody for a second factor. */
-export function twoFactorRequired(database: DatabaseSync): boolean {
-  return policySwitch(database, REQUIRE_TWO_FACTOR);
+/** Whether this account is asked for a second factor: by the server-wide switch, or by its own policy. */
+export function twoFactorRequired(database: DatabaseSync, userId: string): boolean {
+  return accountRequiresTwoFactor(database, userId);
 }

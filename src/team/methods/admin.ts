@@ -60,6 +60,20 @@ import { buildLimitBytes, storageView } from "../../collab/builds.js";
 import { createPasswordReset } from "../../identity/resets.js";
 import { removeTotp } from "../../identity/totp.js";
 import { listProjects } from "../../projects/registry.js";
+import {
+  accountPolicyView,
+  deletePolicyTemplate,
+  findPolicyTemplate,
+  listPolicyTemplates,
+  parsePolicy,
+  POLICY_DESCRIPTION_LIMIT,
+  POLICY_NAME_LIMIT,
+  PolicyRefusal,
+  policyLabels,
+  savePolicyTemplate,
+  setAccountPolicy,
+  type PolicyAssignment,
+} from "../../identity/accountPolicy.js";
 import { adminUserBody } from "../../identity/answers.js";
 import { SigningKeyRetirementError, type KeyStore } from "../../identity/keys.js";
 import { defaultPasswordHasher } from "../../identity/passwords.js";
@@ -519,6 +533,18 @@ function mintedBefore(note: RecordedWrite): TeamAdminMintedToken | undefined {
 /** One backup at a time per process: two would race for the same moment's name. */
 let backupRunning = false;
 
+const POLICY_ID_LIMIT = 64;
+
+/** Run a policy change, turning a refusal of the policy itself into a refusal of the call. */
+function policied<T>(work: () => T): T {
+  try {
+    return work();
+  } catch (error) {
+    if (error instanceof PolicyRefusal) throw new MethodError("bad-params", error.message);
+    throw error;
+  }
+}
+
 export function adminMethods(): TeamMethod[] {
   return [
     administered(TEAM_METHODS.adminUsersList, (params: unknown, context: MethodContext) => {
@@ -532,7 +558,13 @@ export function adminMethods(): TeamMethod[] {
         // Composed by the builder every answer carrying an account uses, so
         // that the record a change hands back and the record a list carries
         // cannot come to differ by a field.
-        users: page.users.map((user) => adminUserBody(user)),
+        users: (() => {
+          const labels = policyLabels(context.options.database);
+          return page.users.map((user) => {
+            const policy = labels.get(user.id);
+            return policy === undefined ? adminUserBody(user) : { ...adminUserBody(user), policy };
+          });
+        })(),
         // Opaque to the caller: `<createdAt>:<id>` as this server wrote it,
         // passed straight back. Absent when no page follows this one.
         ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
@@ -1018,6 +1050,75 @@ export function adminMethods(): TeamMethod[] {
         detail: "two-step sign-in reset by an admin",
       });
       return { user: adminUserBody(user) };
+    }),
+    administered(TEAM_METHODS.adminPoliciesList, (_params: unknown, context: MethodContext) => ({
+      templates: listPolicyTemplates(context.options.database),
+    })),
+    administered(TEAM_METHODS.adminPoliciesSave, (params: unknown, context: MethodContext) => {
+      const read = paramsObject(params);
+      const id = optionalText(read, "id", POLICY_ID_LIMIT);
+      const description = optionalText(read, "description", POLICY_DESCRIPTION_LIMIT);
+      const template = policied(() =>
+        savePolicyTemplate(context.options.database, {
+          ...(id === undefined ? {} : { id }),
+          name: requiredText(read, "name", POLICY_NAME_LIMIT),
+          ...(description === undefined ? {} : { description }),
+          policy: parsePolicy(read["policy"]),
+        }),
+      );
+      recordDecision(context.options.database, {
+        username: context.user.username,
+        resource: `policy:${template.name}`,
+        allowed: true,
+        detail: id === undefined ? "account policy template made" : `account policy template changed (${template.accounts} accounts follow it)`,
+      });
+      return { template };
+    }),
+    administered(TEAM_METHODS.adminPoliciesDelete, (params: unknown, context: MethodContext) => {
+      const id = requiredText(paramsObject(params), "id", POLICY_ID_LIMIT);
+      const template = findPolicyTemplate(context.options.database, id);
+      if (template !== undefined && deletePolicyTemplate(context.options.database, id)) {
+        recordDecision(context.options.database, {
+          username: context.user.username,
+          resource: `policy:${template.name}`,
+          allowed: true,
+          detail: "account policy template removed; its accounts keep its settings as their own",
+        });
+      }
+      return {};
+    }),
+    administered(TEAM_METHODS.adminUsersPolicy, (params: unknown, context: MethodContext) => {
+      const user = namedAccount(context, paramsObject(params));
+      return accountPolicyView(context.options.database, user.id);
+    }),
+    administered(TEAM_METHODS.adminUsersPolicySet, (params: unknown, context: MethodContext) => {
+      const read = paramsObject(params);
+      const raw = read["usernames"] ?? (read["username"] === undefined ? undefined : [read["username"]]);
+      if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAXIMUM_USER_PAGE || raw.some((name) => typeof name !== "string")) {
+        throw new MethodError("bad-params", "name the account in username, or several in usernames");
+      }
+      const users = (raw as string[]).map((username) => namedAccount(context, { username }));
+      const templateId = optionalText(read, "template", POLICY_ID_LIMIT);
+      let assignment: PolicyAssignment;
+      if (read["clear"] === true) {
+        assignment = null;
+      } else if (templateId !== undefined) {
+        assignment = { template: templateId };
+      } else if (read["policy"] !== undefined) {
+        assignment = { policy: policied(() => parsePolicy(read["policy"])) };
+      } else {
+        throw new MethodError("bad-params", "give a template, a policy, or clear: true");
+      }
+      for (const user of users) {
+        policied(() => setAccountPolicy(context.options.database, user.id, assignment, context.user.username));
+        recordDecision(context.options.database, {
+          username: context.user.username,
+          resource: `account:${user.username}`,
+          allowed: true,
+          detail: assignment === null ? "account policy cleared" : "template" in assignment ? "account policy template applied" : "account policy set",
+        });
+      }
+      return { policies: users.map((user) => ({ username: user.username, ...accountPolicyView(context.options.database, user.id) })) };
     }),
     administered(TEAM_METHODS.adminStorageList, (_params: unknown, context: MethodContext) => {
       const database = context.options.database;

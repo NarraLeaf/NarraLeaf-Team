@@ -615,10 +615,12 @@ export function gateCall(
   } else if (
     !method.startsWith("account.totp.") &&
     !method.startsWith("server.") &&
-    twoFactorRequired(database) &&
+    // So a client can say why it is being held, and by whom.
+    method !== "account.policy" &&
+    twoFactorRequired(database, user.id) &&
     !totpEnabled(database, user.id)
   ) {
-    return "this server asks every account for two-step sign-in; set it up first";
+    return "two-step sign-in is required for this account; set it up first";
   }
   // An archived project is read-only for everybody: what it holds may be read,
   // and the only thing done to it is bringing it back or removing it.

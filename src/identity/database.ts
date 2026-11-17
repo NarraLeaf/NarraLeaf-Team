@@ -1134,6 +1134,40 @@ const MIGRATIONS: readonly Migration[] = [
        ) STRICT`,
     ],
   },
+  {
+    version: 29,
+    description: "account policy templates, each account's policy, and Studio preferences kept per account",
+    statements: [
+      // policy is the JSON of a TeamAccountPolicy.
+      `CREATE TABLE policy_templates (
+         id          TEXT    NOT NULL PRIMARY KEY,
+         name        TEXT    NOT NULL UNIQUE,
+         description TEXT,
+         policy      TEXT    NOT NULL,
+         created_at  INTEGER NOT NULL,
+         updated_at  INTEGER NOT NULL
+       ) STRICT`,
+      // An account follows a template (template_id) or has settings of its own (policy); never both.
+      // Removing a template copies its policy onto its accounts first, so SET NULL is only a backstop.
+      `CREATE TABLE account_policies (
+         user_id     TEXT    NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+         template_id TEXT    REFERENCES policy_templates(id) ON DELETE SET NULL,
+         policy      TEXT,
+         updated_at  INTEGER NOT NULL,
+         updated_by  TEXT
+       ) STRICT`,
+      "CREATE INDEX account_policies_by_template ON account_policies (template_id)",
+      // The bytes Studio sent, as they came; this server never reads them.
+      `CREATE TABLE studio_configs (
+         user_id        TEXT    NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+         body           BLOB    NOT NULL,
+         size           INTEGER NOT NULL,
+         sha256         TEXT    NOT NULL,
+         studio_version TEXT,
+         updated_at     INTEGER NOT NULL
+       ) STRICT`,
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

@@ -26,6 +26,8 @@ import {
 import type { ConsoleAccount } from "./api";
 import { AvatarCropper } from "./Cropper";
 import { localTimeIn, NotificationSettings, timeZones } from "./Notify";
+import { LockedNote } from "./Locked";
+import { StudioConfigCard, useAccountPolicy } from "./Policy";
 import { Icon } from "./Icon";
 import { useMilestoneList } from "./Progress";
 import { studioConnectLink } from "./studioLink";
@@ -1011,6 +1013,12 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
   const [devices, setDevices] = useState<readonly TeamAccountDevice[]>([]);
   const picker = useRef<HTMLInputElement>(null);
   const [cropping, setCropping] = useState<File | undefined>(undefined);
+  const policyView = useAccountPolicy(connection, open);
+  const policy = policyView?.policy;
+  const nameLocked = policy?.displayName !== undefined;
+  const bioLocked = policy?.bio !== undefined;
+  const zoneLocked = policy?.timezone !== undefined;
+  const avatarLocked = policy?.lockAvatar === true;
 
   const load = useCallback(() => {
     connection
@@ -1034,7 +1042,11 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
   const save = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await connection.call("account.profile.update", { displayName, bio, timezone });
+      await connection.call("account.profile.update", {
+        ...(nameLocked ? {} : { displayName }),
+        ...(bioLocked ? {} : { bio }),
+        ...(zoneLocked ? {} : { timezone }),
+      });
       setNote(t("saved"));
       load();
     } catch (caught) {
@@ -1070,10 +1082,11 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
         <h2>{t("profile")}</h2>
         <div className="avatar-row">
           <Face name={profile?.displayName || profile?.username || "?"} url={profile?.avatarUrl} size={64} />
-          <button className="btn btn-sm" onClick={() => picker.current?.click()}>
+          {avatarLocked ? <LockedNote /> : null}
+          <button className="btn btn-sm" hidden={avatarLocked} onClick={() => picker.current?.click()}>
             {t("changeAvatar")}
           </button>
-          {profile?.avatarUrl !== undefined ? (
+          {profile?.avatarUrl !== undefined && !avatarLocked ? (
             <button className="btn btn-invisible btn-sm" onClick={() => void removeAvatar()}>
               {t("removeAvatar")}
             </button>
@@ -1101,16 +1114,22 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
         ) : null}
         <form className="stack" onSubmit={(event) => void save(event)}>
           <label>
-            <span className="muted small">{t("displayName")}</span>
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={128} required />
+            <span className="muted small">
+              {t("displayName")} {nameLocked ? <LockedNote /> : null}
+            </span>
+            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={128} required disabled={nameLocked} />
           </label>
           <label>
-            <span className="muted small">{t("bio")}</span>
-            <textarea value={bio} onChange={(event) => setBio(event.target.value)} maxLength={400} rows={3} />
+            <span className="muted small">
+              {t("bio")} {bioLocked ? <LockedNote /> : null}
+            </span>
+            <textarea value={bio} onChange={(event) => setBio(event.target.value)} maxLength={400} rows={3} disabled={bioLocked} />
           </label>
           <div className="settings-row">
             <span>
-              <span className="muted small">{t("timezone")}</span>
+              <span className="muted small">
+                {t("timezone")} {zoneLocked ? <LockedNote /> : null}
+              </span>
               <br />
               <span className="small">{timezone === "" ? t("timezoneUnset") : localTimeIn(timezone) === undefined ? timezone : `${timezone} · ${localTimeIn(timezone)}`}</span>
             </span>
@@ -1120,21 +1139,22 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
               filterFrom={0}
               options={[{ value: "-", label: t("timezoneUnset") }, ...timeZones().map((zone) => ({ value: zone, label: zone }))]}
               onChange={(zone) => setTimezone(zone === "-" ? "" : zone)}
+              disabled={zoneLocked}
               size="small"
               align="end"
             />
           </div>
           <div className="actions">
             {note !== undefined ? <span className="muted small">{note}</span> : null}
-            <button className="primary" type="submit">
+            <button className="primary" type="submit" disabled={nameLocked && bioLocked && zoneLocked}>
               {t("save")}
             </button>
           </div>
         </form>
       </div>
-      <NotificationSettings connection={connection} open={open} />
+      <NotificationSettings connection={connection} open={open} policy={policy} />
       {open ? <TwoFactorPanel connection={connection} /> : null}
-      {open ? <ApiTokens connection={connection} /> : null}
+      {open ? <ApiTokens connection={connection} policy={policy} /> : null}
       <div className="card settings-block">
         <h2>{t("devices")}</h2>
         {devices.length === 0 ? (
@@ -1164,6 +1184,7 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
           {t("connectStudio")}
         </a>
       </div>
+      <StudioConfigCard connection={connection} open={open} />
     </section>
   );
 }

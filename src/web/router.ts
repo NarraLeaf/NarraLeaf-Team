@@ -41,6 +41,7 @@ import { serveOAuth } from "./oauth.js";
 import { serveProjectFiles } from "./files.js";
 import { serveAvatars } from "./avatars.js";
 import { serveUploads } from "./uploads.js";
+import { serveStudioConfig } from "./studioConfig.js";
 import { serveStudioApi } from "./studio.js";
 import { remoteAddressOf } from "./origin.js";
 import { addressAllowed } from "../identity/policy.js";
@@ -145,6 +146,10 @@ export function webHandler(
     }
 
     if (options.console !== undefined && serveAvatars(options.console.service, request, response, path)) {
+      return;
+    }
+
+    if (options.console !== undefined && serveStudioConfig(options.console.service, request, response, path)) {
       return;
     }
 

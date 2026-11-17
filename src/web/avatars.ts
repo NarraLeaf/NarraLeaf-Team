@@ -21,6 +21,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 
+import { accountPolicy, FIXED_BY_ADMIN } from "../identity/accountPolicy.js";
 import { identifyCaller } from "../identity/bearer.js";
 import { findUser, isOperator, type UserRecord } from "../identity/users.js";
 import { setBrandLogo, setSigninImage, storedBrand, storedSigninLook } from "../identity/settings.js";
@@ -131,6 +132,11 @@ async function change(service: TeamService, request: IncomingMessage, response: 
     return;
   }
   const user = identified.user;
+  if (accountPolicy(service.database, user.id).policy.lockAvatar === true) {
+    refuse(response, 403, FIXED_BY_ADMIN);
+    request.resume();
+    return;
+  }
   if (request.method === "DELETE") {
     service.database.prepare("UPDATE users SET avatar = NULL WHERE id = ?").run(user.id);
     sendJson(response, 200, {});

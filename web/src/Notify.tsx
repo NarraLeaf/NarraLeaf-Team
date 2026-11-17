@@ -31,6 +31,7 @@ import {
   type TeamDigestFrequency,
   type TeamNotificationCategory,
   type TeamNotificationChannel,
+  type TeamAccountPolicy,
   type TeamNotificationPrefs,
   type TeamProfile,
   type TeamReaction,
@@ -41,6 +42,7 @@ import {
 
 import { Icon } from "./Icon";
 import { t, type Phrase } from "./i18n";
+import { LockedNote } from "./Locked";
 import type { TeamConnection } from "./socket";
 import { Checkbox, SelectPanel, Subhead, toast, toastError } from "./ui";
 
@@ -483,7 +485,7 @@ async function unsubscribeBrowser(connection: TeamConnection): Promise<TeamNotif
 
 /* ---------------------------------------------------------------- settings */
 
-const CATEGORY_PHRASE: Record<TeamNotificationCategory, Phrase> = {
+export const CATEGORY_PHRASE: Record<TeamNotificationCategory, Phrase> = {
   mention: "catMention",
   reply: "catReply",
   assign: "catAssign",
@@ -491,11 +493,14 @@ const CATEGORY_PHRASE: Record<TeamNotificationCategory, Phrase> = {
   watch: "catWatch",
   access: "catAccess",
 };
-const CHANNEL_PHRASE: Record<TeamNotificationChannel, Phrase> = { inapp: "chanInapp", push: "chanPush", email: "chanEmail" };
-const DIGEST_PHRASE: Record<TeamDigestFrequency, Phrase> = { off: "digestOff", daily: "digestDaily", weekly: "digestWeekly" };
+export const CHANNEL_PHRASE: Record<TeamNotificationChannel, Phrase> = { inapp: "chanInapp", push: "chanPush", email: "chanEmail" };
+export const DIGEST_PHRASE: Record<TeamDigestFrequency, Phrase> = { off: "digestOff", daily: "digestDaily", weekly: "digestWeekly" };
 
 /** Where each kind of notification goes, the digest, a personal address, and this browser's pushes. */
-export function NotificationSettings({ connection, open }: { connection: TeamConnection; open: boolean }) {
+export function NotificationSettings({ connection, open, policy }: { connection: TeamConnection; open: boolean; policy?: TeamAccountPolicy | undefined }) {
+  const switchesLocked = policy?.notificationSwitches !== undefined;
+  const digestLocked = policy?.digest !== undefined;
+  const hookLocked = policy?.hook !== undefined;
   const [prefs, setPrefs] = useState<TeamNotificationPrefs | undefined>(undefined);
   const [hook, setHook] = useState("");
   const [subscribed, setSubscribed] = useState(false);
@@ -549,6 +554,11 @@ export function NotificationSettings({ connection, open }: { connection: TeamCon
   return (
     <div className="card settings-block" id="notifications" ref={section}>
       <Subhead title={t("notificationSettings")}>{t("notificationSettingsLead")}</Subhead>
+      {switchesLocked ? (
+        <p className="small">
+          <LockedNote />
+        </p>
+      ) : null}
       <table className="notify-matrix">
         <thead>
           <tr>
@@ -569,6 +579,7 @@ export function NotificationSettings({ connection, open }: { connection: TeamCon
                   <Checkbox
                     checked={on(category, channel)}
                     onChange={(enabled) => flip(category, channel, enabled)}
+                    disabled={switchesLocked}
                     label={<span className="visually-hidden">{`${t(CATEGORY_PHRASE[category])} · ${t(CHANNEL_PHRASE[channel])}`}</span>}
                   />
                 </td>
@@ -624,7 +635,9 @@ export function NotificationSettings({ connection, open }: { connection: TeamCon
         </div>
       )}
 
-      <h3 className="settings-sub">{t("digest")}</h3>
+      <h3 className="settings-sub">
+        {t("digest")} {digestLocked ? <LockedNote /> : null}
+      </h3>
       <div className="settings-row">
         <span className="muted small">
           {prefs.mail ? (prefs.email === undefined ? t("digestNoEmail") : t("digestTo", { email: prefs.email })) : t("digestNoMail")}
@@ -635,6 +648,7 @@ export function NotificationSettings({ connection, open }: { connection: TeamCon
             value={prefs.digest}
             options={TEAM_DIGEST_FREQUENCIES.map((value) => ({ value, label: t(DIGEST_PHRASE[value]) }))}
             onChange={(digest) => void set({ digest })}
+            disabled={digestLocked}
             size="small"
           />
           <button
@@ -660,14 +674,16 @@ export function NotificationSettings({ connection, open }: { connection: TeamCon
         }}
       >
         <label className="grow">
-          <span className="muted small">{t("personalHook")}</span>
-          <input type="url" value={hook} onChange={(event) => setHook(event.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" maxLength={2048} />
+          <span className="muted small">
+            {t("personalHook")} {hookLocked ? <LockedNote /> : null}
+          </span>
+          <input type="url" value={hook} disabled={hookLocked} onChange={(event) => setHook(event.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" maxLength={2048} />
         </label>
         <span className="settings-row-actions">
           <button className="btn" type="button" disabled={busy || hook.trim() === ""} onClick={() => void run(() => connection.call("notifications.hook.test", { url: hook.trim() }).then(() => toast(t("hookTested"))))}>
             {t("sendTest")}
           </button>
-          <button className="btn btn-primary" type="submit" disabled={(prefs.hook ?? "") === hook.trim()}>
+          <button className="btn btn-primary" type="submit" disabled={hookLocked || (prefs.hook ?? "") === hook.trim()}>
             {t("save")}
           </button>
         </span>

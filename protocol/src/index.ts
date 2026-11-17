@@ -184,6 +184,16 @@ export const TEAM_CAPABILITIES = [
   /** How much a project keeps on this server (builds and attachments), against the quota. */
   "storage",
   /**
+   * Operators may fix an account's own settings - its profile, notifications, two-step sign-in,
+   * API tokens - by hand or from a template; what is fixed the account reads and cannot change.
+   */
+  "account-policy",
+  /**
+   * Studio may keep its preferences on this server, one document per account, to put back on
+   * another computer: `PUT` and `GET /api/team/v1/studio-config`. Kept as bytes, never read.
+   */
+  "studio-config",
+  /**
    * A project's own channel: messages its members write to each other, kept,
    * in order, and read back a page at a time - unlike a live session's chat,
    * which only the people in the room at that moment ever see.
@@ -1844,7 +1854,83 @@ export interface TeamAdminUser {
    * refusal was made before this server kept the moment.
    */
   readonly tokensInvalidatedAt?: number;
+  /** The account policy an operator gave it: a template by name, or settings of its own. Absent when none. */
+  readonly policy?: { readonly templateId?: string; readonly templateName?: string };
 }
+
+/**
+ * One of an account's own settings, fixed by an operator.
+ *
+ * Present means fixed: the account reads it and cannot change it. `value` is what it is fixed
+ * to, written onto the account when the policy is applied; absent means fixed at whatever the
+ * account has now (a template, which many accounts share, has no one display name to give).
+ */
+export interface TeamPolicyLock<T> {
+  readonly value?: T;
+}
+
+/** Whether something may be done: at all, only reading, or not. */
+export type TeamPolicyAccess = "on" | "read" | "off";
+
+/**
+ * What an operator decided about one account's own settings. Every field is optional, and a
+ * field left out leaves that setting to the account.
+ */
+export interface TeamAccountPolicy {
+  readonly displayName?: TeamPolicyLock<string>;
+  readonly bio?: TeamPolicyLock<string>;
+  /** An IANA zone, or "" for none. */
+  readonly timezone?: TeamPolicyLock<string>;
+  /** The picture cannot be changed or taken away. */
+  readonly lockAvatar?: boolean;
+  readonly notificationSwitches?: TeamPolicyLock<TeamNotificationPrefs["switches"]>;
+  readonly digest?: TeamPolicyLock<TeamDigestFrequency>;
+  /** A personal Feishu or Slack address, or "" for none. */
+  readonly hook?: TeamPolicyLock<string>;
+  /** Two-step sign-in is asked of this account whatever the server-wide switch says. */
+  readonly requireTwoFactor?: boolean;
+  /** Personal API tokens: may be made, only read-only ones, or none. "off" and "read" revoke what no longer fits. */
+  readonly apiTokens?: TeamPolicyAccess;
+  /** The longest an API token may live, in days; a token that never expires is then refused. */
+  readonly apiTokenMaxDays?: number;
+  /** Keeping Studio's preferences on this server: back up and restore, restore only, or neither. */
+  readonly studioConfig?: TeamPolicyAccess;
+}
+
+/** A named policy many accounts may follow. Changing it changes it for all of them. */
+export interface TeamPolicyTemplate {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly policy: TeamAccountPolicy;
+  /** How many accounts follow it. */
+  readonly accounts: number;
+  readonly updatedAt: number;
+}
+
+/** The policy one account is under, as `account.policy` and `admin.users.policy` answer it. */
+export interface TeamAccountPolicyView {
+  /** What is in force: the template's or the account's own, with the server-wide two-step switch folded in. */
+  readonly policy: TeamAccountPolicy;
+  readonly template?: { readonly id: string; readonly name: string };
+  /** Whether the account has settings of its own rather than a template. */
+  readonly custom: boolean;
+  /** Whether two-step sign-in is asked of every account on this server. */
+  readonly serverRequiresTwoFactor: boolean;
+}
+
+/** What this server keeps of one account's Studio preferences. */
+export interface TeamStudioConfigStatus {
+  readonly access: TeamPolicyAccess;
+  /** Absent when nothing has been put there. */
+  readonly stored?: { readonly size: number; readonly updatedAt: number; readonly studioVersion?: string; readonly sha256: string };
+}
+
+/** The largest Studio preferences document this server keeps. */
+export const STUDIO_CONFIG_MAX_BYTES = 1024 * 1024;
+
+/** Where Studio puts and reads its preferences document. */
+export const STUDIO_CONFIG_PATH = "/api/team/v1/studio-config";
 
 /**
  * One line of what this server keeps in its settings.
@@ -2494,6 +2580,22 @@ export const TEAM_METHODS = {
   adminBackupsList: "admin.backups.list",
   /** Make a backup now. Operators. */
   adminBackupsCreate: "admin.backups.create",
+  /** The account policy the caller is under. */
+  accountPolicy: "account.policy",
+  /** What this server keeps of the caller's Studio preferences, and whether they may keep any. */
+  accountStudioConfig: "account.studioConfig",
+  /** Throw away the caller's Studio preferences kept here. */
+  accountStudioConfigDelete: "account.studioConfig.delete",
+  /** The policy templates, with how many accounts follow each. Operators. */
+  adminPoliciesList: "admin.policies.list",
+  /** Make a policy template, or change one (and every account that follows it). Operators. */
+  adminPoliciesSave: "admin.policies.save",
+  /** Remove a template; the accounts that followed it keep its settings as their own. Operators. */
+  adminPoliciesDelete: "admin.policies.delete",
+  /** The policy one account is under. Operators. */
+  adminUsersPolicy: "admin.users.policy",
+  /** Put accounts under a template, give them settings of their own, or clear their policy. Operators. */
+  adminUsersPolicySet: "admin.users.policySet",
 } as const;
 
 export type TeamMethodName = (typeof TEAM_METHODS)[keyof typeof TEAM_METHODS];
