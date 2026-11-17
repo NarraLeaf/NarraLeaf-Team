@@ -10,10 +10,12 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type InputHTMLAttributes,
   type KeyboardEvent,
   type ReactNode,
@@ -130,12 +132,41 @@ export function ReactionBar(props: {
     const escape = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") setPicking(false);
     };
+    // The picker floats over the page at a fixed place, so a scroll would leave it behind.
+    const scrolled = (event: Event) => {
+      if (picker.current === null || !picker.current.contains(event.target as Node)) setPicking(false);
+    };
     document.addEventListener("mousedown", away);
     document.addEventListener("keydown", escape);
+    document.addEventListener("scroll", scrolled, true);
+    window.addEventListener("resize", scrolled);
     return () => {
       document.removeEventListener("mousedown", away);
       document.removeEventListener("keydown", escape);
+      document.removeEventListener("scroll", scrolled, true);
+      window.removeEventListener("resize", scrolled);
     };
+  }, [picking]);
+  // Placed against the window rather than its box, so a scrolling list or a narrow panel never
+  // cuts it off: above the button when there is room, below it when not, and kept inside the
+  // window from side to side.
+  const picker = useRef<HTMLSpanElement>(null);
+  const [place, setPlace] = useState<CSSProperties | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!picking) {
+      setPlace(undefined);
+      return;
+    }
+    const button = box.current?.querySelector(".reaction-add") ?? null;
+    const menu = picker.current;
+    if (button === null || menu === null) return;
+    const at = button.getBoundingClientRect();
+    const size = menu.getBoundingClientRect();
+    const margin = 8;
+    const left = Math.max(margin, Math.min(at.left, window.innerWidth - size.width - margin));
+    const above = at.top - size.height - 4;
+    const top = above >= margin ? above : Math.min(at.bottom + 4, window.innerHeight - size.height - margin);
+    setPlace({ left, top });
   }, [picking]);
   const toggle = (emoji: TeamReactionEmoji) => {
     setPicking(false);
@@ -167,7 +198,7 @@ export function ReactionBar(props: {
         </button>
       ) : null}
       {picking ? (
-        <span className="reaction-picker" role="menu">
+        <span className="reaction-picker" role="menu" ref={picker} style={place ?? { visibility: "hidden" }}>
           {TEAM_REACTIONS.map((emoji) => (
             <button key={emoji} type="button" role="menuitem" className="reaction-choice" onClick={() => toggle(emoji)}>
               {emoji}

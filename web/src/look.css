@@ -2306,6 +2306,7 @@ fieldset.admin-field.layout-choice > :not(.layout-option) {
 .chat-lines {
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 10px 12px;
   display: flex;
@@ -2349,22 +2350,16 @@ fieldset.admin-field.layout-choice > :not(.layout-option) {
   position: relative;
 }
 .chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) {
+  display: contents;
+}
+.chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) .reaction-add {
   position: absolute;
   bottom: 0;
   left: calc(100% + 4px);
-  margin: 0;
 }
-.mine .chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) {
+.mine .chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) .reaction-add {
   left: auto;
   right: calc(100% + 4px);
-}
-.chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) .reaction-picker {
-  left: auto;
-  right: 0;
-}
-.mine .chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) .reaction-picker {
-  left: 0;
-  right: auto;
 }
 
 .chat-who {

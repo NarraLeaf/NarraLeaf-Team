@@ -1507,11 +1507,14 @@
 }
 
 .reaction-picker {
-  position: absolute;
+  position: fixed;
   left: 0;
-  bottom: calc(100% + 4px);
-  z-index: 30;
+  top: 0;
+  z-index: 1050;
   display: flex;
+  flex-wrap: wrap;
+  width: max-content;
+  max-width: calc(100vw - 16px);
   gap: 2px;
   padding: 4px;
   border-radius: var(--nl-radius-pill);
