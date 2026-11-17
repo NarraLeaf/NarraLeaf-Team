@@ -7,7 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createMilestone, deleteMilestone, findMilestone } from "../src/collab/milestones.js";
-import { createTodo, findTodo, TodoRefusal, updateTodo } from "../src/collab/todos.js";
+import { createTodo, findTodo, TodoRefusal, todoView, updateTodo } from "../src/collab/todos.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
@@ -137,6 +137,22 @@ describe("to-dos toward a milestone", () => {
 
     deleteMilestone(database, user("ada"), planned.id);
     expect(findTodo(database, todo.id)?.milestoneId).toBeUndefined();
+  });
+});
+
+describe("to-do priority", () => {
+  it("keeps a priority from creation, changes it, and leaves it out of the view when none", async () => {
+    const { database, user, project } = await team();
+    const plain = createTodo(database, user("ada"), { title: "tidy the glossary", projectId: project.id, visibility: "project" });
+    expect(plain.priority).toBe(0);
+    expect(todoView(database, plain).priority).toBeUndefined();
+
+    const urgent = createTodo(database, user("ada"), { title: "fix the crash", projectId: project.id, visibility: "project", priority: 3, dueAt: 1_800_000_000_000 });
+    expect(todoView(database, urgent)).toMatchObject({ priority: 3, dueAt: 1_800_000_000_000 });
+
+    // A change that does not name the priority keeps it.
+    expect(updateTodo(database, user("ada"), urgent.id, { title: "fix the crash on load" }).priority).toBe(3);
+    expect(updateTodo(database, user("ada"), urgent.id, { priority: 1 }).priority).toBe(1);
   });
 });
 

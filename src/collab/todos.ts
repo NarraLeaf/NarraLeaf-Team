@@ -13,11 +13,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { integerColumn, optionalIntegerColumn, optionalTextColumn, textColumn, type Row } from "../identity/database.js";
 import { findUserById, type UserRecord } from "../identity/users.js";
 import { maySeeProject, projectRole, visibleProjectIds } from "../projects/members.js";
-import type { TeamTodo, TeamTodoKind, TeamTodoStatus, TeamTodoVisibility } from "../team/protocol.js";
+import type { TeamTodo, TeamTodoKind, TeamTodoPriority, TeamTodoStatus, TeamTodoVisibility } from "../team/protocol.js";
 
 export const TODO_STATUSES: readonly TeamTodoStatus[] = ["open", "doing", "done"];
 export const TODO_VISIBILITIES: readonly TeamTodoVisibility[] = ["private", "project"];
 export const TODO_KINDS: readonly TeamTodoKind[] = ["task", "asset", "translation", "voice"];
+export const TODO_PRIORITIES: readonly TeamTodoPriority[] = [0, 1, 2, 3];
 
 /** One to-do as stored, with ids rather than usernames. */
 export interface TodoRecord {
@@ -44,6 +45,7 @@ export interface TodoRecord {
   readonly labels: readonly string[];
   /** The milestone of its project it counts toward. */
   readonly milestoneId: string | undefined;
+  readonly priority: TeamTodoPriority;
 }
 
 /** Why a to-do could not be written, in the caller's terms. */
@@ -97,6 +99,10 @@ function toRecord(row: Row): TodoRecord {
     asset: optionalTextColumn(row, "asset"),
     labels: readLabels(optionalTextColumn(row, "labels")),
     milestoneId: optionalTextColumn(row, "milestone_id"),
+    // Out of range reads as none: a priority written by a newer Team still leaves a to-do.
+    priority: (TODO_PRIORITIES as readonly number[]).includes(optionalIntegerColumn(row, "priority") ?? 0)
+      ? ((optionalIntegerColumn(row, "priority") ?? 0) as TeamTodoPriority)
+      : 0,
   };
 }
 
@@ -149,6 +155,7 @@ export function todoView(database: DatabaseSync, todo: TodoRecord): TeamTodo {
     ...(todo.asset === undefined ? {} : { asset: todo.asset }),
     ...(todo.labels.length === 0 ? {} : { labels: todo.labels }),
     ...(todo.milestoneId === undefined ? {} : { milestone: todo.milestoneId }),
+    ...(todo.priority === 0 ? {} : { priority: todo.priority }),
   };
 }
 
@@ -170,6 +177,7 @@ export interface TodoInput {
   readonly labels?: readonly string[];
   /** The milestone it counts toward, of the same project; `null` takes it off. */
   readonly milestoneId?: string | null;
+  readonly priority?: TeamTodoPriority;
 }
 
 /** Check that a to-do's shape holds together, for the caller making it so. */
@@ -235,8 +243,8 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
   database
     .prepare(
       `INSERT INTO todos (id, owner_id, assignee_id, project_id, document, element, revision, title, body, status,
-                          visibility, due_at, created_at, updated_at, done_at, kind, locale, asset, labels, milestone_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                          visibility, due_at, created_at, updated_at, done_at, kind, locale, asset, labels, milestone_id, priority)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -259,6 +267,7 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
       input.asset ?? null,
       writeLabels(input.labels),
       milestoneId ?? null,
+      input.priority ?? 0,
     );
   return findTodo(database, id) as TodoRecord;
 }
@@ -309,7 +318,7 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
     .prepare(
       `UPDATE todos SET assignee_id = ?, project_id = ?, document = ?, element = ?, revision = ?, title = ?, body = ?,
                         status = ?, visibility = ?, due_at = ?, updated_at = ?, done_at = ?, done_revision = ?,
-                        kind = ?, locale = ?, asset = ?, labels = ?, milestone_id = ? WHERE id = ?`,
+                        kind = ?, locale = ?, asset = ?, labels = ?, milestone_id = ?, priority = ? WHERE id = ?`,
     )
     .run(
       next.assigneeId ?? null,
@@ -330,6 +339,7 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
       input.asset === undefined ? (current.asset ?? null) : input.asset,
       input.labels === undefined ? writeLabels(current.labels) : writeLabels(input.labels),
       milestoneId ?? null,
+      input.priority ?? current.priority,
       id,
     );
   return findTodo(database, id) as TodoRecord;

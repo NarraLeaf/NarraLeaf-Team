@@ -1179,6 +1179,14 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE users ADD COLUMN locked_until INTEGER",
     ],
   },
+  {
+    version: 31,
+    description: "a priority on each to-do",
+    statements: [
+      // 0 none, 1 low, 2 medium, 3 high.
+      "ALTER TABLE todos ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

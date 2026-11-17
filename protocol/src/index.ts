@@ -1146,6 +1146,8 @@ export type TeamTodoVisibility = "private" | "project";
  * give one language of a story or scene to somebody, and name the `locale`.
  */
 export type TeamTodoKind = "task" | "asset" | "translation" | "voice";
+/** How much a to-do matters: 0 none, 1 low, 2 medium, 3 high. */
+export type TeamTodoPriority = 0 | 1 | 2 | 3;
 
 export interface TeamTodo {
   readonly id: string;
@@ -1167,6 +1169,8 @@ export interface TeamTodo {
   readonly asset?: string;
   /** Short words to sort it by — "bug", "art", "chapter 2". At most {@link TODO_LABELS_LIMIT}. */
   readonly labels?: readonly string[];
+  /** Left out where it is 0, none. */
+  readonly priority?: TeamTodoPriority;
   readonly dueAt?: number;
   readonly createdAt: number;
   readonly updatedAt: number;

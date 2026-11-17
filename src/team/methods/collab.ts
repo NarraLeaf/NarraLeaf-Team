@@ -16,6 +16,7 @@ import {
   listTodos,
   maySeeTodo,
   TODO_KINDS,
+  TODO_PRIORITIES,
   TODO_STATUSES,
   TODO_VISIBILITIES,
   todoAccounts,
@@ -50,6 +51,7 @@ import {
   TODO_LABEL_LENGTH,
   TODO_LABELS_LIMIT,
   type TeamNotification,
+  type TeamTodoPriority,
   type TeamTodosEvent,
 } from "../protocol.js";
 
@@ -157,6 +159,13 @@ function todoInput(context: MethodContext, read: Record<string, unknown>): TodoI
   if (read["asset"] !== undefined) input.asset = read["asset"] === null ? null : requiredText(read, "asset", ANCHOR_FIELD_LIMIT);
   if (read["labels"] !== undefined) input.labels = todoLabels(read["labels"]);
   if (read["milestone"] !== undefined) input.milestoneId = read["milestone"] === null ? null : requiredText(read, "milestone", ID_LIMIT);
+  if (read["priority"] !== undefined) {
+    const priority = read["priority"];
+    if (!(TODO_PRIORITIES as readonly unknown[]).includes(priority)) {
+      throw new MethodError("bad-params", "priority has to be 0, 1, 2 or 3");
+    }
+    input.priority = priority as TeamTodoPriority;
+  }
   if (read["anchor"] !== undefined) {
     if (read["anchor"] === null) {
       input.anchor = null;
