@@ -40,6 +40,7 @@ import {
   type TeamWatch,
 } from "@narraleaf/team-protocol";
 
+import { Face } from "./Collab";
 import { Icon } from "./Icon";
 import { t, type Phrase } from "./i18n";
 import { LockedNote } from "./Locked";
@@ -342,6 +343,7 @@ export function MentionField(props: FieldProps & { connection: TeamConnection; v
                   pick(person);
                 }}
               >
+                <Face name={person.displayName || person.username} user={person.username} size={22} />
                 <strong>@{person.username}</strong>
                 {person.displayName !== person.username ? <span className="muted small">{person.displayName}</span> : null}
               </button>

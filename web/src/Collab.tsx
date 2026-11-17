@@ -99,8 +99,10 @@ function useAvatarOf(username: string | undefined): string | undefined {
 export function Face({ name, url, user, size = 26 }: { name: string; url?: string | undefined; user?: string | undefined; size?: number }) {
   const looked = useAvatarOf(url === undefined ? user : undefined);
   const picture = url ?? looked;
-  if (picture !== undefined) {
-    return <img className="avatar" src={picture} alt="" width={size} height={size} style={{ width: size, height: size }} />;
+  // A picture that will not load shows the initial instead of a broken image.
+  const [broken, setBroken] = useState<string | undefined>(undefined);
+  if (picture !== undefined && picture !== broken) {
+    return <img className="avatar" src={picture} alt="" width={size} height={size} style={{ width: size, height: size }} onError={() => setBroken(picture)} />;
   }
   let hash = 0;
   for (const char of name) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) % 360;

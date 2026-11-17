@@ -1418,13 +1418,15 @@ fieldset.admin-field.layout-choice > :not(.layout-option) {
   background: var(--nl-fill-subtle);
 }
 
-.wb-badge {
-  padding: 1px 8px;
-  border-radius: 4px;
-  background: var(--nl-fill);
-  color: rgb(var(--nl-fg-muted));
-  font-size: 12px;
-  white-space: nowrap;
+/* Who is signed in, at the far end of the bar; it opens their profile. */
+.wb-me {
+  display: inline-flex;
+  flex: none;
+  border-radius: 50%;
+}
+.wb-me:hover .avatar,
+.wb-me:focus-visible .avatar {
+  box-shadow: 0 0 0 2px rgb(var(--nl-primary) / 0.5);
 }
 
 .wb-revision {
@@ -2341,6 +2343,30 @@ fieldset.admin-field.layout-choice > :not(.layout-option) {
   background: rgb(var(--nl-primary) / 0.22);
 }
 
+/* With nothing reacted yet, the add button floats beside the bubble on hover
+   rather than holding an empty line open inside it. */
+.chat-bubble {
+  position: relative;
+}
+.chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) {
+  position: absolute;
+  bottom: 0;
+  left: calc(100% + 4px);
+  margin: 0;
+}
+.mine .chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) {
+  left: auto;
+  right: calc(100% + 4px);
+}
+.chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) .reaction-picker {
+  left: auto;
+  right: 0;
+}
+.mine .chat-bubble .reactions:not(:has(.reaction:not(.reaction-add))) .reaction-picker {
+  left: 0;
+  right: auto;
+}
+
 .chat-who {
   font-size: 12px;
   font-weight: 600;
@@ -2610,7 +2636,6 @@ fieldset.admin-field {
     height: 100dvh;
   }
 
-  .wb-badge,
   .wb-tool span {
     display: none;
   }
@@ -4241,8 +4266,29 @@ ul.diff-rows .diff-row {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.script-title .approval-control {
-  margin-left: 8px;
+/* The scene's review state, its watch and the view switch: one row, one height. */
+.script-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.script-tools .approval-note {
+  max-width: 180px;
+}
+.script-tools .approval {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--nl-radius);
+}
+.script-tools > .btn-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--nl-radius);
+  background: var(--nl-fill-subtle);
+}
+.script-tools > .btn-icon.is-watching {
+  color: rgb(var(--nl-primary));
 }
 .approval-history {
   list-style: none;

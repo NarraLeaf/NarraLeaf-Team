@@ -478,7 +478,6 @@ function Workbench(props: {
           <Icon name="back" />
           <span>{projectName}</span>
         </button>
-        <span className="wb-badge">{t("readOnlyBadge")}</span>
         {revision !== "head" ? (
           <span className="wb-revision">
             {t("atRevision", { rev: revision.slice(0, 12) })}
@@ -500,6 +499,20 @@ function Workbench(props: {
           <Icon name="chat" />
           <span>{t("chatTitle")}</span>
         </button>
+        <a
+          className="wb-me"
+          href="/console/me"
+          title={t("myProfile")}
+          aria-label={t("myProfile")}
+          onClick={(event) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+            event.preventDefault();
+            window.history.pushState(null, "", "/console/me");
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          }}
+        >
+          <Face name={account.displayName || account.username} user={account.username} size={26} />
+        </a>
       </header>
       <div className="wb-body">
         <nav className="wb-activity" aria-label={t("workbench")}>
@@ -967,6 +980,8 @@ function StoryBody(props: {
                 {document?.supported ? (
                   <span className="muted small">{document.chapters.find((chapter) => chapter.sceneIds.includes(sceneId ?? ""))?.name ?? ""}</span>
                 ) : null}
+              </div>
+              <div className="script-tools">
                 {sceneId === undefined ? null : (
                   <ApprovalControl
                     connection={connection}
@@ -978,14 +993,14 @@ function StoryBody(props: {
                   />
                 )}
                 {sceneId === undefined ? null : <WatchToggle connection={connection} projectId={projectId} scope={`scene:${sceneId}`} compact />}
-              </div>
-              <div className="segmented" role="group" aria-label={t("showCommands")}>
-                <button aria-pressed={showCommands} className={showCommands ? "active" : undefined} onClick={() => setShowCommands(() => true)}>
-                  {t("viewAll")}
-                </button>
-                <button aria-pressed={!showCommands} className={showCommands ? undefined : "active"} onClick={() => setShowCommands(() => false)}>
-                  {t("viewLinesOnly")}
-                </button>
+                <div className="segmented" role="group" aria-label={t("showCommands")}>
+                  <button aria-pressed={showCommands} className={showCommands ? "active" : undefined} onClick={() => setShowCommands(() => true)}>
+                    {t("viewAll")}
+                  </button>
+                  <button aria-pressed={!showCommands} className={showCommands ? undefined : "active"} onClick={() => setShowCommands(() => false)}>
+                    {t("viewLinesOnly")}
+                  </button>
+                </div>
               </div>
             </div>
             <div className="scene-card">

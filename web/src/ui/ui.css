@@ -1579,7 +1579,7 @@
 
 .mention-offer {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   width: 100%;
   padding: 6px 8px;
