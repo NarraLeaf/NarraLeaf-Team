@@ -17,7 +17,7 @@ import type {
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
-import { ActionMenu, Checkbox, confirmAction, CopyText, Dialog, Flash, RelativeTime, SettingsLayout, Skeleton, Subhead, toast, type MenuAction } from "./ui";
+import { ActionMenu, Checkbox, confirmAction, CopyText, Dialog, Flash, FormDialog, RelativeTime, SettingsLayout, Skeleton, Subhead, toast, type MenuAction } from "./ui";
 import { Icon, type IconName } from "./Icon";
 import { Face } from "./Collab";
 import { Webhooks } from "./Production";
@@ -379,47 +379,49 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
     const q = query.trim().toLowerCase();
     return q === "" || user.username.toLowerCase().includes(q) || user.displayName.toLowerCase().includes(q);
   });
-  const create = async (event: FormEvent) => {
-    event.preventDefault();
-    const ok = await run(
-      () =>
-        connection.call("admin.users.create", {
-          username: form.username.trim(),
-          password: form.password,
-          ...(form.displayName.trim() === "" ? {} : { displayName: form.displayName.trim() }),
-          clientId: crypto.randomUUID(),
-        }),
-      t("done"),
-    );
-    if (ok) {
-      setForm({ username: "", displayName: "", password: "" });
-      load();
-    }
+  const [creating, setCreating] = useState(false);
+  const create = async () => {
+    await connection.call("admin.users.create", {
+      username: form.username.trim(),
+      password: form.password,
+      ...(form.displayName.trim() === "" ? {} : { displayName: form.displayName.trim() }),
+      clientId: crypto.randomUUID(),
+    });
+    toast(t("done"));
+    setForm({ username: "", displayName: "", password: "" });
+    load();
   };
   return (
     <div className="admin-section">
-      <form className="admin-form card" onSubmit={(event) => void create(event)}>
-        <strong>{t("newAccount")}</strong>
-        <div className="admin-form-row">
-          <input placeholder={t("username")} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required autoComplete="off" />
-          <input placeholder={t("displayName")} value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
-          <input
-            placeholder={t("password")}
-            type="password"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            required
-            autoComplete="new-password"
-          />
-          <button className="btn btn-primary" type="submit">
-            {t("add")}
-          </button>
-        </div>
-      </form>
+      {creating ? (
+        <FormDialog
+          title={t("newAccount")}
+          submitLabel={t("newAccountCreate")}
+          ready={form.username.trim() !== "" && form.password !== ""}
+          onSubmit={create}
+          onClose={() => setCreating(false)}
+        >
+          <label className="form-field">
+            <span className="form-label">{t("username")}</span>
+            <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required autoComplete="off" autoFocus />
+          </label>
+          <label className="form-field">
+            <span className="form-label">{t("displayName")}</span>
+            <input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
+          </label>
+          <label className="form-field">
+            <span className="form-label">{t("password")}</span>
+            <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required autoComplete="new-password" />
+          </label>
+        </FormDialog>
+      ) : null}
       {view}
       <div className="table-tools">
         <input type="search" placeholder={t("filterAccounts")} value={query} onChange={(event) => setQuery(event.target.value)} aria-label={t("filterAccounts")} />
         <span className="muted small">{t("accountCount", { count: String(users.length) })}</span>
+        <button className="btn btn-primary btn-sm table-tools-end" onClick={() => setCreating(true)}>
+          <Icon name="plus" size={14} /> {t("newAccount")}
+        </button>
       </div>
       <table className="admin-table">
         <thead>
@@ -809,7 +811,7 @@ function SettingsTable({ connection, settings: given, reload }: { connection: Te
             <tr key={row.label} className={index > 0 && settings[index - 1]!.group !== row.group ? "group-start" : undefined}>
               <td className="muted">{index === 0 || settings[index - 1]!.group !== row.group ? groupName(row.group) : ""}</td>
               <td title={row.label}>{settingName(row.label)}</td>
-              <td>
+              <td className="setting-value">
                 {editing?.label === row.label ? (
                   <form
                     className="admin-form-row"

@@ -9,7 +9,8 @@ import type { TeamAccountPolicy, TeamAdminDecision } from "@narraleaf/team-proto
 
 import { t } from "./i18n";
 import { LockedNote } from "./Locked";
-import { Checkbox, confirmAction, CopyText, Flash, RelativeTime, SelectPanel, Skeleton, Subhead, toast, toastError } from "./ui";
+import { Blankslate, Checkbox, confirmAction, CopyText, Dialog, Flash, FormDialog, RelativeTime, SelectPanel, Skeleton, Subhead, toast, toastError } from "./ui";
+import { Icon } from "./Icon";
 import { formatBytes } from "./Builds";
 import { encodeQr, qrPath } from "./qr";
 import type { TeamConnection } from "./socket";
@@ -48,25 +49,34 @@ function RecoveryCodes({ codes, done }: { codes: readonly string[]; done: () => 
     URL.revokeObjectURL(link.href);
   };
   return (
-    <div className="stack">
+    <Dialog
+      title={t("tfaRecoveryTitle")}
+      onClose={done}
+      width={460}
+      footer={
+        <>
+          <button className="btn" type="button" onClick={() => void navigator.clipboard.writeText(text).then(() => toast(t("copied")))}>
+            {t("copy")}
+          </button>
+          <button className="btn" type="button" onClick={download}>
+            {t("tfaDownloadCodes")}
+          </button>
+          <button className="btn btn-primary" type="button" onClick={done}>
+            {t("tfaSavedCodes")}
+          </button>
+        </>
+      }
+    >
       <Flash tone="warning">{t("tfaRecoveryLead")}</Flash>
       <pre className="recovery-codes">{text}</pre>
-      <div className="form-actions">
-        <button className="btn" type="button" onClick={() => void navigator.clipboard.writeText(text).then(() => toast(t("copied")))}>
-          {t("copy")}
-        </button>
-        <button className="btn" type="button" onClick={download}>
-          {t("tfaDownloadCodes")}
-        </button>
-        <button className="btn btn-primary" type="button" onClick={done}>
-          {t("tfaSavedCodes")}
-        </button>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
-/** Two-step sign-in for the signed-in account: turn it on, see codes once, turn it off. */
+/**
+ * Two-step sign-in for the signed-in account, as rows of a settings box: turn it on,
+ * see codes once, turn it off. Each step that asks for something opens a dialog.
+ */
 export function TwoFactorPanel({ connection, onEnabled }: { connection: TeamConnection; onEnabled?: () => void }) {
   const [status, setStatus] = useState<TotpStatus | undefined>(undefined);
   const [setup, setSetup] = useState<{ secret: string; uri: string } | undefined>(undefined);
@@ -87,56 +97,78 @@ export function TwoFactorPanel({ connection, onEnabled }: { connection: TeamConn
       setFailure(caught);
     }
   };
-  const confirm = async (event: FormEvent) => {
-    event.preventDefault();
-    setFailure(undefined);
-    try {
-      const answer = await connection.call<{ recoveryCodes: string[] }>("account.totp.confirm", { code: code.trim() });
-      setSetup(undefined);
-      setCode("");
-      setCodes(answer.recoveryCodes);
-      load();
-    } catch (caught) {
-      setFailure(caught);
-    }
+  const confirm = async () => {
+    const answer = await connection.call<{ recoveryCodes: string[] }>("account.totp.confirm", { code: code.trim() });
+    setCode("");
+    setCodes(answer.recoveryCodes);
+    load();
   };
   /** Turning it off and new codes both ask for a code now, so an open tab is not enough. */
   const [asking, setAsking] = useState<"account.totp.recovery" | "account.totp.disable" | undefined>(undefined);
-  const withCode = async (event: FormEvent) => {
-    event.preventDefault();
-    if (asking === undefined || code.trim() === "") return;
-    setFailure(undefined);
-    try {
-      const answer = await connection.call<{ recoveryCodes?: string[] }>(asking, { code: code.trim() });
-      if (answer.recoveryCodes !== undefined) setCodes(answer.recoveryCodes);
-      else toast(t("tfaTurnedOff"));
-      setAsking(undefined);
-      setCode("");
-      load();
-    } catch (caught) {
-      setFailure(caught);
-    }
+  const withCode = async () => {
+    if (asking === undefined) return;
+    const answer = await connection.call<{ recoveryCodes?: string[] }>(asking, { code: code.trim() });
+    if (answer.recoveryCodes !== undefined) setCodes(answer.recoveryCodes);
+    else toast(t("tfaTurnedOff"));
+    setCode("");
+    load();
+  };
+  const ask = (what: "account.totp.recovery" | "account.totp.disable") => {
+    setCode("");
+    setAsking(what);
   };
 
   if (status === undefined) return failure === undefined ? <Skeleton rows={2} /> : <Flash error={failure} />;
   return (
-    <div className="card settings-block">
-      <h2>
-        {t("tfaTitle")} {status.enabled ? <span className="tag tag-success">{t("tfaOn")}</span> : <span className="tag">{t("tfaOff")}</span>}
-      </h2>
-      <p className="muted">{status.required && !status.enabled ? t("tfaRequiredLead") : t("tfaLead")}</p>
+    <>
       {failure === undefined ? null : <Flash error={failure} />}
-      {codes !== undefined ? (
-        <RecoveryCodes
-          codes={codes}
-          done={() => {
-            setCodes(undefined);
-            onEnabled?.();
-          }}
-        />
-      ) : setup !== undefined ? (
-        <form className="stack" onSubmit={(event) => void confirm(event)}>
-          <p>{t("tfaScanLead")}</p>
+      <div className="box">
+        <div className="box-row">
+          <div className="box-row-text">
+            <strong>
+              {t("tfaTitle")} {status.enabled ? <span className="tag tag-success">{t("tfaOn")}</span> : <span className="tag">{t("tfaOff")}</span>}
+            </strong>
+            <span>{status.required && !status.enabled ? t("tfaRequiredLead") : t("tfaLead")}</span>
+          </div>
+          {status.enabled ? null : (
+            <button className="btn btn-primary" onClick={() => void begin()}>
+              {t("tfaTurnOn")}
+            </button>
+          )}
+        </div>
+        {status.enabled ? (
+          <>
+            <div className="box-row">
+              <div className="box-row-text">
+                <strong>{t("tfaRecoveryTitle")}</strong>
+                <span>{t("tfaRecoveryLeft", { count: String(status.recoveryLeft ?? 0) })}</span>
+              </div>
+              <button className="btn" onClick={() => ask("account.totp.recovery")}>
+                {t("tfaNewCodes")}
+              </button>
+            </div>
+            <div className="box-row">
+              <div className="box-row-text">
+                <strong>{t("tfaTurnOffTitle")}</strong>
+                <span>{status.required ? t("tfaRequiredNoOff") : t("tfaTurnOffLead")}</span>
+              </div>
+              <button className="btn btn-danger" disabled={status.required} onClick={() => ask("account.totp.disable")}>
+                {t("tfaTurnOff")}
+              </button>
+            </div>
+          </>
+        ) : null}
+      </div>
+      {setup === undefined ? null : (
+        <FormDialog
+          title={t("tfaTurnOn")}
+          lead={t("tfaScanLead")}
+          submitLabel={t("tfaConfirm")}
+          width={560}
+          ready={code.trim() !== ""}
+          onSubmit={confirm}
+          onClose={() => setSetup(undefined)}
+        >
           <div className="tfa-setup">
             <QrImage text={setup.uri} label={t("tfaQr")} />
             <div className="stack">
@@ -165,59 +197,33 @@ export function TwoFactorPanel({ connection, onEnabled }: { connection: TeamConn
               autoFocus
             />
           </label>
-          <div className="form-actions">
-            <button className="btn" type="button" onClick={() => setSetup(undefined)}>
-              {t("cancel")}
-            </button>
-            <button className="btn btn-primary" type="submit">
-              {t("tfaConfirm")}
-            </button>
-          </div>
-        </form>
-      ) : asking !== undefined ? (
-        <form className="stack" onSubmit={(event) => void withCode(event)}>
+        </FormDialog>
+      )}
+      {asking === undefined ? null : (
+        <FormDialog
+          title={asking === "account.totp.disable" ? t("tfaTurnOffTitle") : t("tfaNewCodes")}
+          submitLabel={asking === "account.totp.disable" ? t("tfaTurnOff") : t("tfaNewCodes")}
+          danger={asking === "account.totp.disable"}
+          ready={code.trim() !== ""}
+          onSubmit={withCode}
+          onClose={() => setAsking(undefined)}
+        >
           <label className="form-field">
             <span className="form-label">{t("tfaAskCode")}</span>
             <input className="code-input" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} maxLength={32} required autoFocus />
           </label>
-          <div className="form-actions">
-            <button className="btn" type="button" onClick={() => setAsking(undefined)}>
-              {t("cancel")}
-            </button>
-            <button className={asking === "account.totp.disable" ? "btn btn-danger" : "btn btn-primary"} type="submit">
-              {asking === "account.totp.disable" ? t("tfaTurnOff") : t("tfaNewCodes")}
-            </button>
-          </div>
-        </form>
-      ) : status.enabled ? (
-        <div className="box">
-          <div className="box-row">
-            <div className="box-row-text">
-              <strong>{t("tfaRecoveryTitle")}</strong>
-              <span>{t("tfaRecoveryLeft", { count: String(status.recoveryLeft ?? 0) })}</span>
-            </div>
-            <button className="btn" onClick={() => { setCode(""); setAsking("account.totp.recovery"); }}>
-              {t("tfaNewCodes")}
-            </button>
-          </div>
-          <div className="box-row">
-            <div className="box-row-text">
-              <strong>{t("tfaTurnOff")}</strong>
-              <span>{status.required ? t("tfaRequiredNoOff") : t("tfaTurnOffLead")}</span>
-            </div>
-            <button className="btn btn-danger" disabled={status.required} onClick={() => { setCode(""); setAsking("account.totp.disable"); }}>
-              {t("tfaTurnOff")}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="form-actions">
-          <button className="btn btn-primary" onClick={() => void begin()}>
-            {t("tfaTurnOn")}
-          </button>
-        </div>
+        </FormDialog>
       )}
-    </div>
+      {codes === undefined ? null : (
+        <RecoveryCodes
+          codes={codes}
+          done={() => {
+            setCodes(undefined);
+            onEnabled?.();
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -259,6 +265,7 @@ export function ApiTokens({ connection, policy }: { connection: TeamConnection; 
   );
   const [tokens, setTokens] = useState<readonly ApiToken[] | undefined>(undefined);
   const [projects, setProjects] = useState<readonly { id: string; name: string }[]>([]);
+  const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [scope, setScope] = useState<readonly string[]>([]);
   const [write, setWrite] = useState(false);
@@ -273,24 +280,21 @@ export function ApiTokens({ connection, policy }: { connection: TeamConnection; 
     load();
     void connection.call<{ projects: { id: string; name: string }[] }>("projects.list").then((answer) => setProjects(answer.projects)).catch(() => undefined);
   }, [connection, load]);
-  const create = async (event: FormEvent) => {
-    event.preventDefault();
-    setFailure(undefined);
-    try {
-      const answer = await connection.call<{ token: string }>("account.tokens.create", {
-        name: name.trim(),
-        write: write && access === "on",
-        expiresInDays: Number(days),
-        ...(scope.length === 0 ? {} : { projects: scope }),
-      });
-      setMade(answer.token);
-      setName("");
-      setScope([]);
-      setWrite(false);
-      load();
-    } catch (caught) {
-      setFailure(caught);
-    }
+  const startNew = () => {
+    setName("");
+    setScope([]);
+    setWrite(false);
+    setCreating(true);
+  };
+  const create = async () => {
+    const answer = await connection.call<{ token: string }>("account.tokens.create", {
+      name: name.trim(),
+      write: write && access === "on",
+      expiresInDays: Number(days),
+      ...(scope.length === 0 ? {} : { projects: scope }),
+    });
+    setMade(answer.token);
+    load();
   };
   const revoke = (token: ApiToken) =>
     void confirmAction({ title: t("tokenRevokeTitle", { name: token.name }), body: t("tokenRevokeBody"), confirmLabel: t("tokenRevoke"), danger: true }).then(
@@ -307,9 +311,24 @@ export function ApiTokens({ connection, policy }: { connection: TeamConnection; 
     );
   const projectName = (id: string) => projects.find((project) => project.id === id)?.name ?? id.slice(0, 8);
   return (
-    <div className="card settings-block">
-      <h2>{t("tokensTitle")}</h2>
-      <p className="muted">{t("tokensLead")}</p>
+    <section className="settings-part">
+      <Subhead
+        title={t("tokensTitle")}
+        action={
+          access === "off" ? undefined : (
+            <button className="btn btn-primary btn-sm" onClick={startNew}>
+              <Icon name="plus" size={14} /> {t("tokenNew")}
+            </button>
+          )
+        }
+      >
+        {t("tokensLead")}
+      </Subhead>
+      {access === "off" ? (
+        <p className="small">
+          <LockedNote>{t("tokensOff")}</LockedNote>
+        </p>
+      ) : null}
       {failure === undefined ? null : <Flash error={failure} />}
       {made === undefined ? null : (
         <Flash tone="success" action={<button className="btn btn-sm" onClick={() => setMade(undefined)}>{t("tfaSavedCodes")}</button>}>
@@ -320,15 +339,18 @@ export function ApiTokens({ connection, policy }: { connection: TeamConnection; 
       {tokens === undefined ? (
         <Skeleton rows={2} />
       ) : tokens.length === 0 ? (
-        <p className="muted small">{t("tokensNone")}</p>
+        <Blankslate icon="key" title={t("tokensNone")} compact>
+          {access === "off" ? undefined : t("tokensNoneLead")}
+        </Blankslate>
       ) : (
-        <ul className="member-list">
+        <div className="box">
           {tokens.map((token) => (
-            <li key={token.id}>
-              <span>
-                <strong>{token.name}</strong>{" "}
-                <span className="muted small">
-                  · {token.write ? t("tokenWrite") : t("tokenRead")} ·{" "}
+            <div key={token.id} className="box-row">
+              <div className="box-row-text">
+                <strong>
+                  {token.name} <span className="tag">{token.write ? t("tokenWrite") : t("tokenRead")}</span>
+                </strong>
+                <span>
                   {token.projects === undefined ? t("tokenAllProjects") : token.projects.map(projectName).join(", ")} ·{" "}
                   {token.expiresAt === undefined ? t("tokenNoExpiry") : t("tokenExpires", { when: new Date(token.expiresAt).toLocaleDateString() })}
                   {token.lastUsedAt === undefined ? null : (
@@ -338,67 +360,55 @@ export function ApiTokens({ connection, policy }: { connection: TeamConnection; 
                     </>
                   )}
                 </span>
-              </span>
+              </div>
               <button className="btn btn-sm btn-danger" onClick={() => revoke(token)}>
                 {t("tokenRevoke")}
               </button>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
-      {access === "off" ? (
-        <p className="small">
-          <LockedNote>{t("tokensOff")}</LockedNote>
-        </p>
-      ) : (
-      <form className="stack token-form" onSubmit={(event) => void create(event)}>
-        <h3 className="form-section-title">{t("tokenNew")}</h3>
-        <label className="form-field">
-          <span className="form-label">{t("tokenName")}</span>
-          <input value={name} maxLength={64} onChange={(event) => setName(event.target.value)} placeholder={t("tokenNamePlaceholder")} required />
-        </label>
-        <div className="settings-row">
-          <span className="form-label">{t("tokenProjects")}</span>
-          <SelectPanel<string>
-            label={t("tokenProjects")}
-            multiple
-            value={scope}
-            placeholder={t("tokenAllProjects")}
-            options={projects.map((project) => ({ value: project.id, label: project.name }))}
-            onChange={setScope}
-            align="end"
+      {creating ? (
+        <FormDialog title={t("tokenNew")} submitLabel={t("tokenCreate")} ready={name.trim() !== ""} onSubmit={create} onClose={() => setCreating(false)}>
+          <label className="form-field">
+            <span className="form-label">{t("tokenName")}</span>
+            <input value={name} maxLength={64} onChange={(event) => setName(event.target.value)} placeholder={t("tokenNamePlaceholder")} required autoFocus />
+          </label>
+          <div className="form-field">
+            <span className="form-label">{t("tokenProjects")}</span>
+            <SelectPanel<string>
+              label={t("tokenProjects")}
+              multiple
+              value={scope}
+              placeholder={t("tokenAllProjects")}
+              options={projects.map((project) => ({ value: project.id, label: project.name }))}
+              onChange={setScope}
+            />
+          </div>
+          <div className="form-field">
+            <span className="form-label">{t("tokenLifetime")}</span>
+            <SelectPanel<string>
+              label={t("tokenLifetime")}
+              value={days}
+              options={lifetimes.map((value) => ({ value, label: value === "0" ? t("tokenNoExpiry") : t("tokenDays", { count: value }) }))}
+              onChange={setDays}
+            />
+            {maxDays === undefined ? null : (
+              <span className="form-hint">
+                <LockedNote>{t("tokensMaxDays", { count: String(maxDays) })}</LockedNote>
+              </span>
+            )}
+          </div>
+          <Checkbox
+            checked={write && access === "on"}
+            onChange={setWrite}
+            disabled={access !== "on"}
+            label={t("tokenWriteLabel")}
+            description={access === "on" ? t("tokenWriteHint") : <LockedNote>{t("tokensReadOnly")}</LockedNote>}
           />
-        </div>
-        <div className="settings-row">
-          <span className="form-label">{t("tokenLifetime")}</span>
-          <SelectPanel<string>
-            label={t("tokenLifetime")}
-            value={days}
-            options={lifetimes.map((value) => ({ value, label: value === "0" ? t("tokenNoExpiry") : t("tokenDays", { count: value }) }))}
-            onChange={setDays}
-            align="end"
-          />
-        </div>
-        <Checkbox
-          checked={write && access === "on"}
-          onChange={setWrite}
-          disabled={access !== "on"}
-          label={t("tokenWriteLabel")}
-          description={access === "on" ? t("tokenWriteHint") : <LockedNote>{t("tokensReadOnly")}</LockedNote>}
-        />
-        {maxDays === undefined ? null : (
-          <p className="small">
-            <LockedNote>{t("tokensMaxDays", { count: String(maxDays) })}</LockedNote>
-          </p>
-        )}
-        <div className="form-actions">
-          <button className="btn btn-primary" type="submit" disabled={name.trim() === ""}>
-            {t("tokenCreate")}
-          </button>
-        </div>
-      </form>
-      )}
-    </div>
+        </FormDialog>
+      ) : null}
+    </section>
   );
 }
 

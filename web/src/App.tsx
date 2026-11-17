@@ -14,7 +14,7 @@ import { t, type Phrase } from "./i18n";
 import { TeamConnection, type ConnectionState } from "./socket";
 import { Authorize, Device } from "./OAuth";
 import { ProjectPage, WORKBENCH_TABS, type ProjectSection, type ProjectTab } from "./Project";
-import { Face, MyTodos, Notifications, Profile, Settings, setFaceSource, useNotifications, type NotificationTarget } from "./Collab";
+import { Face, MyTodos, Notifications, PERSONAL_SECTIONS, Profile, Settings, setFaceSource, useNotifications, type NotificationTarget, type PersonalSection } from "./Collab";
 import { Admin, ADMIN_PHRASE, ADMIN_SECTIONS, type AdminSection } from "./Admin";
 import { PROJECT_SETTINGS_SECTIONS } from "./Versions";
 import { PROGRESS_SECTIONS } from "./Progress";
@@ -35,7 +35,7 @@ type Route =
   | { readonly screen: "todos" }
   | { readonly screen: "notifications" }
   | { readonly screen: "admin"; readonly section: AdminSection }
-  | { readonly screen: "settings" }
+  | { readonly screen: "settings"; readonly section?: PersonalSection }
   | { readonly screen: "notFound" }
   | {
       readonly screen: "project";
@@ -78,8 +78,10 @@ function routeOf(location: Location): Route {
   }
   const plain = PLAIN_SCREENS.find((key) => key === first);
   if (plain !== undefined && second === undefined) return { screen: plain };
-  // The notification settings live on the settings page; a push's "test" link names them.
-  if (first === "settings" && second === "notifications" && third === undefined) return { screen: "settings" };
+  if (first === "settings" && third === undefined) {
+    const section = PERSONAL_SECTIONS.find((key) => key === second);
+    return section === undefined ? { screen: "notFound" } : { screen: "settings", section };
+  }
   return { screen: "notFound" };
 }
 
@@ -96,6 +98,7 @@ function pathOf(route: Route): string {
     return `/console/p/${encodeURIComponent(route.id)}/${route.tab}${section}${query}`;
   }
   if (route.screen === "admin") return route.section === "accounts" ? "/console/admin" : `/console/admin/${route.section}`;
+  if (route.screen === "settings" && route.section !== undefined && route.section !== "profile") return `/console/settings/${route.section}`;
   if (route.screen === "notFound") return window.location.pathname;
   return route.screen === "home" ? "/console/" : `/console/${route.screen}`;
 }
@@ -379,7 +382,7 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
       {route.screen === "todos" ? <MyTodos connection={connection} state={state} account={account} /> : null}
       {route.screen === "notFound" ? <NotFound home={() => go({ screen: "home" })} /> : null}
       {route.screen === "notifications" ? <Notifications connection={connection} state={state} open={followNotification} /> : null}
-      {route.screen === "settings" ? <Settings connection={connection} state={state} /> : null}
+      {route.screen === "settings" ? <Settings connection={connection} state={state} section={route.section ?? "profile"} go={(section) => go({ screen: "settings", section })} /> : null}
       {route.screen === "projects" ? <Projects connection={connection} state={state} operator={account.operator} open={(id) => openProject(id)} /> : null}
       {route.screen === "project" ? (
         <ProjectPage

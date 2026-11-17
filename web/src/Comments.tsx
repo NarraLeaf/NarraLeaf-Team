@@ -14,7 +14,7 @@ import { Face } from "./Collab";
 import { Icon } from "./Icon";
 import { MentionField, PersonHover, ReactionBar, useReactions } from "./Notify";
 import { t } from "./i18n";
-import { Blankslate, RelativeTime, toast, toastError } from "./ui";
+import { Blankslate, FormDialog, RelativeTime, toast, toastError } from "./ui";
 import type { TeamConnection } from "./socket";
 
 /** The anchor document for one story. */
@@ -374,18 +374,11 @@ export function ProjectDiscussion({ connection, open, projectId, canWrite, me }:
       if ((payload as TeamThreadEvent).kind !== "reaction") load();
     });
   }, [open, load, connection, projectId]);
-  const start = async (event: FormEvent) => {
-    event.preventDefault();
-    const text = body.trim();
-    if (text === "") return;
+  const [starting, setStarting] = useState(false);
+  const start = async () => {
+    await connection.call("threads.create", { project: projectId, anchor: {}, body: body.trim(), clientId: crypto.randomUUID() });
     setBody("");
-    try {
-      await connection.call("threads.create", { project: projectId, anchor: {}, body: text, clientId: crypto.randomUUID() });
-      toast(t("discussionStarted"));
-    } catch (caught) {
-      setBody(text);
-      toastError(caught);
-    }
+    toast(t("discussionStarted"));
   };
   const sorted = [...(threads ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);
   const openThreads = sorted.filter((thread) => thread.status !== "resolved");
@@ -397,26 +390,26 @@ export function ProjectDiscussion({ connection, open, projectId, canWrite, me }:
           <h2>{t("discussion")}</h2>
           <p className="muted small">{t("discussionLead")}</p>
         </div>
+        {canWrite ? (
+          <button className="btn btn-primary btn-sm" onClick={() => setStarting(true)}>
+            <Icon name="plus" size={14} /> {t("discussionNew")}
+          </button>
+        ) : null}
       </header>
-      {canWrite ? (
-        <form className="note-reply note-new discussion-new" onSubmit={(event) => void start(event)}>
+      {canWrite && starting ? (
+        <FormDialog title={t("discussionNew")} submitLabel={t("startThread")} width={600} ready={body.trim() !== ""} onSubmit={start} onClose={() => setStarting(false)}>
           <MentionField
             connection={connection}
             value={body}
             placeholder={t("discussionPlaceholder")}
-            rows={body === "" ? 2 : 4}
+            rows={6}
             onValue={setBody}
             onKeyDown={sendOnModEnter}
             onPaste={pastePicture(projectId, setBody)}
             maxLength={16000}
           />
-          <div className="note-reply-actions">
-            <span className="muted small">{t("sendHint")}</span>
-            <button type="submit" className="btn btn-primary btn-sm" disabled={body.trim() === ""}>
-              {t("startThread")}
-            </button>
-          </div>
-        </form>
+          <p className="muted small">{t("sendHint")}</p>
+        </FormDialog>
       ) : null}
       {threads === undefined ? <p className="muted small">{t("loading")}</p> : null}
       {threads !== undefined && openThreads.length === 0 ? (

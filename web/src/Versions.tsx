@@ -10,7 +10,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { projectClientsTopic, type TeamClientInstance, type TeamProjectRole, type TeamVersionRole } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
-import type { IconName } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 import { confirmAction, Flash, RelativeTime, SelectPanel, SettingsLayout, Subhead, toast } from "./ui";
 import { Webhooks } from "./Production";
 import { ProjectMembers } from "./Members";
@@ -130,7 +130,6 @@ export function ProjectSettings(props: {
       ) : null}
       {section === "shares" ? (
         <div>
-          <Subhead title={t("shareTitle")}>{t("shareLead")}</Subhead>
           <ShareLinks connection={connection} projectId={project.id} />
         </div>
       ) : null}
@@ -276,16 +275,18 @@ function GeneralSettings({
           </button>
         </div>
       </form>
-      <h3 className="form-section-title">{t("exportTitle")}</h3>
-      <div className="box">
-        <div className="box-row">
-          <div className="box-row-text">
-            <strong>{t("exportProject")}</strong>
-            <span>{t("exportLead")}</span>
+      <div>
+        <Subhead title={t("exportTitle")} />
+        <div className="box">
+          <div className="box-row">
+            <div className="box-row-text">
+              <strong>{t("exportProject")}</strong>
+              <span>{t("exportLead")}</span>
+            </div>
+            <a className="btn" href={`/api/console/v1/projects/${encodeURIComponent(project.id)}/export`} download>
+              <Icon name="download" size={14} /> {t("exportDownload")}
+            </a>
           </div>
-          <a className="btn" href={`/api/console/v1/projects/${encodeURIComponent(project.id)}/export`} download>
-            {t("exportDownload")}
-          </a>
         </div>
       </div>
       <div className="danger-zone">

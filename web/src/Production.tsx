@@ -26,7 +26,8 @@ import {
 
 import { t, type Phrase } from "./i18n";
 import { Face } from "./Collab";
-import { ago, Blankslate, Checkbox, confirmAction, Flash, RelativeTime, SelectPanel, toast, toastError, type SelectOption } from "./ui";
+import { ago, Blankslate, Checkbox, confirmAction, Flash, FormDialog, RelativeTime, SelectPanel, Subhead, toast, toastError, type SelectOption } from "./ui";
+import { Icon } from "./Icon";
 import type { TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
@@ -113,22 +114,18 @@ export function Reviews(props: {
     return connection.subscribe(projectReviewsTopic(projectId), () => load());
   }, [open, load, connection, projectId]);
 
-  const ask = async (event: FormEvent) => {
-    event.preventDefault();
-    setError(undefined);
-    try {
-      await connection.call("reviews.create", {
-        project: projectId,
-        reviewer: draft.reviewer,
-        toRevision: draft.toRevision,
-        ...(draft.fromRevision === "" ? {} : { fromRevision: draft.fromRevision }),
-        title: draft.title.trim(),
-        ...(draft.note.trim() === "" ? {} : { note: draft.note.trim() }),
-      });
-      setDraft({ reviewer: "", toRevision: "", fromRevision: "", title: "", note: "" });
-    } catch (caught) {
-      setError(errorText(caught));
-    }
+  const [asking, setAsking] = useState(false);
+  const ask = async () => {
+    await connection.call("reviews.create", {
+      project: projectId,
+      reviewer: draft.reviewer,
+      toRevision: draft.toRevision,
+      ...(draft.fromRevision === "" ? {} : { fromRevision: draft.fromRevision }),
+      title: draft.title.trim(),
+      ...(draft.note.trim() === "" ? {} : { note: draft.note.trim() }),
+    });
+    setDraft({ reviewer: "", toRevision: "", fromRevision: "", title: "", note: "" });
+    toast(t("reviewSent"));
   };
 
   const move = (review: TeamReview, status: TeamReviewStatus) =>
@@ -150,11 +147,25 @@ export function Reviews(props: {
 
   return (
     <div className="reviews">
+      <Subhead
+        title={t("tabReviews")}
+        action={
+          canAsk ? (
+            <button className="btn btn-primary btn-sm" onClick={() => setAsking(true)}>
+              <Icon name="plus" size={14} /> {t("reviewAsk")}
+            </button>
+          ) : undefined
+        }
+      >
+        {t("reviewsLead")}
+      </Subhead>
       {error !== undefined ? <Flash error={error} /> : null}
-      {canAsk ? (
-        <form className="card review-new" onSubmit={(event) => void ask(event)}>
-          <h3>{t("reviewAsk")}</h3>
-          <input value={draft.title} placeholder={t("reviewTitle")} maxLength={300} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+      {canAsk && asking ? (
+        <FormDialog title={t("reviewAsk")} submitLabel={t("reviewSend")} width={600} ready={ready} onSubmit={ask} onClose={() => setAsking(false)}>
+          <label className="form-field">
+            <span className="form-label">{t("reviewTitleLabel")}</span>
+            <input value={draft.title} placeholder={t("reviewTitle")} maxLength={300} onChange={(event) => setDraft({ ...draft, title: event.target.value })} autoFocus />
+          </label>
           <div className="review-fields">
             <div className="form-field">
               <span className="form-label">{t("reviewer")}</span>
@@ -198,18 +209,16 @@ export function Reviews(props: {
               />
             </div>
           </div>
-          <textarea value={draft.note} placeholder={t("reviewNote")} rows={2} onChange={(event) => setDraft({ ...draft, note: event.target.value })} />
-          <div className="review-new-foot">
-            {ready ? null : (
-              <span className="muted small">
-                {draft.title.trim() === "" ? t("reviewNeedTitle") : draft.reviewer === "" ? t("reviewNeedReviewer") : t("reviewNeedVersion")}
-              </span>
-            )}
-            <button className="btn btn-primary" type="submit" disabled={!ready}>
-              {t("reviewSend")}
-            </button>
-          </div>
-        </form>
+          <label className="form-field">
+            <span className="form-label">{t("reviewNoteLabel")}</span>
+            <textarea value={draft.note} placeholder={t("reviewNote")} rows={3} onChange={(event) => setDraft({ ...draft, note: event.target.value })} />
+          </label>
+          {ready ? null : (
+            <p className="muted small">
+              {draft.title.trim() === "" ? t("reviewNeedTitle") : draft.reviewer === "" ? t("reviewNeedReviewer") : t("reviewNeedVersion")}
+            </p>
+          )}
+        </FormDialog>
       ) : null}
       {reviews === undefined ? (
         <p className="muted">{t("loading")}</p>
@@ -400,37 +409,46 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
       .catch(() => undefined);
   }, [load, connection, scoped]);
 
-  const add = async (event: FormEvent) => {
-    event.preventDefault();
-    setError(undefined);
-    try {
-      const answer = await connection.call<{ secret: string }>(method("create"), {
-        url: url.trim(),
-        format,
-        events,
-        ...(scoped ? scope : project === "" ? {} : { project }),
-      });
-      setSecret(answer.secret);
-      setUrl("");
-      load();
-    } catch (caught) {
-      setError(caught);
-    }
+  const [adding, setAdding] = useState(false);
+  const add = async () => {
+    const answer = await connection.call<{ secret: string }>(method("create"), {
+      url: url.trim(),
+      format,
+      events,
+      ...(scoped ? scope : project === "" ? {} : { project }),
+    });
+    setSecret(answer.secret);
+    load();
   };
 
   const projectName = (id: string | undefined) => (id === undefined ? t("whAllProjects") : (projects.find((p) => p.id === id)?.name ?? id));
 
   return (
     <div className="admin-section">
-      <p className="muted">{scoped ? t("projectWebhooksLead") : t("whLead")}</p>
+      <div className="list-tools">
+        <p className="muted">{scoped ? t("projectWebhooksLead") : t("whLead")}</p>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={() => {
+            setUrl("");
+            setAdding(true);
+          }}
+        >
+          <Icon name="plus" size={14} /> {t("whNew")}
+        </button>
+      </div>
       {error !== undefined ? <Flash error={error} /> : null}
       {secret !== undefined ? (
         <p className="notice">
           {t("whSecret")} <code>{secret}</code>
         </p>
       ) : null}
-      <form className="card webhook-new" onSubmit={(event) => void add(event)}>
-        <input value={url} placeholder="https://…" onChange={(event) => setUrl(event.target.value)} />
+      {adding ? (
+      <FormDialog title={t("whNew")} submitLabel={t("add")} width={560} ready={url.trim() !== "" && events.length > 0} onSubmit={add} onClose={() => setAdding(false)}>
+        <label className="form-field">
+          <span className="form-label">{t("whUrl")}</span>
+          <input type="url" value={url} placeholder="https://…" onChange={(event) => setUrl(event.target.value)} required autoFocus />
+        </label>
         <div className="review-fields">
           <div className="form-field">
             <span className="form-label">{t("whFormat")}</span>
@@ -465,10 +483,8 @@ export function Webhooks({ connection, projectId }: { connection: TeamConnection
             />
           </div>
         </div>
-        <button className="btn btn-primary" type="submit" disabled={url.trim() === "" || events.length === 0}>
-          {t("add")}
-        </button>
-      </form>
+      </FormDialog>
+      ) : null}
       {hooks === undefined ? (
         <p className="muted">{t("loading")}</p>
       ) : hooks.length === 0 ? (

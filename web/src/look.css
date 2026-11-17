@@ -1278,6 +1278,9 @@ fieldset.admin-field.layout-choice > :not(.layout-option) {
   gap: 2px;
   margin: 10px 0 24px;
   border-bottom: 1px solid var(--nl-edge-subtle);
+  /* Tabs wrap here, so nothing scrolls. app.css's overflow-x: auto made overflow-y auto too, and
+     the tab underline's -1px margin then showed a stray up/down scrollbar where scrollbars are drawn. */
+  overflow: visible;
 }
 
 .tab {
@@ -2911,6 +2914,7 @@ fieldset.admin-field {
   font-size: 12px;
   line-height: 1.55;
   overflow: hidden;
+  overflow-wrap: anywhere;
   height: 100%;
 }
 
@@ -4677,3 +4681,423 @@ ul.diff-rows .diff-row {
   .data-table .bar-cell { display: none; }
 }
 .glossary-miss { display: flex; flex-direction: column; gap: 2px; padding: 7px 12px; font-size: 13px; overflow-wrap: anywhere; }
+
+/* ======================================================= forms in dialogs */
+
+/* Every "new …" opens one of these: fields one under another, full width. */
+.dialog-form { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.dialog-form .form-field + .form-field { margin-top: 0; }
+.dialog-form .select-button { width: 100%; }
+.dialog-form :where(input:not([type="checkbox"], [type="radio"], [type="file"]), textarea) { width: 100%; }
+.dialog-form .review-fields { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.dialog-form .review-fields > .form-field { flex: 1 1 160px; }
+.dialog-form > p.muted { margin: 0; }
+.dialog-form .inline-field { display: flex; }
+.dialog-form .inline-field input { flex: 1; }
+.dialog-form .build-storage { margin: 0; }
+.dialog-form .tfa-setup { align-items: center; }
+
+/* A list's own line above it: what it is on the left, its "new" button on the right. */
+.list-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 12px; }
+.list-tools > p, .list-tools > span { margin: 0; flex: 1 1 260px; }
+.list-tools > .btn, .table-tools-end { margin-left: auto; flex: none; }
+.kind-filter-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.kind-filter-row > .kind-filter { margin: 8px 0; }
+.discussion-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.locale-fields { display: flex; flex-direction: column; gap: 8px; }
+.locale-field { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; }
+.locale-field > span { color: rgb(var(--nl-fg-muted)); overflow: hidden; text-overflow: ellipsis; }
+.dialog .recovery-codes { margin: 0; }
+
+/* ===================================== settings pages: sized to what is in them */
+
+/* The personal settings read like a repository's: a list of parts on the left, rows on the right, no wider than reads well. */
+.settings-page .settings-layout { max-width: 1040px; }
+/* A project's settings stay as narrow; the admin pages, whose tables want the room, do not. */
+.settings-body { max-width: 840px; }
+.admin .settings-body { max-width: none; }
+
+/* A field on a settings page is as wide as what goes in it, not as wide as the page. */
+.settings-body .form-field { max-width: 560px; }
+.settings-body :where(.form-field) :where(input:not([type="checkbox"], [type="radio"], [type="file"]), textarea) { width: 100%; }
+.settings-body .form-field .select-button { width: 100%; justify-content: space-between; }
+
+/* A row's buttons stay together at its right, and wrap under the words on a phone. */
+.box-row > .icon { flex: none; color: rgb(var(--nl-fg-muted)); }
+.box-row-actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.box-row-text .box-row-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-note { margin: 8px 0 0; }
+
+/* Profile: the fields on the left, the picture beside them, as GitHub's profile settings are. */
+.profile-grid { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 40px; align-items: start; max-width: 800px; }
+.profile-fields { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.profile-fields .form-field + .form-field { margin-top: 0; }
+.profile-picture { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.profile-picture-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.notify-matrix-box { overflow-x: auto; padding: 4px 12px; }
+.notify-matrix-box .notify-matrix { max-width: none; margin: 0; }
+.notify-matrix-box .notify-matrix tbody tr:last-child > * { border-bottom: 0; }
+
+@media (max-width: 860px) {
+  .profile-grid { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .profile-picture { order: -1; }
+  .box-row-actions { flex: 1 1 100%; justify-content: flex-start; }
+}
+
+/* admin › brand: a single setting is as wide as what it holds, not the card */
+.settings-block .admin-field:not(.layout-choice) { max-width: 560px; }
+.settings-block .admin-field input:not([type="color"], [type="radio"], [type="checkbox"]) { width: 100%; }
+
+/* a to-do's own controls: at the end of the row in a list, on a row of their
+   own under the title on a board card, where the column is too narrow for both */
+.todo-tools { display: flex; flex: none; align-items: center; gap: 4px; }
+.todo-tools:empty { display: none; }
+.todo-remove:hover { color: rgb(var(--nl-danger)); }
+.board .todo { flex-wrap: wrap; align-items: flex-start; row-gap: 8px; }
+.board .todo-check { margin-top: 1px; }
+.board .todo-main { flex: 1 1 0; }
+.board .todo-title { overflow-wrap: anywhere; }
+.board .todo-tools { flex: 1 1 100%; flex-wrap: wrap; padding-left: 30px; }
+.board .todo-tools .select-button { max-width: 130px; }
+.board .todo-tools .todo-remove { margin-left: auto; }
+
+/* admin › brand › server settings: a fingerprint or a path breaks inside the cell instead of pushing the page sideways */
+.setting-value code { overflow-wrap: anywhere; word-break: break-all; }
+
+/* the contribution graph fills its card; it scrolls only when even small squares do not fit */
+.heatmap { grid-template-rows: repeat(7, auto); grid-auto-columns: minmax(8px, 1fr); max-width: 760px; }
+.heatmap .cell { width: auto; height: auto; aspect-ratio: 1; }
+.board .todo-tools { flex-wrap: nowrap; }
+.board .todo-tools .select-button { min-width: 0; flex: 0 1 auto; }
+.board .todo-tools .select-button-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* phones: nothing squeezed to a letter a line, nothing drawn over its neighbour */
+.timeline-row { grid-template-columns: 14px minmax(0, 1fr) auto; }
+.timeline-row > .small { white-space: nowrap; }
+.history-main { overflow-wrap: anywhere; }
+.admin-split { grid-template-columns: 220px minmax(0, 1fr); }
+.heatmap-card { overflow-x: visible; min-width: 0; }
+.heatmap { min-width: 0; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+@media (max-width: 860px) {
+  .settings-nav-group { flex: none; }
+}
+@media (max-width: 767px) {
+  .tabs { display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs > .tab { flex: 1 0 auto; white-space: nowrap; }
+  .crumbs { flex-wrap: wrap; row-gap: 4px; min-width: 0; }
+  .crumb, .crumbs .role { flex: none; white-space: nowrap; }
+  .crumb-current { min-width: 0; overflow-wrap: anywhere; }
+  .history-row { flex-wrap: wrap; row-gap: 4px; }
+  .history-main { flex-basis: 100%; }
+  .history-actions { margin-left: -8px; justify-content: flex-start; }
+}
+@media (max-width: 760px) {
+  .admin-split { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ======================================================= to-do quick add */
+
+/* One line, as a to-do app has it: a plus, the words, a calendar and a menu;
+   what was picked sits under the line as chips. */
+.todo-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--nl-control-border);
+  border-radius: var(--nl-radius-lg);
+  background: rgb(var(--nl-surface-raised));
+  transition: border-color var(--nl-duration, 120ms) ease, box-shadow var(--nl-duration, 120ms) ease;
+}
+.todo-composer.is-focused,
+.todo-composer:focus-within {
+  border-color: rgb(var(--nl-primary));
+  box-shadow: 0 0 0 3px rgb(var(--nl-primary) / 0.15);
+}
+.todo-composer-row { display: flex; align-items: center; gap: 4px; min-height: 34px; }
+.todo-composer-plus { display: grid; place-items: center; color: rgb(var(--nl-fg-subtle)); flex: none; }
+.todo-composer.is-focused .todo-composer-plus { color: rgb(var(--nl-primary)); }
+.todo-composer-row > input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: rgb(var(--nl-fg));
+  font: inherit;
+  font-size: var(--nl-text-md, 14px);
+  outline: none;
+  box-shadow: none;
+}
+.todo-composer-row > input::placeholder { color: rgb(var(--nl-fg-subtle)); }
+.todo-composer-add { flex: none; margin-left: 2px; }
+
+.composer-tool {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--nl-radius);
+  background: none;
+  color: rgb(var(--nl-fg-muted));
+  cursor: pointer;
+  flex: none;
+}
+.composer-tool:hover,
+.composer-tool[aria-expanded="true"] { background: var(--nl-fill); color: rgb(var(--nl-fg)); }
+.composer-tool:focus-visible { outline: 2px solid rgb(var(--nl-primary)); outline-offset: -2px; }
+.composer-tool.on { color: rgb(var(--nl-primary)); }
+.composer-tool.due-late { color: rgb(var(--nl-danger)); }
+
+.todo-composer-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 6px 22px; }
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 2px 0 8px;
+  border-radius: var(--nl-radius-pill, 999px);
+  background: var(--nl-fill);
+  color: rgb(var(--nl-fg));
+  font-size: 12px;
+  max-width: 100%;
+}
+.composer-chip > .icon { flex: none; }
+.composer-chip-text { display: inline-flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer-chip-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.composer-chip-remove:hover { opacity: 1; background: var(--nl-fill); }
+.composer-chip.label {
+  background: hsl(var(--label-hue) 55% 50% / 0.16);
+  color: color-mix(in srgb, hsl(var(--label-hue) 60% 50%) 65%, rgb(var(--nl-fg)));
+}
+.composer-chip.due-late { background: rgb(var(--nl-danger) / 0.12); color: rgb(var(--nl-danger)); }
+.composer-chip.due-today { background: rgb(var(--nl-primary) / 0.12); color: rgb(var(--nl-primary)); }
+.composer-chip.kind-asset { background: rgba(163, 113, 247, 0.18); }
+.composer-chip.kind-translation,
+.composer-chip.kind-voice { background: rgba(46, 160, 67, 0.16); }
+.composer-chip .avatar { flex: none; }
+.chip-input {
+  width: 7ch;
+  height: 18px;
+  margin-left: 2px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--nl-radius-pill, 999px);
+  background: rgb(var(--nl-surface-raised));
+  color: rgb(var(--nl-fg));
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.chip-input:focus { border-color: rgb(var(--nl-primary)); }
+.chip-input.missing { border-color: rgb(var(--nl-danger)); }
+
+/* priority: red, amber, blue, as to-do apps colour it */
+.prio-flag.prio-3 { color: rgb(var(--nl-danger)); }
+.prio-flag.prio-2 { color: #e0a100; }
+.prio-flag.prio-1 { color: rgb(var(--nl-primary)); }
+.prio-flag.prio-0 { color: rgb(var(--nl-fg-subtle)); }
+.prio-row { display: flex; gap: 4px; }
+.prio-pick {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--nl-radius);
+  background: none;
+  cursor: pointer;
+}
+.prio-pick:hover { background: var(--nl-fill); }
+.prio-pick.on { background: var(--nl-fill); border-color: var(--nl-control-border); }
+.prio-pick:focus-visible { outline: 2px solid rgb(var(--nl-primary)); outline-offset: -2px; }
+
+/* ------------------------------------------------------- the date picker */
+
+.due-picker { width: 264px; padding: 8px; gap: 6px; overflow: auto; }
+.due-quick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.due-quick-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 6px 2px;
+  border: 1px solid var(--nl-edge-subtle);
+  border-radius: var(--nl-radius);
+  background: none;
+  color: rgb(var(--nl-fg));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.due-quick-pick:hover { background: var(--nl-fill); }
+.due-quick-pick.on { border-color: rgb(var(--nl-primary)); color: rgb(var(--nl-primary)); background: rgb(var(--nl-primary) / 0.08); }
+.month-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 0; font-weight: 600; font-size: 13px; }
+.month-next .icon,
+.cmenu-row-go .icon { transform: scaleX(-1); }
+.month-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.month-name { display: grid; place-items: center; height: 24px; }
+.month-day {
+  display: grid;
+  place-items: center;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: rgb(var(--nl-fg));
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.month-day:hover { background: var(--nl-fill); }
+.month-day.outside,
+.month-day.past { color: rgb(var(--nl-fg-subtle)); }
+.month-day.today { color: rgb(var(--nl-primary)); font-weight: 600; box-shadow: inset 0 0 0 1px rgb(var(--nl-primary) / 0.5); }
+.month-day.on { background: rgb(var(--nl-primary)); color: rgb(var(--nl-on-primary, 255 255 255)); box-shadow: none; }
+.month-day:focus-visible { outline: 2px solid rgb(var(--nl-primary)); outline-offset: 1px; }
+.due-foot { display: flex; justify-content: flex-end; border-top: 1px solid var(--nl-edge-subtle); padding-top: 6px; }
+
+/* ------------------------------------------------- the quick add's menu */
+
+.cmenu { width: 260px; padding: 6px; overflow: auto; }
+.cmenu-section { display: flex; flex-direction: column; gap: 2px; }
+.cmenu-caption { padding: 4px 6px 2px; }
+.cmenu .prio-row { padding: 2px 4px 4px; }
+.cmenu-row,
+.cmenu-option,
+.cmenu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--nl-radius);
+  background: none;
+  color: rgb(var(--nl-fg));
+  font: inherit;
+  font-size: var(--nl-text-md, 14px);
+  text-align: left;
+  cursor: pointer;
+}
+.cmenu-row:hover,
+.cmenu-option:hover,
+.cmenu-toggle:hover,
+.cmenu-row:focus-visible,
+.cmenu-option:focus-visible,
+.cmenu-toggle:focus-visible { background: var(--nl-fill); outline: none; }
+.cmenu-row > .icon,
+.cmenu-toggle > .icon { flex: none; color: rgb(var(--nl-fg-muted)); }
+.cmenu-row-label { flex: 1; }
+.cmenu-row-value { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.cmenu-row-go { display: inline-grid; color: rgb(var(--nl-fg-subtle)); }
+.cmenu-toggle[aria-disabled="true"] { cursor: default; opacity: 0.6; }
+.cmenu-toggle[aria-disabled="true"]:hover { background: none; }
+.cmenu-option-text { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.3; }
+.cmenu-option-text > span { overflow: hidden; text-overflow: ellipsis; }
+.cmenu-option.on { color: rgb(var(--nl-primary)); }
+.cmenu-option > .icon:last-child { flex: none; }
+.cmenu-head { display: flex; align-items: center; gap: 4px; padding: 0 2px 4px; font-weight: 600; font-size: 13px; border-bottom: 1px solid var(--nl-edge-subtle); margin-bottom: 4px; }
+.cmenu-list { display: flex; flex-direction: column; gap: 1px; max-height: 280px; overflow: auto; }
+.cmenu-filter { display: flex; align-items: center; gap: 6px; margin: 0 2px 6px; padding: 0 8px; border: 1px solid var(--nl-control-border); border-radius: var(--nl-radius); background: var(--nl-control-fill); color: rgb(var(--nl-fg-muted)); }
+.cmenu-filter:focus-within { border-color: rgb(var(--nl-primary)); }
+.cmenu-filter input { flex: 1; min-width: 0; height: 30px; padding: 0; border: 0; background: none; color: rgb(var(--nl-fg)); font: inherit; font-size: 13px; outline: none; box-shadow: none; }
+.cmenu-empty { margin: 4px 8px; }
+.cmenu-blank { width: 20px; flex: none; }
+.cmenu-dot { width: 10px; height: 10px; margin: 0 5px; border-radius: 50%; flex: none; background: hsl(var(--label-hue) 60% 50%); }
+.cmenu-kind { width: 10px; height: 10px; margin: 0 5px; border-radius: 3px; flex: none; background: var(--nl-fill); box-shadow: inset 0 0 0 1px var(--nl-control-border); }
+.cmenu-kind.kind-asset { background: rgb(163, 113, 247); box-shadow: none; }
+.cmenu-kind.kind-translation { background: rgb(46, 160, 67); box-shadow: none; }
+.cmenu-kind.kind-voice { background: rgb(46 160 67 / 0.6); box-shadow: none; }
+.cmenu-switch {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--nl-control-border);
+  transition: background 120ms ease;
+}
+.cmenu-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 120ms ease;
+}
+.cmenu-switch.on { background: rgb(var(--nl-primary)); }
+.cmenu-switch.on::after { transform: translateX(12px); }
+
+/* ------------------------------------------------ priority and due on cards */
+
+/* the round check takes the priority's colour while the work is still open */
+.todo.status-open.prio-3 .todo-check { border-color: rgb(var(--nl-danger)); background: rgb(var(--nl-danger) / 0.08); }
+.todo.status-open.prio-2 .todo-check { border-color: #e0a100; background: rgb(224 161 0 / 0.08); }
+.todo.status-open.prio-1 .todo-check { border-color: rgb(var(--nl-primary)); background: rgb(var(--nl-primary) / 0.08); }
+
+.todo-meta { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 2px; margin-top: 2px; }
+.todo-meta > span,
+.todo-meta > a { display: inline-flex; align-items: center; gap: 3px; }
+.todo-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px 0 4px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--nl-radius-pill, 999px);
+  background: var(--nl-fill);
+  color: rgb(var(--nl-fg-muted));
+  font: inherit;
+  font-size: 12px;
+}
+button.todo-due { cursor: pointer; }
+button.todo-due:hover { box-shadow: inset 0 0 0 1px var(--nl-control-border); }
+.todo-due.due-late { background: rgb(var(--nl-danger) / 0.12); color: rgb(var(--nl-danger)); }
+.todo-due.due-today { background: rgb(var(--nl-primary) / 0.12); color: rgb(var(--nl-primary)); }
+.todo-prio { white-space: nowrap; }
+.todo-prio-pick .btn-icon { display: inline-grid; place-items: center; }
+
+/* icon-only tools that set nothing yet keep out of the way until the card is pointed at */
+@media (hover: hover) {
+  .todo .todo-tool-quiet { opacity: 0; transition: opacity 120ms ease; }
+  .todo:hover .todo-tool-quiet,
+  .todo:focus-within .todo-tool-quiet,
+  .todo .todo-tool-quiet[aria-expanded="true"] { opacity: 1; }
+}
+
+/* ---------------------------------- the list under @, # and ! as they are typed */
+
+.todo-composer { position: relative; }
+.todo-suggest-anchor { position: absolute; top: 0; bottom: 0; width: 1px; pointer-events: none; }
+.todo-suggest { width: 240px; max-width: calc(100vw - 16px); }
+.todo-suggest .cmenu-option { cursor: pointer; }
+.todo-suggest .cmenu-option.active { background: var(--nl-fill); }
+.todo-suggest .cmenu-option > .icon:not(.prio-flag) { flex: none; margin: 0 3px; color: rgb(var(--nl-fg-muted)); }
+.todo-suggest .cmenu-option > .prio-flag { flex: none; margin: 0 3px; }

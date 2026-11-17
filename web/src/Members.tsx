@@ -19,7 +19,8 @@ import {
 import { TemplateSelect } from "./Access";
 import { t, type Phrase } from "./i18n";
 import { Face } from "./Collab";
-import { ActionMenu, confirmAction, SelectPanel, toast, toastError } from "./ui";
+import { ActionMenu, confirmAction, FormDialog, SelectPanel, toast, toastError } from "./ui";
+import { Icon } from "./Icon";
 import type { TeamConnection } from "./socket";
 
 const ROLES: readonly TeamProjectRole[] = ["owner", "editor", "reviewer", "viewer"];
@@ -47,7 +48,7 @@ export function roleKey(role: TeamProjectRole): Phrase {
 export function ProjectMembers({ connection, projectId }: { connection: TeamConnection; projectId: string }) {
   const [members, setMembers] = useState<readonly TeamProjectMember[]>([]);
   const [accounts, setAccounts] = useState<readonly { username: string; displayName: string }[]>([]);
-  const [adding, setAdding] = useState({ username: "", template: "editor" as TeamPermissionTemplateId });
+  const [adding, setAdding] = useState<{ username: string; template: TeamPermissionTemplateId } | undefined>(undefined);
 
   const load = useCallback(() => {
     void connection
@@ -92,6 +93,14 @@ export function ProjectMembers({ connection, projectId }: { connection: TeamConn
 
   return (
     <div className="project-members">
+      <div className="list-tools">
+        <span className="muted small">{t("membersCount", { count: String(members.length) })}</span>
+        {outside.length > 0 ? (
+          <button className="btn btn-primary btn-sm" onClick={() => setAdding({ username: "", template: "editor" })}>
+            <Icon name="plus" size={14} /> {t("addMemberTitle")}
+          </button>
+        ) : null}
+      </div>
       <table className="admin-table">
         <thead>
           <tr>
@@ -143,33 +152,40 @@ export function ProjectMembers({ connection, projectId }: { connection: TeamConn
         </tbody>
       </table>
       <p className="muted small">{t("areasHint")}</p>
-      {outside.length > 0 ? (
-        <form
-          className="admin-form-row"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (adding.username !== "") setTemplate(adding.username, adding.template);
+      {adding === undefined ? null : (
+        <FormDialog
+          title={t("addMemberTitle")}
+          submitLabel={t("add")}
+          ready={adding.username !== ""}
+          onSubmit={async () => {
+            await connection.call("projects.members.set", { project: projectId, username: adding.username, template: adding.template });
+            toast(t("done"));
+            load();
           }}
+          onClose={() => setAdding(undefined)}
         >
-          <SelectPanel
-            label={t("addMember")}
-            placeholder={t("addMember")}
-            filterFrom={0}
-            value={adding.username === "" ? undefined : adding.username}
-            onChange={(username) => setAdding({ ...adding, username })}
-            options={outside.map((account) => ({
-              value: account.username,
-              label: account.displayName || account.username,
-              ...(account.displayName ? { description: `@${account.username}` } : {}),
-              leading: <Face name={account.displayName || account.username} user={account.username} size={18} />,
-            }))}
-          />
-          <TemplateSelect size="medium" value={adding.template} change={(template) => setAdding({ ...adding, template })} />
-          <button className="btn btn-primary" type="submit" disabled={adding.username === ""}>
-            {t("add")}
-          </button>
-        </form>
-      ) : null}
+          <div className="form-field">
+            <span className="form-label">{t("account")}</span>
+            <SelectPanel
+              label={t("addMember")}
+              placeholder={t("addMember")}
+              filterFrom={0}
+              value={adding.username === "" ? undefined : adding.username}
+              onChange={(username) => setAdding({ ...adding, username })}
+              options={outside.map((account) => ({
+                value: account.username,
+                label: account.displayName || account.username,
+                ...(account.displayName ? { description: `@${account.username}` } : {}),
+                leading: <Face name={account.displayName || account.username} user={account.username} size={18} />,
+              }))}
+            />
+          </div>
+          <div className="form-field">
+            <span className="form-label">{t("tplLabel")}</span>
+            <TemplateSelect size="medium" value={adding.template} change={(template) => setAdding({ ...adding, template })} />
+          </div>
+        </FormDialog>
+      )}
     </div>
   );
 }

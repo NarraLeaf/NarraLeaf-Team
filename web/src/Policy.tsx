@@ -30,7 +30,7 @@ import { LockedNote } from "./Locked";
 import { t, type Phrase } from "./i18n";
 import { CATEGORY_PHRASE, CHANNEL_PHRASE, DIGEST_PHRASE, timeZones } from "./Notify";
 import type { TeamConnection } from "./socket";
-import { Blankslate, Checkbox, confirmAction, Dialog, Flash, RelativeTime, SelectPanel, Skeleton, toast, toastError } from "./ui";
+import { Blankslate, Checkbox, confirmAction, Dialog, Flash, RelativeTime, SelectPanel, Skeleton, Subhead, toast, toastError } from "./ui";
 
 /* ------------------------------------------------------------ own page */
 
@@ -323,7 +323,7 @@ export function PolicyTemplates({ connection }: { connection: TeamConnection }) 
     <div className="admin-section">
       <div className="table-tools">
         <span className="muted small">{t("policyTemplatesLead")}</span>
-        <button className="btn btn-primary" onClick={() => setChoosing(true)}>
+        <button className="btn btn-primary btn-sm table-tools-end" onClick={() => setChoosing(true)}>
           <Icon name="plus" size={14} /> {t("policyNew")}
         </button>
       </div>
@@ -569,32 +569,33 @@ export function StudioConfigCard({ connection, open }: { connection: TeamConnect
     );
   const stored = status.stored;
   return (
-    <div className="card settings-block">
-      <h2>{t("studioConfigTitle")}</h2>
-      <p className="muted">{t("studioConfigLead")}</p>
-      {status.access === "off" ? (
+    <div>
+      <Subhead title={t("studioConfigTitle")}>{t("studioConfigLead")}</Subhead>
+      {status.access === "read" ? (
         <p className="small">
-          <LockedNote>{t("studioConfigOff")}</LockedNote>
+          <LockedNote>{t("studioConfigReadOnly")}</LockedNote>
         </p>
-      ) : (
-        <>
-          {status.access === "read" ? (
-            <p className="small">
-              <LockedNote>{t("studioConfigReadOnly")}</LockedNote>
-            </p>
-          ) : null}
-          <div className="settings-row">
-            <span className="small">
-              {stored === undefined ? (
-                <span className="muted">{t("studioConfigNone")}</span>
-              ) : (
-                <>
-                  {t("studioConfigStored", { size: formatBytes(stored.size) })}
-                  {stored.studioVersion === undefined ? null : ` · Studio ${stored.studioVersion}`} · <RelativeTime at={stored.updatedAt} />
-                </>
-              )}
-            </span>
-            <span className="settings-row-actions">
+      ) : null}
+      <div className="box">
+        <div className="box-row">
+          <Icon name="file" size={18} />
+          <div className="box-row-text">
+            <strong>{t("studioConfigFile")}</strong>
+            {status.access === "off" ? (
+              <span>
+                <LockedNote>{t("studioConfigOff")}</LockedNote>
+              </span>
+            ) : stored === undefined ? (
+              <span>{t("studioConfigNone")}</span>
+            ) : (
+              <span>
+                {t("studioConfigStored", { size: formatBytes(stored.size) })}
+                {stored.studioVersion === undefined ? null : ` · Studio ${stored.studioVersion}`} · <RelativeTime at={stored.updatedAt} />
+              </span>
+            )}
+          </div>
+          {status.access === "off" ? null : (
+            <div className="box-row-actions">
               {stored === undefined ? null : (
                 <a className="btn btn-sm" href={STUDIO_CONFIG_PATH} download="narraleaf-studio-settings.json">
                   <Icon name="download" size={14} /> {t("exportDownload")}
@@ -622,11 +623,11 @@ export function StudioConfigCard({ connection, open }: { connection: TeamConnect
                   />
                 </>
               ) : null}
-            </span>
-          </div>
-          {status.access === "on" ? <p className="muted small">{t("studioConfigHint")}</p> : null}
-        </>
-      )}
+            </div>
+          )}
+        </div>
+      </div>
+      {status.access === "on" ? <p className="muted small settings-note">{t("studioConfigHint")}</p> : null}
     </div>
   );
 }

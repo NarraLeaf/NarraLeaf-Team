@@ -47,7 +47,7 @@ import { Icon } from "./Icon";
 import { t, type Phrase } from "./i18n";
 import { LockedNote } from "./Locked";
 import type { TeamConnection } from "./socket";
-import { Checkbox, SelectPanel, Subhead, toast, toastError } from "./ui";
+import { Checkbox, FormDialog, SelectPanel, Skeleton, Subhead, toast, toastError } from "./ui";
 
 /** Whether the socket is open now: calls made before it is are refused, so asking waits for this. */
 export function useOpen(connection: TeamConnection): boolean {
@@ -535,43 +535,26 @@ export function NotificationSettings({ connection, open, policy }: { connection:
   const digestLocked = policy?.digest !== undefined;
   const hookLocked = policy?.hook !== undefined;
   const [prefs, setPrefs] = useState<TeamNotificationPrefs | undefined>(undefined);
-  const [hook, setHook] = useState("");
+  const [editingHook, setEditingHook] = useState<string | undefined>(undefined);
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const section = useRef<HTMLDivElement>(null);
-  const took = (next: TeamNotificationPrefs) => {
-    setPrefs(next);
-    setHook(next.hook ?? "");
-  };
   useEffect(() => {
     if (!open) return;
     connection
       .call<{ prefs: TeamNotificationPrefs }>("notifications.prefs")
-      .then((answer) => took(answer.prefs))
+      .then((answer) => setPrefs(answer.prefs))
       .catch(() => undefined);
     void currentSubscription().then((subscription) => setSubscribed(subscription !== null));
   }, [connection, open]);
-  useEffect(() => {
-    if (prefs !== undefined && window.location.pathname.endsWith("/settings/notifications")) section.current?.scrollIntoView({ block: "start" });
-  }, [prefs === undefined]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (prefs === undefined) return null;
+  if (prefs === undefined) return <Skeleton />;
   const on = (category: TeamNotificationCategory, channel: TeamNotificationChannel) =>
     prefs.switches.find((entry) => entry.category === category && entry.channel === channel)?.enabled ?? true;
   const set = (change: Record<string, unknown>) =>
-    connection
-      .call<{ prefs: TeamNotificationPrefs }>("notifications.prefs.set", change)
-      .then((answer) => {
-        took(answer.prefs);
-        return true;
-      })
-      .catch((caught: unknown) => {
-        toastError(caught);
-        return false;
-      });
+    connection.call<{ prefs: TeamNotificationPrefs }>("notifications.prefs.set", change).then((answer) => setPrefs(answer.prefs));
   const flip = (category: TeamNotificationCategory, channel: TeamNotificationChannel, enabled: boolean) => {
     setPrefs({ ...prefs, switches: [...prefs.switches.filter((entry) => entry.category !== category || entry.channel !== channel), { category, channel, enabled }] });
-    void set({ switches: [{ category, channel, enabled }] });
+    void set({ switches: [{ category, channel, enabled }] }).catch(toastError);
   };
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -583,55 +566,62 @@ export function NotificationSettings({ connection, open, policy }: { connection:
       setBusy(false);
     }
   };
+  const testHook = (url: string) => run(() => connection.call("notifications.hook.test", { url }).then(() => toast(t("hookTested"))));
   const canPush = pushSupported();
   return (
-    <div className="card settings-block" id="notifications" ref={section}>
-      <Subhead title={t("notificationSettings")}>{t("notificationSettingsLead")}</Subhead>
-      {switchesLocked ? (
-        <p className="small">
-          <LockedNote />
-        </p>
-      ) : null}
-      <table className="notify-matrix">
-        <thead>
-          <tr>
-            <th />
-            {TEAM_NOTIFICATION_CHANNELS.map((channel) => (
-              <th key={channel} scope="col">
-                {t(CHANNEL_PHRASE[channel])}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {TEAM_NOTIFICATION_CATEGORIES.map((category) => (
-            <tr key={category}>
-              <th scope="row">{t(CATEGORY_PHRASE[category])}</th>
-              {TEAM_NOTIFICATION_CHANNELS.map((channel) => (
-                <td key={channel}>
-                  <Checkbox
-                    checked={on(category, channel)}
-                    onChange={(enabled) => flip(category, channel, enabled)}
-                    disabled={switchesLocked}
-                    label={<span className="visually-hidden">{`${t(CATEGORY_PHRASE[category])} · ${t(CHANNEL_PHRASE[channel])}`}</span>}
-                  />
-                </td>
+    <>
+      <div id="notifications">
+        <Subhead title={t("notificationSettings")}>{t("notificationSettingsLead")}</Subhead>
+        {switchesLocked ? (
+          <p className="small">
+            <LockedNote />
+          </p>
+        ) : null}
+        <div className="box notify-matrix-box">
+          <table className="notify-matrix">
+            <thead>
+              <tr>
+                <th />
+                {TEAM_NOTIFICATION_CHANNELS.map((channel) => (
+                  <th key={channel} scope="col">
+                    {t(CHANNEL_PHRASE[channel])}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {TEAM_NOTIFICATION_CATEGORIES.map((category) => (
+                <tr key={category}>
+                  <th scope="row">{t(CATEGORY_PHRASE[category])}</th>
+                  {TEAM_NOTIFICATION_CHANNELS.map((channel) => (
+                    <td key={channel}>
+                      <Checkbox
+                        checked={on(category, channel)}
+                        onChange={(enabled) => flip(category, channel, enabled)}
+                        disabled={switchesLocked}
+                        label={<span className="visually-hidden">{`${t(CATEGORY_PHRASE[category])} · ${t(CHANNEL_PHRASE[channel])}`}</span>}
+                      />
+                    </td>
+                  ))}
+                </tr>
               ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="muted small">{t("notifyMatrixHint")}</p>
+            </tbody>
+          </table>
+        </div>
+        <p className="muted small settings-note">{t("notifyMatrixHint")}</p>
+      </div>
 
-      <h3 className="settings-sub">{t("chanPush")}</h3>
-      {!canPush ? (
-        <p className="muted small">{t("pushUnsupported")}</p>
-      ) : (
-        <div className="settings-row">
-          <span className="muted small">{subscribed ? t("pushOnHere", { count: String(prefs.pushSubscriptions) }) : t("pushOffHere")}</span>
-          <span className="settings-row-actions">
-            {subscribed ? (
-              <>
+      <div>
+        <Subhead title={t("notifyWays")}>{t("notifyWaysLead")}</Subhead>
+        <div className="box">
+          <div className="box-row">
+            <Icon name="bell" size={18} />
+            <div className="box-row-text">
+              <strong>{t("pushTitle")}</strong>
+              <span>{!canPush ? t("pushUnsupported") : subscribed ? t("pushOnHere", { count: String(prefs.pushSubscriptions) }) : t("pushOffHere")}</span>
+            </div>
+            {!canPush ? null : subscribed ? (
+              <div className="box-row-actions">
                 <button className="btn btn-sm" disabled={busy} onClick={() => void run(() => connection.call<{ reached: number }>("push.test").then((answer) => toast(t("pushTested", { count: String(answer.reached) }))))}>
                   {t("sendTest")}
                 </button>
@@ -641,21 +631,21 @@ export function NotificationSettings({ connection, open, policy }: { connection:
                   onClick={() =>
                     void run(async () => {
                       const next = await unsubscribeBrowser(connection);
-                      if (next !== undefined) took(next);
+                      if (next !== undefined) setPrefs(next);
                       setSubscribed(false);
                     })
                   }
                 >
                   {t("pushTurnOff")}
                 </button>
-              </>
+              </div>
             ) : (
               <button
                 className="btn btn-primary btn-sm"
                 disabled={busy}
                 onClick={() =>
                   void run(async () => {
-                    took(await subscribeBrowser(connection));
+                    setPrefs(await subscribeBrowser(connection));
                     setSubscribed(true);
                     toast(t("pushTurnedOn"));
                   })
@@ -664,65 +654,94 @@ export function NotificationSettings({ connection, open, policy }: { connection:
                 {t("pushTurnOn")}
               </button>
             )}
-          </span>
+          </div>
+          <div className="box-row">
+            <Icon name="send" size={18} />
+            <div className="box-row-text">
+              <strong>
+                {t("digest")} {digestLocked ? <LockedNote /> : null}
+              </strong>
+              <span>{prefs.mail ? (prefs.email === undefined ? t("digestNoEmail") : t("digestTo", { email: prefs.email })) : t("digestNoMail")}</span>
+            </div>
+            <div className="box-row-actions">
+              <button
+                className="btn btn-sm"
+                disabled={busy}
+                onClick={() =>
+                  void run(() =>
+                    connection
+                      .call<{ count: number; errors: string[] }>("notifications.digest.now", { period: prefs.digest === "weekly" ? "weekly" : "daily" })
+                      .then((answer) => (answer.errors.length > 0 ? toastError(new Error(answer.errors.join("; "))) : toast(answer.count === 0 ? t("digestNothing") : t("digestSent", { count: String(answer.count) })))),
+                  )
+                }
+              >
+                {t("digestNow")}
+              </button>
+              <SelectPanel<TeamDigestFrequency>
+                label={t("digest")}
+                value={prefs.digest}
+                options={TEAM_DIGEST_FREQUENCIES.map((value) => ({ value, label: t(DIGEST_PHRASE[value]) }))}
+                onChange={(digest) => void set({ digest }).catch(toastError)}
+                disabled={digestLocked}
+                size="small"
+                align="end"
+              />
+            </div>
+          </div>
+          <div className="box-row">
+            <Icon name="link" size={18} />
+            <div className="box-row-text">
+              <strong>
+                {t("personalHook")} {hookLocked ? <LockedNote /> : null}
+              </strong>
+              {prefs.hook === undefined ? <span>{t("personalHookHint")}</span> : <span className="mono box-row-ellipsis" title={prefs.hook}>{prefs.hook}</span>}
+            </div>
+            <div className="box-row-actions">
+              {prefs.hook === undefined ? null : (
+                <button className="btn btn-sm" disabled={busy} onClick={() => void testHook(prefs.hook ?? "")}>
+                  {t("sendTest")}
+                </button>
+              )}
+              {hookLocked ? null : (
+                <button className="btn btn-sm" onClick={() => setEditingHook(prefs.hook ?? "")}>
+                  {prefs.hook === undefined ? t("hookSetUp") : t("edit")}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
-      )}
-
-      <h3 className="settings-sub">
-        {t("digest")} {digestLocked ? <LockedNote /> : null}
-      </h3>
-      <div className="settings-row">
-        <span className="muted small">
-          {prefs.mail ? (prefs.email === undefined ? t("digestNoEmail") : t("digestTo", { email: prefs.email })) : t("digestNoMail")}
-        </span>
-        <span className="settings-row-actions">
-          <SelectPanel<TeamDigestFrequency>
-            label={t("digest")}
-            value={prefs.digest}
-            options={TEAM_DIGEST_FREQUENCIES.map((value) => ({ value, label: t(DIGEST_PHRASE[value]) }))}
-            onChange={(digest) => void set({ digest })}
-            disabled={digestLocked}
-            size="small"
-          />
-          <button
-            className="btn btn-sm"
-            disabled={busy}
-            onClick={() =>
-              void run(() =>
-                connection
-                  .call<{ count: number; errors: string[] }>("notifications.digest.now", { period: prefs.digest === "weekly" ? "weekly" : "daily" })
-                  .then((answer) => (answer.errors.length > 0 ? toastError(new Error(answer.errors.join("; "))) : toast(answer.count === 0 ? t("digestNothing") : t("digestSent", { count: String(answer.count) })))),
-              )
-            }
-          >
-            {t("digestNow")}
-          </button>
-        </span>
       </div>
-      <form
-        className="settings-row settings-row-field"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void set({ hook: hook.trim() === "" ? null : hook.trim() }).then((ok) => ok && toast(t("saved")));
-        }}
-      >
-        <label className="grow">
-          <span className="muted small">
-            {t("personalHook")} {hookLocked ? <LockedNote /> : null}
-          </span>
-          <input type="url" value={hook} disabled={hookLocked} onChange={(event) => setHook(event.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" maxLength={2048} />
-        </label>
-        <span className="settings-row-actions">
-          <button className="btn" type="button" disabled={busy || hook.trim() === ""} onClick={() => void run(() => connection.call("notifications.hook.test", { url: hook.trim() }).then(() => toast(t("hookTested"))))}>
-            {t("sendTest")}
-          </button>
-          <button className="btn btn-primary" type="submit" disabled={hookLocked || (prefs.hook ?? "") === hook.trim()}>
-            {t("save")}
-          </button>
-        </span>
-      </form>
-      <p className="muted small">{t("personalHookHint")}</p>
-    </div>
+      {editingHook === undefined ? null : (
+        <FormDialog
+          title={t("personalHook")}
+          lead={t("personalHookHint")}
+          submitLabel={t("save")}
+          onClose={() => setEditingHook(undefined)}
+          onSubmit={async () => {
+            await set({ hook: editingHook.trim() === "" ? null : editingHook.trim() });
+            toast(t("saved"));
+          }}
+        >
+          <label className="form-field">
+            <span className="form-label">{t("hookUrlLabel")}</span>
+            <input
+              type="url"
+              autoFocus
+              value={editingHook}
+              onChange={(event) => setEditingHook(event.target.value)}
+              placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"
+              maxLength={2048}
+            />
+            <span className="form-hint">{t("hookClearHint")}</span>
+          </label>
+          <div>
+            <button className="btn btn-sm" type="button" disabled={busy || editingHook.trim() === ""} onClick={() => void testHook(editingHook.trim())}>
+              {t("sendTest")}
+            </button>
+          </div>
+        </FormDialog>
+      )}
+    </>
   );
 }
 

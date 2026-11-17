@@ -11,7 +11,7 @@
  * the server never reads it (D2), so the paths a story's link shows are worked
  * out here, from the revision's own story index.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BUILD_MAX_BYTES,
   projectBuildsTopic,
@@ -46,6 +46,7 @@ import {
   CopyText,
   Dialog,
   Flash,
+  FormDialog,
   RelativeTime,
   SelectPanel,
   Subhead,
@@ -178,7 +179,7 @@ function useProjectStorage(connection: TeamConnection, projectId: string, builds
   return answer;
 }
 
-function BuildUpload({ projectId, first, storage }: { projectId: string; first: boolean; storage: ProjectStorage | undefined }) {
+function BuildUpload({ projectId, first, storage, onClose }: { projectId: string; first: boolean; storage: ProjectStorage | undefined; onClose: () => void }) {
   const limit = storage?.buildLimitBytes ?? BUILD_MAX_BYTES;
   const [file, setFile] = useState<File | undefined>(undefined);
   const [name, setName] = useState("");
@@ -192,13 +193,9 @@ function BuildUpload({ projectId, first, storage }: { projectId: string; first: 
     setFile(picked);
     if (picked !== undefined && name.trim() === "") setName(picked.name.replace(/\.[^.]+$/, ""));
   };
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (file === undefined) return;
-    if (file.size > limit) {
-      toastError(new Error(t("buildTooLarge", { size: formatBytes(limit) })));
-      return;
-    }
+  const submit = async () => {
+    if (file === undefined) return false;
+    if (file.size > limit) throw new Error(t("buildTooLarge", { size: formatBytes(limit) }));
     const sent = sendBuild(projectId, file, { name: name.trim() || file.name, note, platform, latest }, (fraction) =>
       setSending((current) => (current === undefined ? current : { ...current, fraction })),
     );
@@ -206,19 +203,18 @@ function BuildUpload({ projectId, first, storage }: { projectId: string; first: 
     try {
       await sent.done;
       toast(t("buildUploaded"));
-      setFile(undefined);
-      setName("");
-      setNote("");
-      if (input.current !== null) input.current.value = "";
-    } catch (caught) {
-      toastError(caught);
     } finally {
       setSending(undefined);
     }
   };
+  /** Closing while it sends stops the upload too. */
+  const close = () => {
+    sending?.cancel();
+    onClose();
+  };
 
   return (
-    <form className="card build-upload" onSubmit={(event) => void submit(event)}>
+    <FormDialog title={t("buildUploadTitle")} submitLabel={t("buildUpload")} width={560} ready={file !== undefined && sending === undefined} onSubmit={submit} onClose={close}>
       {storage?.storage.quotaBytes === undefined ? null : (
         <div className="build-storage">
           <span className="muted small">{t("storageUsed")}</span>
@@ -265,20 +261,13 @@ function BuildUpload({ projectId, first, storage }: { projectId: string; first: 
           <Switch checked={latest} onChange={setLatest} label={t("buildMakeLatest")} />
         </div>
       )}
-      {sending === undefined ? (
-        <button className="btn btn-primary" type="submit" disabled={file === undefined}>
-          <Icon name="upload" size={14} /> {t("buildUpload")}
-        </button>
-      ) : (
+      {sending === undefined ? null : (
         <div className="build-progress">
           <progress value={sending.fraction} max={1} />
           <span className="muted small">{Math.round(sending.fraction * 100)}%</span>
-          <button type="button" className="btn btn-sm" onClick={sending.cancel}>
-            {t("cancel")}
-          </button>
         </div>
       )}
-    </form>
+    </FormDialog>
   );
 }
 
@@ -331,6 +320,7 @@ export function BuildsPage(props: { connection: TeamConnection; open: boolean; p
   const builds = useBuilds(connection, open, projectId);
   const storage = useProjectStorage(connection, projectId, builds);
   const [editing, setEditing] = useState<TeamBuild | undefined>(undefined);
+  const [uploading, setUploading] = useState(false);
   const mayUpload = role === "owner" || role === "editor";
   const ordered = useMemo(() => (builds === undefined ? undefined : [...builds].sort((a, b) => Number(b.latest) - Number(a.latest) || b.createdAt - a.createdAt)), [builds]);
 
@@ -365,8 +355,26 @@ export function BuildsPage(props: { connection: TeamConnection; open: boolean; p
 
   return (
     <div className="builds-page">
-      <Subhead title={t("tabBuilds")}>{t("buildsLead")}</Subhead>
-      {mayUpload ? <BuildUpload projectId={projectId} first={builds !== undefined && builds.length === 0} storage={storage} /> : null}
+      <Subhead
+        title={t("tabBuilds")}
+        action={
+          mayUpload ? (
+            <button className="btn btn-primary btn-sm" onClick={() => setUploading(true)}>
+              <Icon name="upload" size={14} /> {t("buildUploadTitle")}
+            </button>
+          ) : undefined
+        }
+      >
+        {t("buildsLead")}
+      </Subhead>
+      {storage?.storage.full === true ? (
+        <Flash tone="danger">{t("storageFull")}</Flash>
+      ) : storage?.storage.nearlyFull === true ? (
+        <Flash tone="warning">{t("storageNearlyFull")}</Flash>
+      ) : null}
+      {mayUpload && uploading ? (
+        <BuildUpload projectId={projectId} first={builds !== undefined && builds.length === 0} storage={storage} onClose={() => setUploading(false)} />
+      ) : null}
       {ordered === undefined ? (
         <p className="muted">{t("loading")}</p>
       ) : ordered.length === 0 ? (
@@ -440,48 +448,38 @@ function shareUrl(token: string): string {
   return `${window.location.origin}/console/s/${encodeURIComponent(token)}`;
 }
 
-function ShareCreate({ connection, projectId, created }: { connection: TeamConnection; projectId: string; created: (token: string) => void }) {
+function ShareCreate({ connection, projectId, created, onClose }: { connection: TeamConnection; projectId: string; created: (token: string) => void; onClose: () => void }) {
   const [stories, setStories] = useState<{ stories: readonly StoryEntry[]; revision: string | undefined } | undefined>(undefined);
   const [scope, setScope] = useState("project");
   const [label, setLabel] = useState("");
   const [span, setSpan] = useState("30");
   const [comments, setComments] = useState(true);
   const [freeze, setFreeze] = useState(false);
-  const [busy, setBusy] = useState(false);
   useEffect(() => {
     readStories(projectId)
       .then(setStories)
       .catch(() => setStories({ stories: [], revision: undefined }));
   }, [projectId]);
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      const story = stories?.stories.find((entry) => `story:${entry.id}` === scope);
-      const paths = story === undefined ? undefined : await storyPaths(projectId, story);
-      const days = SPANS.find((entry) => String(entry.days ?? "") === span)?.days;
-      const revision = freeze && stories?.revision !== undefined && stories.revision !== "head" ? stories.revision : "head";
-      const answer = await connection.call<{ share: TeamShareLink; token: string }>("shares.create", {
-        project: projectId,
-        label: label.trim() || (story === undefined ? t("shareWholeProject") : story.name),
-        scope,
-        revision,
-        ...(paths === undefined ? {} : { paths }),
-        allowComments: comments,
-        ...(days === undefined ? {} : { days }),
-      });
-      setLabel("");
-      created(answer.token);
-    } catch (caught) {
-      toastError(caught);
-    } finally {
-      setBusy(false);
-    }
+  const submit = async () => {
+    const story = stories?.stories.find((entry) => `story:${entry.id}` === scope);
+    const paths = story === undefined ? undefined : await storyPaths(projectId, story);
+    const days = SPANS.find((entry) => String(entry.days ?? "") === span)?.days;
+    const revision = freeze && stories?.revision !== undefined && stories.revision !== "head" ? stories.revision : "head";
+    const answer = await connection.call<{ share: TeamShareLink; token: string }>("shares.create", {
+      project: projectId,
+      label: label.trim() || (story === undefined ? t("shareWholeProject") : story.name),
+      scope,
+      revision,
+      ...(paths === undefined ? {} : { paths }),
+      allowComments: comments,
+      ...(days === undefined ? {} : { days }),
+    });
+    created(answer.token);
   };
 
   return (
-    <form className="card share-new" onSubmit={(event) => void submit(event)}>
+    <FormDialog title={t("shareNew")} submitLabel={t("shareCreate")} width={520} ready={stories !== undefined} onSubmit={submit} onClose={onClose}>
       <div className="review-fields">
         <div className="form-field">
           <span className="form-label">{t("shareWhat")}</span>
@@ -502,7 +500,7 @@ function ShareCreate({ connection, projectId, created }: { connection: TeamConne
       </div>
       <label className="form-field">
         <span className="form-label">{t("shareLabel")}</span>
-        <input value={label} maxLength={120} onChange={(event) => setLabel(event.target.value)} placeholder={t("shareLabelPlaceholder")} />
+        <input value={label} maxLength={120} onChange={(event) => setLabel(event.target.value)} placeholder={t("shareLabelPlaceholder")} autoFocus />
       </label>
       <div className="field-row">
         <span>{t("shareAllowComments")}</span>
@@ -512,10 +510,7 @@ function ShareCreate({ connection, projectId, created }: { connection: TeamConne
         <span>{t("shareFreeze")}</span>
         <Switch checked={freeze} onChange={setFreeze} label={t("shareFreeze")} />
       </div>
-      <button className="btn btn-primary" type="submit" disabled={busy || stories === undefined}>
-        <Icon name="link" size={14} /> {t("shareCreate")}
-      </button>
-    </form>
+    </FormDialog>
   );
 }
 
@@ -524,6 +519,7 @@ export function ShareLinks({ connection, projectId }: { connection: TeamConnecti
   const [shares, setShares] = useState<readonly TeamShareLink[] | undefined>(undefined);
   const [error, setError] = useState<unknown>(undefined);
   const [token, setToken] = useState<string | undefined>(undefined);
+  const [creating, setCreating] = useState(false);
   const load = useCallback(() => {
     connection
       .call<{ shares: TeamShareLink[] }>("shares.list", { project: projectId })
@@ -541,6 +537,16 @@ export function ShareLinks({ connection, projectId }: { connection: TeamConnecti
 
   return (
     <div className="admin-section">
+      <Subhead
+        title={t("shareTitle")}
+        action={
+          <button className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
+            <Icon name="plus" size={14} /> {t("shareNew")}
+          </button>
+        }
+      >
+        {t("shareLead")}
+      </Subhead>
       {error === undefined ? null : <Flash error={error} />}
       {token === undefined ? null : (
         <Flash tone="success" action={<button className="btn btn-sm" onClick={() => setToken(undefined)}>{t("done")}</button>}>
@@ -548,14 +554,17 @@ export function ShareLinks({ connection, projectId }: { connection: TeamConnecti
           <CopyText value={shareUrl(token)} />
         </Flash>
       )}
-      <ShareCreate
-        connection={connection}
-        projectId={projectId}
-        created={(next) => {
-          setToken(next);
-          load();
-        }}
-      />
+      {creating ? (
+        <ShareCreate
+          connection={connection}
+          projectId={projectId}
+          onClose={() => setCreating(false)}
+          created={(next) => {
+            setToken(next);
+            load();
+          }}
+        />
+      ) : null}
       {shares === undefined ? (
         <p className="muted">{t("loading")}</p>
       ) : shares.length === 0 ? (

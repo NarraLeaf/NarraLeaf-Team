@@ -4,7 +4,7 @@
  * that reads "3 hours ago" with the exact time on hover, a short hash that
  * copies itself, an underlined row of tabs with counts, and an inline notice.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ago } from "./time";
 import { Icon, type IconName } from "../Icon";
@@ -223,7 +223,7 @@ export function Flash({ tone = "danger", children, error, action }: { tone?: "da
         {explained === undefined ? null : open ? (
           <code className="flash-detail">{explained.detail}</code>
         ) : (
-          <button className="link-quiet small" onClick={() => setOpen(true)}>
+          <button className="link-quiet small" type="button" onClick={() => setOpen(true)}>
             {t("showDetails")}
           </button>
         )}
@@ -258,6 +258,24 @@ export interface SettingsSection<K extends string> {
  * with a rule between, and the chosen section on the right. Each section has
  * its own address, so it can be linked to and comes back on reload.
  */
+/**
+ * A row that scrolls sideways (tabs or a settings menu on a phone) brings its
+ * open item into the middle whenever the open item changes, so it is never
+ * hidden past the edge.
+ */
+export function useOpenInView<E extends HTMLElement>(selector: string, open: unknown) {
+  const row = useRef<E>(null);
+  useEffect(() => {
+    const strip = row.current;
+    const item = strip?.querySelector<HTMLElement>(selector);
+    if (strip === null || item === null || item === undefined || strip.scrollWidth <= strip.clientWidth) return;
+    const box = strip.getBoundingClientRect();
+    const at = item.getBoundingClientRect();
+    strip.scrollLeft += at.left - box.left - (box.width - at.width) / 2;
+  }, [selector, open]);
+  return row;
+}
+
 export function SettingsLayout<K extends string>({
   groups,
   active,
@@ -271,9 +289,10 @@ export function SettingsLayout<K extends string>({
   label: string;
   children: ReactNode;
 }) {
+  const nav = useOpenInView<HTMLElement>(".settings-nav-item.active", active);
   return (
     <div className="settings-layout">
-      <nav className="settings-nav" aria-label={label}>
+      <nav className="settings-nav" aria-label={label} ref={nav}>
         {groups.map((group, index) => (
           <div key={index} className="settings-nav-group">
             {index === 0 ? null : <div className="settings-nav-rule" role="separator" />}

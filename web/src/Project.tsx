@@ -36,7 +36,7 @@ import { fetchJson, fetchTree, rawUrl, type Tree } from "./files";
 import { Face, Timeline, Todos } from "./Collab";
 import { Icon, type IconName } from "./Icon";
 import { ChatPanel } from "./LiveChat";
-import { NODE_NAMES_EN, NODE_NAMES_ZH } from "./nodeNames";
+import { NODE_NAMES_EN, NODE_NAMES_JA, NODE_NAMES_ZH } from "./nodeNames";
 import { rememberPlace } from "./TeamHome";
 import { openInStudio } from "./studioLink";
 import { LineComments, ProjectDiscussion, storyLineAnchor, useStoryThreads } from "./Comments";
@@ -47,7 +47,7 @@ import { isAutoVersion, MilestoneTags, Reviews, revisionTitle, useMilestones, ty
 import { OnlineNow, PROJECT_SETTINGS_SECTIONS, ProjectSettings, type ProjectSettingsSection } from "./Versions";
 import { AskForMore } from "./Access";
 import { CallError, type TeamConnection, type ConnectionState } from "./socket";
-import { ActionMenu, Blankslate, Checkbox, Flash, SelectPanel, toast } from "./ui";
+import { ActionMenu, Blankslate, Checkbox, Flash, SelectPanel, toast, useOpenInView } from "./ui";
 import { BuildsPage } from "./Builds";
 import { PROGRESS_SECTIONS, ProgressPage, type ProgressSection } from "./Progress";
 import { ChecksPage, ComparePage, placeText } from "./Insight";
@@ -219,6 +219,8 @@ export function ProjectPage(props: {
       rememberPlace({ project: projectId, projectName, tab, at: Date.now() });
     }
   }, [inWorkbench, projectName, projectId, tab]);
+  // On a phone the tabs scroll sideways; the open one is kept in view.
+  const tabStrip = useOpenInView<HTMLElement>(".tab.active", `${tab}:${project?.role ?? ""}`);
   const remember = useCallback(
     (label: string) => {
       if (projectName !== undefined) rememberPlace({ project: projectId, projectName, tab, label, at: Date.now() });
@@ -370,7 +372,7 @@ export function ProjectPage(props: {
           </button>
         </div>
       ) : null}
-      <nav className="tabs" role="tablist">
+      <nav className="tabs" role="tablist" ref={tabStrip}>
         {(project?.role === "owner" ? OWNER_TABS : TABS).map((key) => (
           <button
             key={key}
@@ -1359,7 +1361,7 @@ const NODE_W = 200;
 const NODE_HEAD = 26;
 const PORT_H = 18;
 
-const NODE_NAMES = language === "zh" ? NODE_NAMES_ZH : NODE_NAMES_EN;
+const NODE_NAMES = { zh: NODE_NAMES_ZH, en: NODE_NAMES_EN, ja: NODE_NAMES_JA }[language];
 const NODE_ALIASES: Readonly<Record<string, string>> = { "fn.head": "functionEntry", "flow.comment": "comment", "fn.return": "fnReturn" };
 
 /** What Studio calls a node of this type, or the type itself where Studio's catalogue has no name for it. */
@@ -1385,15 +1387,48 @@ function nodeTone(type: string): "event" | "flow" | "fn" | "data" | "action" | "
   return "action";
 }
 
-/** A parameter as a card shows it: short, and without the editor's own bookkeeping. */
+/** A parameter as a card shows it: on one line, and without the editor's own bookkeeping. */
 function paramRows(params: Record<string, unknown>): { key: string; value: string }[] {
   return Object.entries(params)
     .filter(([key]) => !key.startsWith("__") && key !== "width" && key !== "height")
     .map(([key, value]) => {
-      const text = typeof value === "string" ? value : JSON.stringify(value);
-      return { key, value: text.length > 28 ? `${text.slice(0, 27)}…` : text };
+      const text = typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+      return { key, value: text.replace(/\s+/g, " ").slice(0, 400) };
     })
     .slice(0, 4);
+}
+
+let measurer: CanvasRenderingContext2D | null | undefined;
+let measureFamily = "sans-serif";
+
+/** How wide a line of text draws, in pixels, in the page's own font. */
+function textWidth(text: string, size: number, weight = 400): number {
+  if (measurer === undefined) {
+    measurer = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+    if (typeof document !== "undefined") measureFamily = getComputedStyle(document.body).fontFamily || measureFamily;
+  }
+  // Without a canvas, count a wide (CJK) character as a full em and anything else as a little over half.
+  if (measurer === null) return Array.from(text).reduce((sum, char) => sum + (char.charCodeAt(0) > 0x2e7f ? size : size * 0.6), 0);
+  measurer.font = `${weight} ${size}px ${measureFamily}`;
+  return measurer.measureText(text).width;
+}
+
+/**
+ * `text` cut short with "…" so it fits in `max` pixels. Counting characters is
+ * not enough: twenty Chinese characters are twice as wide as twenty letters.
+ */
+export function fitText(text: string, max: number, size: number, weight = 400): string {
+  if (max <= 0) return "";
+  if (textWidth(text, size, weight) <= max) return text;
+  const chars = Array.from(text);
+  let low = 0;
+  let high = chars.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (textWidth(`${chars.slice(0, mid).join("")}…`, size, weight) <= max) low = mid;
+    else high = mid - 1;
+  }
+  return low === 0 ? "…" : `${chars.slice(0, low).join("").trimEnd()}…`;
 }
 
 /**
@@ -1587,40 +1622,59 @@ function GraphCanvas({ graph }: { graph: BlueprintGraphView }) {
                     <path d={`M${box.x},${box.y + NODE_HEAD} v-${NODE_HEAD - 6} a6,6 0 0 1 6,-6 h${box.w - 12} a6,6 0 0 1 6,6 v${NODE_HEAD - 6} z`} className="node-head" />
                   )}
                   <text x={box.x + 10} y={box.y + 17} className="node-title">
-                    {name.length > 24 ? `${name.slice(0, 23)}…` : name}
+                    <title>{name}</title>
+                    {fitText(name, box.w - 20, 12, 600)}
                   </text>
-                  {own.inputs.map((pin, index) => (
-                    <g key={`i${pin}`}>
-                      {isExecPort(pin) ? (
-                        <path d={`M${box.x - 4},${pinY(index) - 5} l7,5 l-7,5 z`} className="pin pin-exec" />
-                      ) : (
-                        <circle cx={box.x} cy={box.y + NODE_HEAD + index * PORT_H + PORT_H / 2} r={4} className="pin pin-data" />
-                      )}
-                      <text x={box.x + 10} y={box.y + NODE_HEAD + index * PORT_H + 13} className="node-port">
-                        {isExecPort(pin) ? "" : pin}
-                      </text>
-                    </g>
-                  ))}
-                  {own.outputs.map((pin, index) => (
-                    <g key={`o${pin}`}>
-                      {isExecPort(pin) ? (
-                        <path d={`M${box.x + box.w - 3},${pinY(index) - 5} l7,5 l-7,5 z`} className="pin pin-exec" />
-                      ) : (
-                        <circle cx={box.x + box.w} cy={box.y + NODE_HEAD + index * PORT_H + PORT_H / 2} r={4} className="pin pin-data" />
-                      )}
-                      <text x={box.x + box.w - 10} y={box.y + NODE_HEAD + index * PORT_H + 13} className="node-port" textAnchor="end">
-                        {pin === "then" || pin === "out" ? "" : pin}
-                      </text>
-                    </g>
-                  ))}
-                  {paramRows(node.params).map((row, index) => (
-                    <g key={`p${row.key}`}>
-                      <rect x={box.x + 8} y={box.y + NODE_HEAD + (rows + index) * PORT_H + 1} width={box.w - 16} height={PORT_H - 3} rx={3} className="param-field" />
-                      <text x={box.x + 13} y={box.y + NODE_HEAD + (rows + index) * PORT_H + 12} className="param-text">
-                        <tspan className="param-key">{row.key}</tspan> {row.value}
-                      </text>
-                    </g>
-                  ))}
+                  {own.inputs.map((pin, index) => {
+                    const label = isExecPort(pin) ? "" : pin;
+                    const across = own.outputs[index];
+                    const room = across === undefined || across === "then" || across === "out" ? box.w - 24 : (box.w - 28) / 2;
+                    return (
+                      <g key={`i${pin}`}>
+                        {isExecPort(pin) ? (
+                          <path d={`M${box.x - 4},${pinY(index) - 5} l7,5 l-7,5 z`} className="pin pin-exec" />
+                        ) : (
+                          <circle cx={box.x} cy={box.y + NODE_HEAD + index * PORT_H + PORT_H / 2} r={4} className="pin pin-data" />
+                        )}
+                        <text x={box.x + 10} y={box.y + NODE_HEAD + index * PORT_H + 13} className="node-port">
+                          {label === "" ? null : <title>{label}</title>}
+                          {fitText(label, room, 11)}
+                        </text>
+                      </g>
+                    );
+                  })}
+                  {own.outputs.map((pin, index) => {
+                    const label = pin === "then" || pin === "out" ? "" : pin;
+                    const across = own.inputs[index];
+                    const room = across === undefined || isExecPort(across) ? box.w - 24 : (box.w - 28) / 2;
+                    return (
+                      <g key={`o${pin}`}>
+                        {isExecPort(pin) ? (
+                          <path d={`M${box.x + box.w - 3},${pinY(index) - 5} l7,5 l-7,5 z`} className="pin pin-exec" />
+                        ) : (
+                          <circle cx={box.x + box.w} cy={box.y + NODE_HEAD + index * PORT_H + PORT_H / 2} r={4} className="pin pin-data" />
+                        )}
+                        <text x={box.x + box.w - 10} y={box.y + NODE_HEAD + index * PORT_H + 13} className="node-port" textAnchor="end">
+                          {label === "" ? null : <title>{label}</title>}
+                          {fitText(label, room, 11)}
+                        </text>
+                      </g>
+                    );
+                  })}
+                  {paramRows(node.params).map((row, index) => {
+                    const inner = box.w - 26;
+                    const key = fitText(row.key, inner / 2, 11);
+                    const value = fitText(row.value, inner - textWidth(`${key} `, 11), 11);
+                    return (
+                      <g key={`p${row.key}`}>
+                        <title>{`${row.key}: ${row.value}`}</title>
+                        <rect x={box.x + 8} y={box.y + NODE_HEAD + (rows + index) * PORT_H + 1} width={box.w - 16} height={PORT_H - 3} rx={3} className="param-field" />
+                        <text x={box.x + 13} y={box.y + NODE_HEAD + (rows + index) * PORT_H + 12} className="param-text">
+                          <tspan className="param-key">{key}</tspan> {value}
+                        </text>
+                      </g>
+                    );
+                  })}
                 </g>
               );
             })}

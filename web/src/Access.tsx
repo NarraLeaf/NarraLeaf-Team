@@ -19,7 +19,7 @@ import {
   type TeamProjectRole,
 } from "@narraleaf/team-protocol";
 import { t, type Phrase } from "./i18n";
-import { Flash, SelectPanel } from "./ui";
+import { Flash, FormDialog, SelectPanel } from "./ui";
 import type { TeamConnection } from "./socket";
 
 export const TEMPLATE_PHRASE: Readonly<Record<TeamPermissionTemplateId, Phrase>> = {
@@ -287,10 +287,11 @@ export function MyAccessRequests({ connection, project }: { connection: TeamConn
   );
 }
 
-/** A small form: a template and a few words, sent as one request. */
+/** A template and a few words, sent as one request, in a dialog. */
 function AskForm({
   connection,
   project,
+  title,
   choices,
   initial,
   sent,
@@ -298,42 +299,35 @@ function AskForm({
 }: {
   connection: TeamConnection;
   project: string;
+  title: string;
   choices: readonly TeamPermissionTemplateId[];
   initial: TeamPermissionTemplateId;
   sent: () => void;
-  cancel?: () => void;
+  cancel: () => void;
 }) {
   const [template, setTemplate] = useState<TeamPermissionTemplateId>(initial);
   const [message, setMessage] = useState("");
-  const [error, setError] = useState<string | undefined>(undefined);
   return (
-    <form
-      className="ask-form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void connection
-          .call("access.requests.create", { project, template, ...(message.trim() === "" ? {} : { message: message.trim() }) })
-          .then(sent)
-          .catch((caught: unknown) => setError(errorText(caught)));
+    <FormDialog
+      title={title}
+      submitLabel={t("reqSend")}
+      onSubmit={async () => {
+        await connection.call("access.requests.create", { project, template, ...(message.trim() === "" ? {} : { message: message.trim() }) });
+        sent();
+        return false;
       }}
+      onClose={cancel}
     >
-      <label className="small">
-        {t("reqAskFor")} <TemplateSelect value={template} change={setTemplate} choices={choices} />
-      </label>
-      <span className="muted small">{t(TEMPLATE_HINT[template])}</span>
-      <textarea placeholder={t("reqMessage")} value={message} maxLength={1000} rows={2} onChange={(event) => setMessage(event.target.value)} />
-      {error === undefined ? null : <p className="error small">{error}</p>}
-      <div className="ask-form-actions">
-        <button className="primary small" type="submit">
-          {t("reqSend")}
-        </button>
-        {cancel === undefined ? null : (
-          <button className="ghost small" type="button" onClick={cancel}>
-            {t("cancel")}
-          </button>
-        )}
+      <div className="form-field">
+        <span className="form-label">{t("reqAskFor")}</span>
+        <TemplateSelect size="medium" value={template} change={setTemplate} choices={choices} />
+        <span className="form-hint">{t(TEMPLATE_HINT[template])}</span>
       </div>
-    </form>
+      <label className="form-field">
+        <span className="form-label">{t("reqMessageLabel")}</span>
+        <textarea placeholder={t("reqMessage")} value={message} maxLength={1000} rows={3} onChange={(event) => setMessage(event.target.value)} autoFocus />
+      </label>
+    </FormDialog>
   );
 }
 
@@ -349,27 +343,26 @@ export function AskForMore({ connection, project, role }: { connection: TeamConn
     return template !== undefined && (role === undefined || rank[template.role] >= rank[role]) && !(role !== "editor" && template.role === role);
   });
   if (sent) return <span className="muted small">{t("reqSent")}</span>;
-  if (!open) {
-    return (
+  return (
+    <>
       <button className="button-outline" onClick={() => setOpen(true)}>
         {t("reqAskMore")}
       </button>
-    );
-  }
-  return (
-    <div className="ask-popover card">
-      <AskForm
-        connection={connection}
-        project={project}
-        choices={choices}
-        initial={choices.includes("editor") ? "editor" : (choices[0] ?? "owner")}
-        sent={() => {
-          setSent(true);
-          setOpen(false);
-        }}
-        cancel={() => setOpen(false)}
-      />
-    </div>
+      {open ? (
+        <AskForm
+          connection={connection}
+          project={project}
+          title={t("reqAskMore")}
+          choices={choices}
+          initial={choices.includes("editor") ? "editor" : (choices[0] ?? "owner")}
+          sent={() => {
+            setSent(true);
+            setOpen(false);
+          }}
+          cancel={() => setOpen(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -415,10 +408,14 @@ export function JoinProjects({ connection, operator, mayCreate }: { connection: 
                 <strong>{project.name}</strong>
                 {project.description === undefined ? null : <div className="muted small">{project.description}</div>}
               </div>
+              <button className="button-outline small" onClick={() => setAsking(project.id)}>
+                {t("reqAskJoin")}
+              </button>
               {asking === project.id ? (
                 <AskForm
                   connection={connection}
                   project={project.id}
+                  title={`${t("reqAskJoin")} · ${project.name}`}
                   choices={ASKABLE}
                   initial="editor"
                   sent={() => {
@@ -427,11 +424,7 @@ export function JoinProjects({ connection, operator, mayCreate }: { connection: 
                   }}
                   cancel={() => setAsking(undefined)}
                 />
-              ) : (
-                <button className="button-outline small" onClick={() => setAsking(project.id)}>
-                  {t("reqAskJoin")}
-                </button>
-              )}
+              ) : null}
             </li>
           ))}
         </ul>

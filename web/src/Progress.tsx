@@ -6,7 +6,7 @@
  * revision's files, as every other page does; the server keeps only what it has to - the
  * glossary, where each recording stands, milestones, to-dos and templates.
  */
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   projectMilestonesTopic,
   projectTodosTopic,
@@ -24,7 +24,7 @@ import { t, type Phrase } from "./i18n";
 import { Icon } from "./Icon";
 import { eachScene, useProjectData, type Place, type ProjectData } from "./projectData";
 import type { TeamConnection } from "./socket";
-import { Blankslate, confirmAction, Flash, SelectPanel, Skeleton, toast, toastError, UnderlineNav } from "./ui";
+import { Blankslate, confirmAction, Flash, FormDialog, SelectPanel, Skeleton, toast, toastError, UnderlineNav } from "./ui";
 
 export type ProgressSection = "stats" | "localization" | "glossary" | "voice" | "roadmap" | "templates";
 export const PROGRESS_SECTIONS: readonly ProgressSection[] = ["stats", "localization", "glossary", "voice", "roadmap", "templates"];
@@ -681,65 +681,76 @@ function GlossaryEditor(props: { connection: TeamConnection; projectId: string; 
   const [words, setWords] = useState<Record<string, string>>({ ...entry?.translations });
   const [extra, setExtra] = useState("");
   const locales = [...new Set([...props.locales, ...Object.keys(words)])].sort();
-  const save = (event: FormEvent) => {
-    event.preventDefault();
+  const save = async () => {
     const translations = Object.fromEntries(Object.entries(words).filter(([, word]) => word.trim() !== "").map(([locale, word]) => [locale, word.trim()]));
-    connection
-      .call("glossary.set", {
-        project: projectId,
-        ...(entry === undefined ? {} : { id: entry.id }),
-        term: term.trim(),
-        translations,
-        note: note.trim() === "" ? null : note.trim(),
-      })
-      .then(() => {
-        toast(t("saved"));
-        close(true);
-      })
-      .catch(toastError);
+    await connection.call("glossary.set", {
+      project: projectId,
+      ...(entry === undefined ? {} : { id: entry.id }),
+      term: term.trim(),
+      translations,
+      note: note.trim() === "" ? null : note.trim(),
+    });
+    toast(t("saved"));
+    close(true);
+    return false;
   };
+  const addLocale = () => {
+    setWords({ ...words, [extra.trim()]: words[extra.trim()] ?? "" });
+    setExtra("");
+  };
+  const localeOk = /^[A-Za-z0-9_-]{1,35}$/u.test(extra.trim());
   return (
-    <form className="glossary-editor card" onSubmit={save}>
-      <label>
-        <span>{t("glossaryTerm")}</span>
+    <FormDialog
+      title={entry === undefined ? t("glossaryAdd") : t("glossaryEditTitle", { term: entry.term })}
+      submitLabel={t("save")}
+      width={520}
+      ready={term.trim() !== ""}
+      onSubmit={save}
+      onClose={() => close(false)}
+    >
+      <label className="form-field">
+        <span className="form-label">{t("glossaryTerm")}</span>
         <input value={term} maxLength={200} required autoFocus onChange={(event) => setTerm(event.target.value)} />
       </label>
-      {locales.map((locale) => (
-        <label key={locale}>
-          <span>{locale}</span>
-          <input value={words[locale] ?? ""} maxLength={1000} onChange={(event) => setWords({ ...words, [locale]: event.target.value })} />
-        </label>
-      ))}
-      <label>
-        <span>{t("glossaryAddLocale")}</span>
+      {locales.length === 0 ? null : (
+        <div className="form-field">
+          <span className="form-label">{t("glossaryTranslations")}</span>
+          <div className="locale-fields">
+            {locales.map((locale) => (
+              <label key={locale} className="locale-field">
+                <span className="mono small">{locale}</span>
+                <input value={words[locale] ?? ""} maxLength={1000} onChange={(event) => setWords({ ...words, [locale]: event.target.value })} />
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="form-field">
+        <span className="form-label">{t("glossaryAddLocale")}</span>
         <span className="inline-field">
-          <input value={extra} maxLength={35} placeholder="en, ja, zh-TW…" onChange={(event) => setExtra(event.target.value)} />
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={!/^[A-Za-z0-9_-]{1,35}$/u.test(extra.trim())}
-            onClick={() => {
-              setWords({ ...words, [extra.trim()]: words[extra.trim()] ?? "" });
-              setExtra("");
+          <input
+            value={extra}
+            maxLength={35}
+            placeholder="en, ja, zh-TW…"
+            onChange={(event) => setExtra(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter here adds the language rather than saving the whole entry.
+              if (event.key === "Enter") {
+                event.preventDefault();
+                if (localeOk) addLocale();
+              }
             }}
-          >
+          />
+          <button type="button" className="btn btn-sm" disabled={!localeOk} onClick={addLocale}>
             {t("add")}
           </button>
         </span>
-      </label>
-      <label>
-        <span>{t("glossaryNote")}</span>
+      </div>
+      <label className="form-field">
+        <span className="form-label">{t("glossaryNote")}</span>
         <input value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)} />
       </label>
-      <div className="form-actions">
-        <button type="button" className="btn" onClick={() => close(false)}>
-          {t("cancel")}
-        </button>
-        <button type="submit" className="btn btn-primary" disabled={term.trim() === ""}>
-          {t("save")}
-        </button>
-      </div>
-    </form>
+    </FormDialog>
   );
 }
 
@@ -1109,44 +1120,30 @@ function PlanMilestone({ connection, projectId, close }: { connection: TeamConne
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
   const [due, setDue] = useState(dateInput(Date.now() + 14 * DAY));
-  const save = (event: FormEvent) => {
-    event.preventDefault();
-    connection
-      .call("milestones.create", {
-        project: projectId,
-        name: name.trim(),
-        ...(note.trim() === "" ? {} : { note: note.trim() }),
-        ...(due === "" ? {} : { dueAt: new Date(`${due}T23:59:59`).getTime() }),
-      })
-      .then(() => {
-        toast(t("saved"));
-        close();
-      })
-      .catch(toastError);
+  const save = async () => {
+    await connection.call("milestones.create", {
+      project: projectId,
+      name: name.trim(),
+      ...(note.trim() === "" ? {} : { note: note.trim() }),
+      ...(due === "" ? {} : { dueAt: new Date(`${due}T23:59:59`).getTime() }),
+    });
+    toast(t("saved"));
   };
   return (
-    <form className="card plan-milestone" onSubmit={save}>
-      <label>
-        <span>{t("roadmapName")}</span>
+    <FormDialog title={t("roadmapPlan")} submitLabel={t("save")} ready={name.trim() !== ""} onSubmit={save} onClose={close}>
+      <label className="form-field">
+        <span className="form-label">{t("roadmapName")}</span>
         <input value={name} maxLength={100} required autoFocus onChange={(event) => setName(event.target.value)} />
       </label>
-      <label>
-        <span>{t("roadmapDue")}</span>
+      <label className="form-field">
+        <span className="form-label">{t("roadmapDue")}</span>
         <input type="date" value={due} onChange={(event) => setDue(event.target.value)} />
       </label>
-      <label>
-        <span>{t("glossaryNote")}</span>
+      <label className="form-field">
+        <span className="form-label">{t("glossaryNote")}</span>
         <input value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)} />
       </label>
-      <div className="form-actions">
-        <button type="button" className="btn" onClick={close}>
-          {t("cancel")}
-        </button>
-        <button type="submit" className="btn btn-primary" disabled={name.trim() === ""}>
-          {t("save")}
-        </button>
-      </div>
-    </form>
+    </FormDialog>
   );
 }
 
@@ -1155,6 +1152,7 @@ function PlanMilestone({ connection, projectId, close }: { connection: TeamConne
 function Templates({ connection, open, projectId, me, operator }: { connection: TeamConnection; open: boolean; projectId: string; me: string; operator: boolean }) {
   const [templates, setTemplates] = useState<readonly TeamProjectTemplate[] | undefined>(undefined);
   const [error, setError] = useState<unknown>(undefined);
+  const [saving, setSaving] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const load = useCallback(() => {
@@ -1192,23 +1190,28 @@ function Templates({ connection, open, projectId, me, operator }: { connection: 
     if (!(await confirmAction({ title: t("templateDeleteTitle", { name: template.name }), danger: true, confirmLabel: t("remove") }))) return;
     connection.call("templates.delete", { template: template.id }).then(load).catch(toastError);
   };
-  const save = (event: FormEvent) => {
-    event.preventDefault();
-    connection
-      .call("templates.save", { name: name.trim(), fromProject: projectId, ...(description.trim() === "" ? {} : { description: description.trim() }) })
-      .then(() => {
-        toast(t("saved"));
-        setName("");
-        setDescription("");
-        load();
-      })
-      .catch(toastError);
+  const save = async () => {
+    await connection.call("templates.save", { name: name.trim(), fromProject: projectId, ...(description.trim() === "" ? {} : { description: description.trim() }) });
+    toast(t("saved"));
+    load();
   };
   if (error !== undefined) return <Flash error={error} />;
   if (templates === undefined) return <Skeleton rows={3} />;
   return (
     <div className="templates">
-      <p className="muted small">{t("templatesHint")}</p>
+      <div className="section-head">
+        <p className="muted small">{t("templatesHint")}</p>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={() => {
+            setName("");
+            setDescription("");
+            setSaving(true);
+          }}
+        >
+          <Icon name="plus" size={14} /> {t("templateSaveTitle")}
+        </button>
+      </div>
       {templates.length === 0 ? (
         <Blankslate icon="grid" title={t("templatesEmpty")} compact>
           {t("templatesEmptyHint")}
@@ -1243,23 +1246,18 @@ function Templates({ connection, open, projectId, me, operator }: { connection: 
           ))}
         </ul>
       )}
-      <form className="card template-save" onSubmit={save}>
-        <h3>{t("templateSaveTitle")}</h3>
-        <p className="muted small">{t("templateSaveHint")}</p>
-        <label>
-          <span>{t("templateName")}</span>
-          <input value={name} maxLength={100} required onChange={(event) => setName(event.target.value)} />
-        </label>
-        <label>
-          <span>{t("templateDescription")}</span>
-          <input value={description} maxLength={2000} onChange={(event) => setDescription(event.target.value)} />
-        </label>
-        <div className="form-actions">
-          <button type="submit" className="btn btn-primary" disabled={name.trim() === ""}>
-            {t("templateSave")}
-          </button>
-        </div>
-      </form>
+      {saving ? (
+        <FormDialog title={t("templateSaveTitle")} lead={t("templateSaveHint")} submitLabel={t("templateSave")} ready={name.trim() !== ""} onSubmit={save} onClose={() => setSaving(false)}>
+          <label className="form-field">
+            <span className="form-label">{t("templateName")}</span>
+            <input value={name} maxLength={100} required autoFocus onChange={(event) => setName(event.target.value)} />
+          </label>
+          <label className="form-field">
+            <span className="form-label">{t("templateDescription")}</span>
+            <textarea value={description} rows={3} maxLength={2000} onChange={(event) => setDescription(event.target.value)} />
+          </label>
+        </FormDialog>
+      ) : null}
     </div>
   );
 }
