@@ -23,6 +23,10 @@ export default defineConfig({
       "@narraleaf/team-protocol": fileURLToPath(
         new URL("./protocol/src/index.ts", import.meta.url),
       ),
+      // The console's own modules read files with project-view, also from source.
+      "@narraleaf/project-view": fileURLToPath(
+        new URL("./project-view/src/index.ts", import.meta.url),
+      ),
     },
   },
   test: {

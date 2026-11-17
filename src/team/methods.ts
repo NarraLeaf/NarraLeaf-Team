@@ -82,6 +82,8 @@ export interface MethodContext {
    * change that took something away from it — see TeamHub.recheck.
    */
   readonly recheck?: (userId: string) => void;
+  /** Whether an account has a session open now. Absent outside a server (a test's context). */
+  readonly online?: (userId: string) => boolean;
 }
 
 /**
@@ -334,6 +336,15 @@ export function boundedCount(
     throw new MethodError("bad-params", `${name} has to be a whole number of at least one`);
   }
   return Math.min(value, maximum);
+}
+
+/** A whole number that is there: a row id, mostly. */
+export function requiredInteger(params: Record<string, unknown>, name: string, minimum = 1): number {
+  const value = params[name];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+    throw new MethodError("bad-params", `${name} has to be a whole number of at least ${minimum}`);
+  }
+  return value;
 }
 
 /** A yes or a no, with a default. */

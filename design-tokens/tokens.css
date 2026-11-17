@@ -57,6 +57,41 @@
   --nl-radius-sm: 4px;
   --nl-radius: 6px;
   --nl-radius-lg: 10px;
+  --nl-radius-pill: 999px;
+
+  /* Type: seven sizes, and nothing between them. */
+  --nl-text-xs: 11px;
+  --nl-text-sm: 12px;
+  --nl-text-md: 13px;
+  --nl-text-base: 14px;
+  --nl-text-lg: 16px;
+  --nl-text-xl: 20px;
+  --nl-text-2xl: 24px;
+
+  /* Space, on a four-pixel step. */
+  --nl-space-1: 4px;
+  --nl-space-2: 8px;
+  --nl-space-3: 12px;
+  --nl-space-4: 16px;
+  --nl-space-5: 24px;
+  --nl-space-6: 32px;
+
+  /* Lift: a hairline for cards, a soft drop for anything that floats. */
+  --nl-shadow-sm: 0 1px 2px rgb(0 0 0 / 0.12);
+  --nl-shadow-overlay: 0 8px 24px rgb(0 0 0 / 0.28), 0 0 0 1px var(--nl-edge);
+  --nl-shadow-dialog: 0 16px 48px rgb(0 0 0 / 0.4), 0 0 0 1px var(--nl-edge);
+
+  /* Motion: quick, and gone for anyone who asks for less. */
+  --nl-ease: cubic-bezier(0.2, 0, 0, 1);
+  --nl-duration-fast: 80ms;
+  --nl-duration: 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --nl-duration-fast: 0ms;
+    --nl-duration: 0ms;
+  }
 }
 
 @media (prefers-color-scheme: light) {

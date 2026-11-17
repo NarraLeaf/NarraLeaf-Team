@@ -258,6 +258,7 @@ export function commentMethods(): TeamMethod[] {
           projectId,
           ...(document === undefined ? {} : { document }),
           ...(element === undefined ? {} : { element }),
+          ...(flag(read, "projectWide", false) ? { projectWide: true } : {}),
           ...(said === undefined || said === null
             ? {}
             : { status: oneOf(read, "status", THREAD_STATUSES) }),

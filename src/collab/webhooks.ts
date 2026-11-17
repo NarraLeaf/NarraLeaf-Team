@@ -17,15 +17,18 @@
  *    activity feed would.
  */
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import type { DatabaseSync } from "node:sqlite";
 
 import { integerColumn, optionalIntegerColumn, optionalTextColumn, textColumn, type Row } from "../identity/database.js";
 import { findUserById, type UserRecord } from "../identity/users.js";
 import { findProjectById } from "../projects/registry.js";
+import { isPrivateAddress, parseIp, policySwitch, WEBHOOKS_ALLOW_PRIVATE } from "../identity/policy.js";
 import {
   TEAM_WEBHOOK_EVENTS,
   TEAM_WEBHOOK_FORMATS,
   type TeamWebhook,
+  type TeamWebhookDelivery,
   type TeamWebhookEvent,
   type TeamWebhookFormat,
 } from "../team/protocol.js";
@@ -169,33 +172,196 @@ export function webhookBody(hook: Pick<WebhookRecord, "format" | "secret">, even
 
 export type WebhookFetch = (url: string, init: { method: string; headers: Record<string, string>; body: string; redirect: "manual"; signal: AbortSignal }) => Promise<{ status: number }>;
 
-/** Post to one webhook; answers the status, 0 for no answer. Records it either way. */
+/** Waits before each retry, in seconds: five more tries over about thirteen minutes. */
+export const WEBHOOK_RETRY_SECONDS: readonly number[] = [1, 5, 30, 120, 600];
+/** Deliveries kept per webhook; older ones go when a new one is written. */
+export const WEBHOOK_DELIVERIES_KEPT = 200;
+
+/** Answers worth trying again: nothing at all, too many requests, or the far end failing. */
+export function worthRetrying(status: number): boolean {
+  return status === 0 || status === 408 || status === 429 || status >= 500;
+}
+
+export type WebhookResolver = (host: string) => Promise<readonly string[]>;
+
+const resolveHost: WebhookResolver = async (host) => (await lookup(host, { all: true, verbatim: true })).map((entry) => entry.address);
+
+/**
+ * Refuse an address on this machine or its network, unless the operator allows them.
+ * Answers the reason, or undefined to go ahead. A name is looked up and every address it has is
+ * checked, so a public name pointing inside does not get through.
+ *
+ * ⚠ There is a gap between this lookup and the one fetch makes. A name that answers differently
+ * the second time could still reach inside; the guard is for mistakes and casual misuse, and the
+ * operator's firewall is still the boundary.
+ */
+export async function webhookAddressRefusal(database: DatabaseSync, raw: string, resolver: WebhookResolver = resolveHost): Promise<string | undefined> {
+  if (policySwitch(database, WEBHOOKS_ALLOW_PRIVATE)) return undefined;
+  let host: string;
+  try {
+    host = new URL(raw).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return "that is not an address";
+  }
+  if (host === "localhost" || host.endsWith(".localhost")) return "this server does not post to addresses on its own network";
+  let addresses: readonly string[];
+  if (parseIp(host) !== undefined) {
+    addresses = [host];
+  } else {
+    try {
+      addresses = await resolver(host);
+    } catch {
+      return "no address found for that host";
+    }
+  }
+  if (addresses.length === 0) return "no address found for that host";
+  if (addresses.some(isPrivateAddress)) return "this server does not post to addresses on its own network";
+  return undefined;
+}
+
+export interface WebhookDeliveryRecord {
+  readonly id: number;
+  readonly webhookId: string;
+  readonly event: TeamWebhookEvent;
+  readonly projectId: string | undefined;
+  readonly summary: string;
+  readonly body: string;
+  readonly signature: string;
+  readonly attempts: number;
+  readonly status: number;
+  readonly error: string | undefined;
+  readonly at: number;
+  readonly lastAt: number | undefined;
+  readonly nextAt: number | undefined;
+}
+
+function toDelivery(row: Row): WebhookDeliveryRecord {
+  return {
+    id: integerColumn(row, "id"),
+    webhookId: textColumn(row, "webhook_id"),
+    event: textColumn(row, "event") as TeamWebhookEvent,
+    projectId: optionalTextColumn(row, "project_id"),
+    summary: textColumn(row, "summary"),
+    body: textColumn(row, "body"),
+    signature: textColumn(row, "signature"),
+    attempts: integerColumn(row, "attempts"),
+    status: integerColumn(row, "status"),
+    error: optionalTextColumn(row, "error"),
+    at: integerColumn(row, "at"),
+    lastAt: optionalIntegerColumn(row, "last_at"),
+    nextAt: optionalIntegerColumn(row, "next_at"),
+  };
+}
+
+export function webhookDeliveryView(delivery: WebhookDeliveryRecord): TeamWebhookDelivery {
+  return {
+    id: delivery.id,
+    webhook: delivery.webhookId,
+    event: delivery.event,
+    ...(delivery.projectId === undefined ? {} : { project: delivery.projectId }),
+    summary: delivery.summary,
+    attempts: delivery.attempts,
+    status: delivery.status,
+    ...(delivery.error === undefined ? {} : { error: delivery.error }),
+    at: delivery.at,
+    ...(delivery.lastAt === undefined ? {} : { lastAt: delivery.lastAt }),
+    ...(delivery.nextAt === undefined ? {} : { nextAt: delivery.nextAt }),
+  };
+}
+
+export function listWebhookDeliveries(database: DatabaseSync, webhookId: string, limit = 50): WebhookDeliveryRecord[] {
+  return (database.prepare("SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY id DESC LIMIT ?").all(webhookId, limit) as Row[]).map(toDelivery);
+}
+
+export function findWebhookDelivery(database: DatabaseSync, id: number): WebhookDeliveryRecord | undefined {
+  const row = database.prepare("SELECT * FROM webhook_deliveries WHERE id = ?").get(id) as Row | undefined;
+  return row === undefined ? undefined : toDelivery(row);
+}
+
+/** Write down that an event is going to a webhook, keeping the latest few hundred. */
+export function recordWebhookDelivery(database: DatabaseSync, hook: WebhookRecord, event: WebhookEvent, now = Date.now()): WebhookDeliveryRecord {
+  const project = findProjectById(database, event.projectId);
+  const { body, signature } = webhookBody(hook, event, project?.name ?? event.projectId, now);
+  const id = Number(
+    database
+      .prepare("INSERT INTO webhook_deliveries (webhook_id, event, project_id, summary, body, signature, at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(hook.id, event.type, event.projectId, event.summary, body, signature, now).lastInsertRowid,
+  );
+  database
+    .prepare(
+      "DELETE FROM webhook_deliveries WHERE webhook_id = ? AND id NOT IN (SELECT id FROM webhook_deliveries WHERE webhook_id = ? ORDER BY id DESC LIMIT ?)",
+    )
+    .run(hook.id, hook.id, WEBHOOK_DELIVERIES_KEPT);
+  return findWebhookDelivery(database, id) as WebhookDeliveryRecord;
+}
+
+export interface DeliveryOptions {
+  readonly fetchImpl?: WebhookFetch;
+  /** Skip the check for private addresses (a test posting to a fake fetch). */
+  readonly resolver?: WebhookResolver;
+  readonly now?: number;
+}
+
+/**
+ * Post one recorded delivery, once. Writes down the answer and, when it is worth another go and
+ * tries are left, when that is. Answers the status, 0 for no answer.
+ */
+export async function attemptDelivery(database: DatabaseSync, deliveryId: number, options: DeliveryOptions = {}): Promise<number> {
+  const delivery = findWebhookDelivery(database, deliveryId);
+  if (delivery === undefined) return 0;
+  const hook = findWebhook(database, delivery.webhookId);
+  if (hook === undefined) return 0;
+  const now = options.now ?? Date.now();
+  const fetchImpl = options.fetchImpl ?? (fetch as unknown as WebhookFetch);
+  let status = 0;
+  let error: string | undefined;
+  const refusal = options.fetchImpl !== undefined && options.resolver === undefined ? undefined : await webhookAddressRefusal(database, hook.url, options.resolver);
+  if (refusal !== undefined) {
+    error = refusal;
+  } else {
+    try {
+      const answer = await fetchImpl(hook.url, {
+        method: "POST",
+        headers: { "content-type": "application/json", "user-agent": "nlteam-webhook", "x-nlteam-event": delivery.event, "x-nlteam-signature": delivery.signature, "x-nlteam-delivery": String(delivery.id) },
+        body: delivery.body,
+        redirect: "manual",
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+      });
+      status = answer.status;
+      if (status >= 300) error = `answered ${status}`;
+    } catch (failure) {
+      error = failure instanceof Error && failure.name === "TimeoutError" ? "no answer in time" : "could not connect";
+    }
+  }
+  const attempts = delivery.attempts + 1;
+  // A refusal will refuse again; nothing else is worth more tries than the schedule has.
+  const wait = refusal === undefined && worthRetrying(status) ? WEBHOOK_RETRY_SECONDS[attempts - 1] : undefined;
+  const nextAt = wait === undefined ? null : now + wait * 1000;
+  try {
+    database
+      .prepare("UPDATE webhook_deliveries SET attempts = ?, status = ?, error = ?, last_at = ?, next_at = ? WHERE id = ?")
+      .run(attempts, status, error ?? null, now, nextAt, delivery.id);
+    database.prepare("UPDATE webhooks SET last_status = ?, last_at = ? WHERE id = ?").run(status, now, hook.id);
+  } catch {
+    // The database closed while the request was out (a server shutting down): nothing to record into.
+  }
+  return status;
+}
+
+/** Post to one webhook now, recording it; answers the status, 0 for no answer. No retries. */
 export async function deliverOne(
   database: DatabaseSync,
   hook: WebhookRecord,
   event: WebhookEvent,
-  fetchImpl: WebhookFetch = fetch as unknown as WebhookFetch,
+  fetchImpl?: WebhookFetch,
   now = Date.now(),
 ): Promise<number> {
-  const project = findProjectById(database, event.projectId);
-  const { body, signature } = webhookBody(hook, event, project?.name ?? event.projectId, now);
-  let status = 0;
+  const delivery = recordWebhookDelivery(database, hook, event, now);
+  const status = await attemptDelivery(database, delivery.id, { ...(fetchImpl === undefined ? {} : { fetchImpl }), now });
   try {
-    const answer = await fetchImpl(hook.url, {
-      method: "POST",
-      headers: { "content-type": "application/json", "user-agent": "nlteam-webhook", "x-nlteam-event": event.type, "x-nlteam-signature": signature },
-      body,
-      redirect: "manual",
-      signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
-    });
-    status = answer.status;
+    database.prepare("UPDATE webhook_deliveries SET next_at = NULL WHERE id = ?").run(delivery.id);
   } catch {
-    status = 0;
-  }
-  try {
-    database.prepare("UPDATE webhooks SET last_status = ?, last_at = ? WHERE id = ?").run(status, now, hook.id);
-  } catch {
-    // The database closed while the request was out (a server shutting down): nothing to record into.
+    // closed under us
   }
   return status;
 }
@@ -213,13 +379,70 @@ export function setWebhookFetch(next: WebhookFetch | undefined): void {
   fetchForEvents = next;
 }
 
+/** What posts to an outside address now: the test's, or the platform's. Personal digest hooks use it too. */
+export function webhookFetch(): WebhookFetch {
+  return fetchForEvents ?? (fetch as unknown as WebhookFetch);
+}
+
+const retryTimers = new Map<number, NodeJS.Timeout>();
+
+/** Try a delivery, and keep trying on the schedule while it fails. */
+export function sendDelivery(database: DatabaseSync, deliveryId: number): void {
+  void attemptDelivery(database, deliveryId, fetchForEvents === undefined ? {} : { fetchImpl: fetchForEvents }).then(() => {
+    let next: WebhookDeliveryRecord | undefined;
+    try {
+      next = findWebhookDelivery(database, deliveryId);
+    } catch {
+      return;
+    }
+    if (next?.nextAt !== undefined) scheduleDelivery(database, next.id, next.nextAt);
+  });
+}
+
+function scheduleDelivery(database: DatabaseSync, deliveryId: number, at: number): void {
+  clearTimeout(retryTimers.get(deliveryId));
+  const timer = setTimeout(() => {
+    retryTimers.delete(deliveryId);
+    sendDelivery(database, deliveryId);
+  }, Math.max(0, at - Date.now()));
+  // A retry is never a reason to keep the process alive.
+  timer.unref();
+  retryTimers.set(deliveryId, timer);
+}
+
+/** Pick up the retries a previous run left waiting. What starting the server does. */
+export function resumeWebhookDeliveries(database: DatabaseSync): number {
+  const due = database.prepare("SELECT id, next_at FROM webhook_deliveries WHERE next_at IS NOT NULL").all() as Row[];
+  for (const row of due) scheduleDelivery(database, integerColumn(row, "id"), integerColumn(row, "next_at"));
+  return due.length;
+}
+
+/** Forget every waiting retry. What stopping the server does. */
+export function stopWebhookDeliveries(): void {
+  for (const timer of retryTimers.values()) clearTimeout(timer);
+  retryTimers.clear();
+}
+
+/** Send a past delivery again, as a new delivery of the same body. Answers the new one. */
+export function redeliver(database: DatabaseSync, deliveryId: number, now = Date.now()): WebhookDeliveryRecord | undefined {
+  const past = findWebhookDelivery(database, deliveryId);
+  if (past === undefined) return undefined;
+  const id = Number(
+    database
+      .prepare("INSERT INTO webhook_deliveries (webhook_id, event, project_id, summary, body, signature, at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(past.webhookId, past.event, past.projectId ?? null, past.summary, past.body, past.signature, now).lastInsertRowid,
+  );
+  sendDelivery(database, id);
+  return findWebhookDelivery(database, id);
+}
+
 /** Tell every webhook that wants it. Fire and forget: nothing waits on a chat room. */
 export function emitWebhookEvent(database: DatabaseSync, event: WebhookEvent): void {
-  let hooks: WebhookRecord[];
+  let deliveries: WebhookDeliveryRecord[];
   try {
-    hooks = webhooksFor(database, event);
+    deliveries = webhooksFor(database, event).map((hook) => recordWebhookDelivery(database, hook, event));
   } catch {
     return;
   }
-  for (const hook of hooks) void deliverOne(database, hook, event, fetchForEvents);
+  for (const delivery of deliveries) sendDelivery(database, delivery.id);
 }

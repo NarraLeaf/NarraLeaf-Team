@@ -10,6 +10,7 @@ import type { ConsoleAccount } from "./api";
 import { ACTIVITY_PHRASE, ago, Face, useNotifications } from "./Collab";
 import { Icon } from "./Icon";
 import { t, type Phrase } from "./i18n";
+import { Flash, Hash } from "./ui";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 /** Where somebody last read in the workbench, kept in this browser by the workbench. */
@@ -40,9 +41,52 @@ function lastPlace(): LastPlace | undefined {
   }
 }
 
+const BETA_KEY = "nlteam.betaNoticeDismissed";
+const ISSUES_URL = "https://github.com/NarraLeaf/NarraLeaf-Team/issues";
+
+/** The console is a beta: say so on the home page until the person asks not to see it again. */
+function BetaNotice() {
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return localStorage.getItem(BETA_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (hidden) return null;
+  const dismiss = () => {
+    try {
+      localStorage.setItem(BETA_KEY, "1");
+    } catch {
+      /* a private window: hide it for this visit only */
+    }
+    setHidden(true);
+  };
+  const [before, after = ""] = t("betaNotice").split("{link}");
+  return (
+    <div className="beta-notice">
+      <Flash
+        tone="warning"
+        action={
+          <button className="btn btn-sm" type="button" onClick={dismiss}>
+            {t("dontShowAgain")}
+          </button>
+        }
+      >
+        {before}
+        <a href={ISSUES_URL} target="_blank" rel="noreferrer">
+          {t("betaNoticeLink")}
+        </a>
+        {after}
+      </Flash>
+    </div>
+  );
+}
+
 interface ProjectRow {
   readonly id: string;
   readonly name: string;
+  readonly title?: string;
   readonly description: string;
   readonly history?: { readonly lastAt?: number; readonly lastBy?: string };
 }
@@ -58,9 +102,9 @@ const FILTER_PHRASE: Record<Filter, Phrase> = {
 };
 const FILTER_KINDS: Record<Exclude<Filter, "all">, readonly TeamActivity["kind"][]> = {
   story: ["edit", "commit"],
-  comments: ["thread", "comment", "resolve", "review"],
+  comments: ["thread", "comment", "resolve", "review", "approved", "sent-back"],
   todos: ["todo-created", "todo-done"],
-  versions: ["version", "milestone"],
+  versions: ["version", "milestone", "build"],
 };
 
 /** A stable colour for a project, so its tag is the same on every page. */
@@ -82,7 +126,89 @@ const FEED_TAB: Record<TeamActivity["kind"], string> = {
   review: "reviews",
   "todo-created": "todos",
   "todo-done": "todos",
+  approved: "story",
+  "sent-back": "story",
+  build: "builds",
 };
+
+/** The phrase for several of one kind of thing in a row, where one phrase cannot count them. */
+const MANY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
+  commit: "aCommitMany",
+  thread: "aThreadMany",
+  comment: "aCommentMany",
+  resolve: "aResolveMany",
+  "todo-created": "aTodoCreatedMany",
+  "todo-done": "aTodoDoneMany",
+  review: "aReviewMany",
+  milestone: "aMilestoneMany",
+  edit: "aEdit",
+  version: "aVersionMany",
+  approved: "aApprovedMany",
+  "sent-back": "aSentBackMany",
+  build: "aBuildMany",
+};
+
+/** Someone in the feed: a team account where one matches, else the name a git commit carries. */
+export interface Who {
+  readonly name: string;
+  readonly user?: string;
+  readonly title?: string;
+}
+
+/**
+ * Who an activity's actor is. Commits made outside Team carry a git identity,
+ * "Name <email>"; that is a team account when the name or the email's local
+ * part is an account's username or display name, and otherwise just the name.
+ */
+export function useWho(connection: TeamConnection, open: boolean): (actor: string) => Who {
+  const [accounts, setAccounts] = useState<readonly { username: string; displayName: string }[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    connection
+      .call<{ members: { username: string; displayName: string }[] }>("members.list")
+      .then((answer) => setAccounts(answer.members))
+      .catch(() => undefined);
+  }, [connection, open]);
+  return useCallback(
+    (actor: string): Who => {
+      const git = /^(.*?)\s*<([^>]*)>$/.exec(actor);
+      if (git === null) return { name: actor, user: actor };
+      const name = (git[1] ?? "").trim() || actor;
+      const local = (git[2] ?? "").split("@")[0]?.toLowerCase() ?? "";
+      const lower = name.toLowerCase();
+      const match = accounts.find(
+        (account) => account.username.toLowerCase() === lower || account.displayName.toLowerCase() === lower || account.username.toLowerCase() === local,
+      );
+      return match === undefined ? { name, title: actor } : { name: match.username, user: match.username, title: actor };
+    },
+    [accounts],
+  );
+}
+
+/** One line of the feed: an action, or a run of the same action by the same person on the same project. */
+interface FeedEntry {
+  readonly first: TeamActivity;
+  readonly rows: TeamActivity[];
+  readonly who: Who;
+}
+
+/** A row's note, with a restore's long revision cut to a short, copyable hash. */
+function FeedNote({ summary }: { summary: string }) {
+  const restored = /^Restored ([0-9a-f]{7,40})$/i.exec(summary.trim());
+  if (restored !== null) {
+    return (
+      <span className="feed-note">
+        <Icon name="history" size={13} /> {t("restoredTo")} <Hash value={restored[1] ?? ""} />
+      </span>
+    );
+  }
+  return <span className="feed-quote">{summary}</span>;
+}
+
+/** A note worth a line: not empty, and not a lone digit or mark someone typed to get past the save box. */
+function worthShowing(summary: string | undefined): summary is string {
+  return summary !== undefined && summary.trim().length > 1;
+}
 
 function dayLabel(at: number): string {
   const day = new Date(at);
@@ -113,6 +239,8 @@ export function TeamHome(props: {
   const [clients, setClients] = useState<readonly TeamClientInstance[]>([]);
   const [milestones, setMilestones] = useState<readonly TeamMilestone[]>([]);
   const place = useMemo(() => lastPlace(), []);
+  const whoIs = useWho(connection, open);
+  const [unfolded, setUnfolded] = useState<ReadonlySet<TeamActivity["id"]>>(new Set());
 
   const loadProjects = useCallback(() => {
     connection
@@ -179,13 +307,28 @@ export function TeamHome(props: {
   const myTodos = todos.filter((todo) => todo.status !== "done");
 
   const shown = (rows ?? []).filter((row) => filter === "all" || FILTER_KINDS[filter].includes(row.kind));
-  const days: { label: string; items: TeamActivity[] }[] = [];
+  // A day at a time, and in a day, one line for a run of the same thing by the same person on the same project.
+  const days: { label: string; items: FeedEntry[] }[] = [];
   for (const row of shown) {
     const label = dayLabel(row.at);
-    const last = days[days.length - 1];
-    if (last !== undefined && last.label === label) last.items.push(row);
-    else days.push({ label, items: [row] });
+    const who = whoIs(row.actor);
+    let day = days[days.length - 1];
+    if (day === undefined || day.label !== label) {
+      day = { label, items: [] };
+      days.push(day);
+    }
+    const last = day.items[day.items.length - 1];
+    if (last !== undefined && last.first.kind === row.kind && last.first.project === row.project && last.who.name === who.name) last.rows.push(row);
+    else day.items.push({ first: row, rows: [row], who });
   }
+  const phraseOf = (entry: FeedEntry) => {
+    const kind = entry.first.kind;
+    if (kind === "edit") return t("aEdit", { count: String(entry.rows.reduce((sum, row) => sum + (row.count ?? 1), 0)) });
+    return entry.rows.length > 1 ? t(MANY_PHRASE[kind], { count: String(entry.rows.length) }) : t(ACTIVITY_PHRASE[kind], { count: String(entry.first.count ?? 1) });
+  };
+  // Who has worked on each project lately, newest first, for the faces on its card.
+  const editorsOf = (project: string) => [...new Set((rows ?? []).filter((row) => row.project === project).map((row) => whoIs(row.actor).name))].slice(0, 4);
+  const allClear = unread === 0 && askedOfMe.length === 0 && myTodos.length === 0;
 
   // People in Studio, not this console's own windows; one each, however many windows.
   const studio = clients.filter((client) => client.agent !== "nlteam-console");
@@ -214,6 +357,8 @@ export function TeamHome(props: {
           </div>
         ) : null}
       </header>
+
+      <BetaNotice />
 
       {placeProject !== undefined ? (
         <button className="continue-card" onClick={() => openProject(placeProject.project, placeProject.tab)}>
@@ -253,36 +398,60 @@ export function TeamHome(props: {
               <div key={day.label} className="feed-day">
                 <h3 className="feed-day-label">{day.label}</h3>
                 <ol className="feed-list">
-                  {day.items.map((row) => (
-                    <li
-                      key={row.id}
-                      className={row.project !== undefined ? "feed-row clickable" : "feed-row"}
-                      onClick={() => row.project !== undefined && openProject(row.project, FEED_TAB[row.kind])}
-                    >
-                      <Face name={row.actor} user={row.actor} size={28} />
-                      <div className="feed-main">
-                        <span>
-                          <strong>{row.actor}</strong> <span className="muted">{t(ACTIVITY_PHRASE[row.kind], { count: String(row.count ?? 1) })}</span>
-                        </span>
-                        <span className="feed-meta">
-                          {row.project !== undefined ? (
+                  {day.items.map((entry) => {
+                    const row = entry.first;
+                    const notes = entry.rows.filter((one) => worthShowing(one.summary));
+                    const expanded = unfolded.has(row.id);
+                    const visible = expanded ? notes : notes.slice(0, 1);
+                    return (
+                      <li
+                        key={row.id}
+                        className={row.project !== undefined ? "feed-row clickable" : "feed-row"}
+                        onClick={() => row.project !== undefined && openProject(row.project, FEED_TAB[row.kind])}
+                      >
+                        <Face name={entry.who.name} user={entry.who.user} size={28} />
+                        <div className="feed-main">
+                          <span>
+                            <strong title={entry.who.title}>{entry.who.name}</strong> <span className="muted">{phraseOf(entry)}</span>
+                            {row.project !== undefined ? (
+                              <button
+                                className="project-tag"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openProject(row.project ?? "");
+                                }}
+                              >
+                                <span className="project-dot" style={{ background: projectHue(row.project) }} />
+                                {names.get(row.project) ?? row.project}
+                              </button>
+                            ) : null}
+                          </span>
+                          {visible.map((one) => (
+                            <FeedNote key={one.id} summary={one.summary ?? ""} />
+                          ))}
+                          {notes.length > 1 ? (
                             <button
-                              className="project-tag"
+                              className="feed-fold"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                openProject(row.project ?? "");
+                                setUnfolded((current) => {
+                                  const next = new Set(current);
+                                  if (expanded) next.delete(row.id);
+                                  else next.add(row.id);
+                                  return next;
+                                });
                               }}
                             >
-                              <span className="project-dot" style={{ background: projectHue(row.project) }} />
-                              {names.get(row.project) ?? row.project}
+                              {expanded ? t("hideFolded") : t("showFolded", { count: String(notes.length - 1) })}
                             </button>
                           ) : null}
+                        </div>
+                        <span className="muted small nowrap" title={new Date(row.at).toLocaleString()}>
+                          {ago(row.at)}
                         </span>
-                        {row.summary ? <span className="feed-quote">{row.summary}</span> : null}
-                      </div>
-                      <span className="muted small nowrap">{ago(row.at)}</span>
-                    </li>
-                  ))}
+                      </li>
+                    );
+                  })}
                 </ol>
               </div>
             ))
@@ -297,20 +466,32 @@ export function TeamHome(props: {
         <aside className="home-side">
           <section aria-label={t("waitingOnYou")}>
             <h2>{t("waitingOnYou")}</h2>
-            <div className="waiting">
-              <button className="waiting-row" onClick={openNotifications}>
-                <span className="waiting-count tone-warning">{unread}</span>
-                <span className="waiting-text">{t("waitingNotifications")}</span>
-              </button>
-              <button className="waiting-row" onClick={() => askedOfMe[0] !== undefined && openProject(askedOfMe[0].project, "reviews")} disabled={askedOfMe.length === 0}>
-                <span className="waiting-count tone-binding">{askedOfMe.length}</span>
-                <span className="waiting-text">{t("waitingReviews")}</span>
-              </button>
-              <button className="waiting-row" onClick={openProfile}>
-                <span className="waiting-count tone-primary">{myTodos.length}</span>
-                <span className="waiting-text">{t("waitingTodos")}</span>
-              </button>
-            </div>
+            {allClear ? (
+              <p className="all-clear">
+                <span className="all-clear-icon">
+                  <Icon name="tick" size={14} />
+                </span>
+                <span>
+                  <strong>{t("allClear")}</strong>
+                  <span className="muted small">{t("allClearHint")}</span>
+                </span>
+              </p>
+            ) : (
+              <div className="waiting">
+                <button className="waiting-row" onClick={openNotifications} disabled={unread === 0}>
+                  <span className="waiting-count tone-warning">{unread}</span>
+                  <span className="waiting-text">{t("waitingNotifications")}</span>
+                </button>
+                <button className="waiting-row" onClick={() => askedOfMe[0] !== undefined && openProject(askedOfMe[0].project, "reviews")} disabled={askedOfMe.length === 0}>
+                  <span className="waiting-count tone-binding">{askedOfMe.length}</span>
+                  <span className="waiting-text">{t("waitingReviews")}</span>
+                </button>
+                <button className="waiting-row" onClick={openProfile} disabled={myTodos.length === 0}>
+                  <span className="waiting-count tone-primary">{myTodos.length}</span>
+                  <span className="waiting-text">{t("waitingTodos")}</span>
+                </button>
+              </div>
+            )}
           </section>
 
           <section aria-label={t("projects")}>
@@ -325,11 +506,20 @@ export function TeamHome(props: {
                   <button key={row.id} className="project-card" onClick={() => openProject(row.id)}>
                     <span className="project-card-head">
                       <span className="project-dot big" style={{ background: projectHue(row.id) }} />
-                      <span className="project-card-name">{row.name}</span>
+                      <span className="project-card-name">{row.title ?? row.name}</span>
                       {onlineIn(row.id) > 0 ? <span className="online-count">● {t("onlineCount", { count: String(onlineIn(row.id)) })}</span> : null}
                     </span>
-                    <span className="muted small">
-                      {row.history?.lastAt === undefined ? row.description || t("noChangesYet") : t("lastChangeShort", { when: ago(row.history.lastAt) })}
+                    <span className="project-card-foot">
+                      {editorsOf(row.id).length > 0 ? (
+                        <span className="face-stack" title={t("recentEditors", { names: editorsOf(row.id).join("、") })}>
+                          {editorsOf(row.id).map((person) => (
+                            <Face key={person} name={person} user={person} size={20} />
+                          ))}
+                        </span>
+                      ) : null}
+                      <span className="muted small">
+                        {row.history?.lastAt === undefined ? row.description || t("noChangesYet") : t("lastChangeShort", { when: ago(row.history.lastAt) })}
+                      </span>
                     </span>
                   </button>
                 ))}

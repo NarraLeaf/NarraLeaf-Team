@@ -39,6 +39,10 @@ import { storedProjectDeleters } from "../identity/settings.js";
 export interface ProjectBody {
   readonly id: string;
   readonly name: string;
+  /** What it is called on screen, when it was renamed. */
+  readonly title?: string;
+  /** When it was archived, absent while it is active. */
+  readonly archivedAt?: number;
   readonly description: string;
   /** Who made it, by username; absent for an account that has been deleted. */
   readonly createdBy?: string;
@@ -134,6 +138,8 @@ export function projectBody(
   return {
     id: project.id,
     name: project.name,
+    ...(project.title === undefined ? {} : { title: project.title }),
+    ...(project.archivedAt === undefined ? {} : { archivedAt: project.archivedAt }),
     description: project.description,
     ...(maker === undefined ? {} : { createdBy: maker.username }),
     createdAt: project.createdAt,
@@ -227,12 +233,13 @@ export function avatarUrl(user: UserRecord): string | undefined {
 }
 
 /** An account's profile: a name, a face and a line. */
-export function profileBody(user: UserRecord): { username: string; displayName: string; bio?: string; avatarUrl?: string } {
+export function profileBody(user: UserRecord): { username: string; displayName: string; bio?: string; avatarUrl?: string; timezone?: string } {
   const avatar = avatarUrl(user);
   return {
     username: user.username,
     displayName: user.displayName,
     ...(user.bio === undefined ? {} : { bio: user.bio }),
+    ...(user.timezone === undefined ? {} : { timezone: user.timezone }),
     ...(avatar === undefined ? {} : { avatarUrl: avatar }),
   };
 }

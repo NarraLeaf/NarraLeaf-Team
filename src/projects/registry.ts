@@ -43,6 +43,10 @@ export interface ProjectRecord {
   readonly createdBy: string;
   /** Milliseconds since the epoch. */
   readonly createdAt: number;
+  /** What it is called on screen, when somebody renamed it; the name stays its repository's address. */
+  readonly title?: string;
+  /** When it was archived: read-only, and left out of lists unless asked for. */
+  readonly archivedAt?: number;
 }
 
 /** What a resource id has in front of the repository id. */
@@ -157,10 +161,12 @@ function toProject(row: Row): ProjectRecord {
     description: textColumn(row, "description"),
     createdBy: textColumn(row, "created_by"),
     createdAt: integerColumn(row, "created_at"),
+    ...(row["title"] === null || row["title"] === undefined ? {} : { title: String(row["title"]) }),
+    ...(row["archived_at"] === null || row["archived_at"] === undefined ? {} : { archivedAt: Number(row["archived_at"]) }),
   };
 }
 
-const SELECT_PROJECT = "SELECT id, name, description, created_by, created_at FROM projects";
+const SELECT_PROJECT = "SELECT id, name, description, created_by, created_at, title, archived_at FROM projects";
 
 /** What a new project is made from. */
 export interface NewProject {

@@ -5,17 +5,20 @@
  * Everything is a call on the socket; what each viewer may see is decided by
  * the server (src/collab/), so nothing here hides anything.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { ApiTokens, TwoFactorPanel } from "./Security";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import {
   accountNotificationsTopic,
   accountTodosTopic,
   projectTodosTopic,
   type TeamAccountDevice,
+  type TeamAccountPolicy,
   type TeamActivity,
   type TeamActivityDay,
   type TeamNotification,
   type TeamProfile,
+  type TeamSavedFilter,
   type TeamTodo,
   type TeamTodoKind,
   type TeamTodoStatus,
@@ -23,25 +26,24 @@ import {
 
 import type { ConsoleAccount } from "./api";
 import { AvatarCropper } from "./Cropper";
-import { Icon } from "./Icon";
+import { localTimeIn, NotificationSettings, timeZones } from "./Notify";
+import { LockedNote } from "./Locked";
+import { StudioConfigCard, useAccountPolicy } from "./Policy";
+import { Icon, type IconName } from "./Icon";
+import { useMilestoneList } from "./Progress";
+import { byPriorityThenDue, DuePicker, dueLabel, dueTone, KIND_PHRASE, KINDS, labelHue, PRIORITIES, PRIORITY_PHRASE, PriorityFlag, TodoComposer } from "./TodoComposer";
 import { studioConnectLink } from "./studioLink";
 import { chooseLanguage, chosenLanguage, t, type Language, type Phrase } from "./i18n";
 import { chooseTheme, chosenTheme, type ThemeChoice } from "./theme";
+import { ago } from "./ui/time";
+import { Blankslate, confirmAction, Flash, SelectPanel, SettingsLayout, Skeleton, Subhead, toast, toastError, UnderlineNav } from "./ui";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 function errorText(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
 }
 
-export function ago(at: number): string {
-  const seconds = Math.round((Date.now() - at) / 1000);
-  const format = new Intl.RelativeTimeFormat(navigator.language, { numeric: "auto" });
-  if (seconds < 60) return format.format(-seconds, "second");
-  if (seconds < 3600) return format.format(-Math.round(seconds / 60), "minute");
-  if (seconds < 86400) return format.format(-Math.round(seconds / 3600), "hour");
-  if (seconds < 86400 * 30) return format.format(-Math.round(seconds / 86400), "day");
-  return new Date(at).toLocaleDateString();
-}
+export { ago };
 
 /*
  * Faces by username. Most places only know who did something, not where their
@@ -99,8 +101,10 @@ function useAvatarOf(username: string | undefined): string | undefined {
 export function Face({ name, url, user, size = 26 }: { name: string; url?: string | undefined; user?: string | undefined; size?: number }) {
   const looked = useAvatarOf(url === undefined ? user : undefined);
   const picture = url ?? looked;
-  if (picture !== undefined) {
-    return <img className="avatar" src={picture} alt="" width={size} height={size} style={{ width: size, height: size }} />;
+  // A picture that will not load shows the initial instead of a broken image.
+  const [broken, setBroken] = useState<string | undefined>(undefined);
+  if (picture !== undefined && picture !== broken) {
+    return <img className="avatar" src={picture} alt="" width={size} height={size} style={{ width: size, height: size }} onError={() => setBroken(picture)} />;
   }
   let hash = 0;
   for (const char of name) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) % 360;
@@ -129,10 +133,15 @@ function Heatmap({ days }: { days: readonly TeamActivityDay[] }) {
     cells.push({ key, count, title: `${key}: ${count}` });
   }
   const level = (count: number) => (count === 0 ? 0 : Math.min(4, Math.ceil((count / max) * 4)));
+  // Where the year does not fit, the weeks scroll and open on the latest ones.
+  const grid = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (grid.current !== null) grid.current.scrollLeft = grid.current.scrollWidth;
+  }, [days]);
   return (
     <div className="heatmap-card card">
       <div className="muted small">{t("contributions", { count: String(total) })}</div>
-      <div className="heatmap" role="img" aria-label={t("contributions", { count: String(total) })}>
+      <div className="heatmap" ref={grid} role="img" aria-label={t("contributions", { count: String(total) })}>
         {cells.map((cell) => (
           <span key={cell.key} className={`cell level-${level(cell.count)}`} title={cell.title} />
         ))}
@@ -161,6 +170,9 @@ export const ACTIVITY_PHRASE: Record<TeamActivity["kind"], Phrase> = {
   milestone: "aMilestone",
   edit: "aEdit",
   version: "aVersion",
+  approved: "aApproved",
+  "sent-back": "aSentBack",
+  build: "aBuild",
 };
 
 export function Timeline({
@@ -243,20 +255,34 @@ export function Todos({
   account,
   project,
   members,
+  assetPreview,
 }: {
   connection: TeamConnection;
   open: boolean;
   account: ConsoleAccount & { readonly id?: string };
   project?: string;
   members?: readonly { username: string; displayName: string }[];
+  /** Draws the asset that answered an asset request, where the project's files are at hand. */
+  assetPreview?: (asset: string) => ReactNode;
 }) {
   const [todos, setTodos] = useState<readonly TeamTodo[] | undefined>(undefined);
-  const [title, setTitle] = useState("");
-  const [shared, setShared] = useState(project !== undefined);
-  const [kind, setKind] = useState<TeamTodoKind>("task");
-  const [locale, setLocale] = useState("");
   const [only, setOnly] = useState<TeamTodoKind | "all">("all");
+  const [label, setLabel] = useState<string | undefined>(undefined);
+  const [mine, setMine] = useState(false);
+  const milestones = useMilestoneList(connection, open && project !== undefined, project ?? "");
+  const [labelling, setLabelling] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const labelsInUse = useMemo(() => [...new Set((todos ?? []).flatMap((todo) => todo.labels ?? []))].sort((a, b) => a.localeCompare(b)), [todos]);
+  const filter: TodoFilter = { kind: only, ...(label === undefined ? {} : { label }), ...(mine ? { mine } : {}) };
+  const applyFilter = (next: TodoFilter) => {
+    setOnly(next.kind);
+    setLabel(next.label);
+    setMine(next.mine === true);
+  };
+  const passes = (todo: TeamTodo) =>
+    (only === "all" || (todo.kind ?? "task") === only) &&
+    (label === undefined || (todo.labels ?? []).includes(label)) &&
+    (!mine || todo.assignee === account.username || (todo.assignee === undefined && todo.owner === account.username));
 
   const load = useCallback(() => {
     connection
@@ -272,28 +298,10 @@ export function Todos({
     return connection.subscribe(topic, () => load());
   }, [open, load, connection, project, account.id]);
 
-  const add = async (event: FormEvent) => {
-    event.preventDefault();
-    const text = title.trim();
-    if (text === "") return;
-    setTitle("");
-    try {
-      await connection.call("todos.create", {
-        title: text,
-        ...(project === undefined
-          ? {}
-          : {
-              project,
-              // Asset, translation and voice to-dos are for somebody else to pick up: always shown.
-              visibility: shared || kind !== "task" ? "project" : "private",
-              kind,
-              ...(kind === "translation" || kind === "voice" ? { locale: locale.trim() } : {}),
-            }),
-      });
-    } catch (caught) {
-      setError(errorText(caught));
-    }
-  };
+  const create = (fields: Record<string, unknown>) => connection.call("todos.create", fields);
+  /** Open work in the order a to-do app keeps it: what matters most, then what is due soonest. */
+  const ordered = useMemo(() => byPriorityThenDue(todos ?? []), [todos]);
+  const own = (todo: TeamTodo) => todo.owner === account.username;
   const update = (todo: TeamTodo, fields: Record<string, unknown>) =>
     connection.call("todos.update", { todo: todo.id, ...fields }).catch((caught: unknown) => setError(errorText(caught)));
   const remove = (todo: TeamTodo) => connection.call("todos.delete", { todo: todo.id }).catch((caught: unknown) => setError(errorText(caught)));
@@ -309,7 +317,7 @@ export function Todos({
   const card = (todo: TeamTodo) => (
     <li
       key={todo.id}
-      className={`todo status-${todo.status}${dragging === todo.id ? " dragging" : ""}`}
+      className={`todo status-${todo.status} prio-${todo.priority ?? 0}${dragging === todo.id ? " dragging" : ""}`}
       draggable
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
@@ -324,7 +332,7 @@ export function Todos({
       <button
         className="todo-check"
         title={t(STATUS_PHRASE[NEXT_STATUS[todo.status]])}
-        aria-label={t(STATUS_PHRASE[todo.status])}
+        aria-label={todo.priority === undefined ? t(STATUS_PHRASE[todo.status]) : `${t(STATUS_PHRASE[todo.status])} · ${t(PRIORITY_PHRASE[todo.priority])}`}
         onClick={() => void update(todo, { status: NEXT_STATUS[todo.status] })}
       >
         {todo.status === "done" ? "✓" : todo.status === "doing" ? "◐" : ""}
@@ -339,94 +347,331 @@ export function Todos({
           ) : null}{" "}
           {todo.title}
         </div>
-        <div className="muted small">
-          {todo.visibility === "private" ? t("visibilityPrivate") : t("visibilityProject")}
-          {todo.assignee !== undefined ? ` · → ${todo.assignee}` : ""}
+        {(todo.labels ?? []).length > 0 || labelling === todo.id ? (
+          <div className="todo-labels">
+            {(todo.labels ?? []).map((name) => (
+              <button key={name} className={label === name ? "todo-label active" : "todo-label"} style={{ ["--label-hue" as string]: String(labelHue(name)) }} onClick={() => setLabel(label === name ? undefined : name)}>
+                {name}
+              </button>
+            ))}
+            {labelling === todo.id ? (
+              <LabelEditor
+                labels={todo.labels ?? []}
+                known={labelsInUse}
+                done={(labels) => {
+                  setLabelling(undefined);
+                  if (labels !== undefined) void update(todo, { labels });
+                }}
+              />
+            ) : null}
+          </div>
+        ) : null}
+        {todo.kind === "asset" && todo.asset !== undefined ? (
+          <div className="todo-answer">{assetPreview === undefined ? <span className="muted small">{t("todoAssetLinked")}</span> : assetPreview(todo.asset)}</div>
+        ) : null}
+        <div className="todo-meta muted small">
+          {todo.dueAt === undefined ? null : own(todo) ? (
+            <DuePicker
+              value={todo.dueAt}
+              onChange={(at) => void update(todo, { dueAt: at ?? null })}
+              align="start"
+              className={`todo-due due-${todo.status === "done" ? "later" : dueTone(todo.dueAt)}`}
+              title={`${t("todoDue")}: ${new Date(todo.dueAt).toLocaleDateString()}`}
+            >
+              <Icon name="calendar" size={12} /> {dueLabel(todo.dueAt)}
+            </DuePicker>
+          ) : (
+            <span className={`todo-due due-${todo.status === "done" ? "later" : dueTone(todo.dueAt)}`} title={`${t("todoDue")}: ${new Date(todo.dueAt).toLocaleDateString()}`}>
+              <Icon name="calendar" size={12} /> {dueLabel(todo.dueAt)}
+            </span>
+          )}
+          {todo.priority === undefined || own(todo) ? null : (
+            <span className="todo-prio" title={t(PRIORITY_PHRASE[todo.priority])}>
+              <PriorityFlag priority={todo.priority} size={12} /> {t(PRIORITY_PHRASE[todo.priority])}
+            </span>
+          )}
+          <span>{todo.visibility === "private" ? t("visibilityPrivate") : t("visibilityProject")}</span>
+          {todo.assignee !== undefined ? <span>→ {todo.assignee}</span> : null}
+          {todo.milestone === undefined ? null : (
+            <span>
+              <Icon name="diamond" size={12} /> {milestones?.find((milestone) => milestone.id === todo.milestone)?.name ?? "…"}
+            </span>
+          )}
           {todo.doneRevision !== undefined && todo.project !== undefined ? (
-            <>
-              {" · "}
-              <a href={`/console/p/${encodeURIComponent(todo.project)}/history?rev=${encodeURIComponent(todo.doneRevision)}`}>
-                {t("doneIn", { rev: todo.doneRevision.slice(0, 8) })}
-              </a>
-            </>
+            <a href={`/console/p/${encodeURIComponent(todo.project)}/history?rev=${encodeURIComponent(todo.doneRevision)}`}>
+              {t("doneIn", { rev: todo.doneRevision.slice(0, 8) })}
+            </a>
           ) : null}
         </div>
       </div>
-      {project !== undefined && todo.owner === account.username && members !== undefined && todo.visibility === "project" ? (
-        <select
-          className="todo-assign"
-          aria-label={t("assignTo")}
-          value={todo.assignee ?? ""}
-          onChange={(event) => void update(todo, { assignee: event.target.value === "" ? null : event.target.value })}
-        >
-          <option value="">{t("nobody")}</option>
-          {members.map((member) => (
-            <option key={member.username} value={member.username}>
-              {member.displayName || member.username}
-            </option>
-          ))}
-        </select>
-      ) : null}
-      {todo.owner === account.username ? (
-        <button className="ghost small" onClick={() => void remove(todo)}>
-          {t("remove")}
-        </button>
-      ) : null}
+      <div className="todo-tools">
+        {own(todo) ? (
+          <SelectPanel
+            className={todo.priority === undefined ? "todo-prio-pick todo-tool-quiet" : "todo-prio-pick"}
+            size="small"
+            align="end"
+            label={t("todoPriority")}
+            value={String(todo.priority ?? 0)}
+            onChange={(value) => void update(todo, { priority: Number(value) })}
+            renderButton={() => (
+              <span className="btn btn-invisible btn-icon btn-sm" title={`${t("todoPriority")}: ${t(PRIORITY_PHRASE[todo.priority ?? 0])}`}>
+                <PriorityFlag priority={todo.priority ?? 0} size={14} />
+              </span>
+            )}
+            options={PRIORITIES.map((priority) => ({ value: String(priority), label: t(PRIORITY_PHRASE[priority]), leading: <PriorityFlag priority={priority} size={14} /> }))}
+          />
+        ) : null}
+        {own(todo) && todo.dueAt === undefined ? (
+          <DuePicker value={undefined} onChange={(at) => void update(todo, { dueAt: at ?? null })} className="btn btn-invisible btn-icon btn-sm todo-tool-quiet">
+            <Icon name="calendar" size={14} />
+          </DuePicker>
+        ) : null}
+        {project !== undefined && todo.owner === account.username && members !== undefined && todo.visibility === "project" ? (
+          <SelectPanel
+            className="todo-assign"
+            size="small"
+            align="end"
+            label={t("assignTo")}
+            value={todo.assignee ?? ""}
+            onChange={(username) => void update(todo, { assignee: username === "" ? null : username })}
+            options={[
+              { value: "", label: t("nobody") },
+              ...members.map((member) => ({
+                value: member.username,
+                label: member.displayName || member.username,
+                description: member.displayName ? `@${member.username}` : undefined,
+                leading: <Face name={member.displayName || member.username} user={member.username} size={18} />,
+              })),
+            ]}
+          />
+        ) : null}
+        {project !== undefined && todo.visibility === "project" && todo.owner === account.username && (milestones ?? []).length > 0 ? (
+          <SelectPanel
+            className="todo-milestone"
+            size="small"
+            align="end"
+            label={t("todoMilestone")}
+            value={todo.milestone ?? ""}
+            onChange={(id) => void update(todo, { milestone: id === "" ? null : id })}
+            options={[
+              { value: "", label: t("todoNoMilestone") },
+              ...(milestones ?? []).map((milestone) => ({
+                value: milestone.id,
+                label: milestone.name,
+                icon: "diamond" as const,
+                description: milestone.dueAt === undefined ? undefined : new Date(milestone.dueAt).toLocaleDateString(),
+              })),
+            ]}
+          />
+        ) : null}
+        {own(todo) && labelling !== todo.id ? (
+          <button className={(todo.labels ?? []).length === 0 ? "btn btn-invisible btn-icon btn-sm todo-tool-quiet" : "btn btn-invisible btn-icon btn-sm"} aria-label={t("todoLabelsEdit")} title={t("todoLabelsEdit")} onClick={() => setLabelling(todo.id)}>
+            <Icon name="tag" size={14} />
+          </button>
+        ) : null}
+        {todo.owner === account.username ? (
+          <button className="btn btn-invisible btn-icon btn-sm todo-remove" aria-label={t("remove")} title={t("remove")} onClick={() => void remove(todo)}>
+            <Icon name="trash" size={14} />
+          </button>
+        ) : null}
+      </div>
     </li>
   );
 
   return (
     <div className="todos">
-      {error !== undefined ? <p className="error">{error}</p> : null}
-      <form className="todo-new" onSubmit={(event) => void add(event)}>
-        <input value={title} placeholder={t("newTodo")} onChange={(event) => setTitle(event.target.value)} maxLength={300} />
-        {project !== undefined ? (
-          <select className="todo-kind" aria-label={t("todoKind")} value={kind} onChange={(event) => setKind(event.target.value as TeamTodoKind)}>
-            {KINDS.map((name) => (
-              <option key={name} value={name}>
-                {t(KIND_PHRASE[name])}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        {project !== undefined && (kind === "translation" || kind === "voice") ? (
-          <input className="todo-locale" value={locale} placeholder={t("todoLocale")} maxLength={35} onChange={(event) => setLocale(event.target.value)} />
-        ) : null}
-        {project !== undefined ? (
-          <label className="muted small todo-share">
-            <input type="checkbox" checked={shared} onChange={(event) => setShared(event.target.checked)} />
-            {t("visibilityProject")}
-          </label>
-        ) : null}
-        <button className="primary" type="submit">
-          {t("add")}
-        </button>
-      </form>
+      {error !== undefined ? <Flash error={error} /> : null}
+      <TodoComposer
+        project={project}
+        members={members}
+        milestones={milestones}
+        knownLabels={labelsInUse}
+        defaultKind={only === "all" ? "task" : only}
+        face={(member, size) => <Face name={member.displayName || member.username} user={member.username} size={size} />}
+        create={create}
+      />
       {todos === undefined ? (
         <p className="muted">{t("loading")}</p>
       ) : todos.length === 0 ? (
-        <p className="placeholder-card">{t("noTodos")}</p>
+        <Blankslate icon="todo" title={t("noTodos")} compact>
+          {t("noTodosHint")}
+        </Blankslate>
       ) : project === undefined ? (
-        <Board todos={todos} card={card} over={over} setOver={setOver} dropOn={dropOn} />
+        <Board todos={ordered} card={card} over={over} setOver={setOver} dropOn={dropOn} />
       ) : (
         <>
-        <nav className="kind-filter">
-          {(["all", ...KINDS] as const).map((name) => (
-            <button key={name} className={only === name ? "tab active" : "tab"} onClick={() => setOnly(name)}>
-              {name === "all" ? t("kindAll") : t(KIND_PHRASE[name])} {name === "all" ? todos.length : todos.filter((todo) => (todo.kind ?? "task") === name).length}
+        <div className="kind-filter-row">
+          <nav className="kind-filter">
+            {(["all", ...KINDS] as const).map((name) => (
+              <button key={name} className={only === name ? "tab active" : "tab"} onClick={() => setOnly(name)}>
+                {name === "all" ? t("kindAll") : t(KIND_PHRASE[name])} {name === "all" ? todos.length : todos.filter((todo) => (todo.kind ?? "task") === name).length}
+              </button>
+            ))}
+          </nav>
+        </div>
+        <div className="todo-filters">
+          <button className={mine ? "chip active" : "chip"} aria-pressed={mine} onClick={() => setMine(!mine)}>
+            {t("todoMine")}
+          </button>
+          {labelsInUse.map((name) => (
+            <button
+              key={name}
+              className={label === name ? "chip todo-label-chip active" : "chip todo-label-chip"}
+              style={{ ["--label-hue" as string]: String(labelHue(name)) }}
+              aria-pressed={label === name}
+              onClick={() => setLabel(label === name ? undefined : name)}
+            >
+              {name}
             </button>
           ))}
-        </nav>
+          <SavedFilters connection={connection} open={open} scope={`todos:${project}`} current={filter} apply={applyFilter} />
+        </div>
         {only === "translation" || only === "voice" ? <LocaleProgress todos={todos.filter((todo) => todo.kind === only)} /> : null}
-        {(() => {
-          const shown = only === "all" ? todos : todos.filter((todo) => (todo.kind ?? "task") === only);
-          return (
-        <Board todos={shown} card={card} over={over} setOver={setOver} dropOn={dropOn} />
-          );
-        })()}
+        <Board todos={ordered.filter(passes)} card={card} over={over} setOver={setOver} dropOn={dropOn} />
         </>
       )}
     </div>
+  );
+}
+
+interface TodoFilter {
+  readonly kind: TeamTodoKind | "all";
+  readonly label?: string;
+  readonly mine?: boolean;
+}
+
+function readFilter(query: string): TodoFilter | undefined {
+  try {
+    const value = JSON.parse(query) as Partial<TodoFilter>;
+    return {
+      kind: typeof value.kind === "string" ? (value.kind as TodoFilter["kind"]) : "all",
+      ...(typeof value.label === "string" ? { label: value.label } : {}),
+      ...(value.mine === true ? { mine: true } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Labels typed with commas between them; the ones already in use offered below. */
+function LabelEditor({ labels, known, done }: { labels: readonly string[]; known: readonly string[]; done: (labels: string[] | undefined) => void }) {
+  const [text, setText] = useState(labels.join(", "));
+  const typed = text
+    .split(/[,，]/)
+    .map((one) => one.trim())
+    .filter((one) => one !== "");
+  const offered = known.filter((one) => !typed.includes(one)).slice(0, 8);
+  return (
+    <form
+      className="label-editor"
+      onSubmit={(event) => {
+        event.preventDefault();
+        done([...new Set(typed)]);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") done(undefined);
+      }}
+    >
+      <input autoFocus value={text} placeholder={t("todoLabelsHint")} maxLength={300} onChange={(event) => setText(event.target.value)} />
+      {offered.length > 0 ? (
+        <span className="label-offers">
+          {offered.map((one) => (
+            <button key={one} type="button" className="todo-label" style={{ ["--label-hue" as string]: String(labelHue(one)) }} onClick={() => setText([...typed, one].join(", "))}>
+              + {one}
+            </button>
+          ))}
+        </span>
+      ) : null}
+      <button className="btn btn-primary btn-sm" type="submit">
+        {t("save")}
+      </button>
+      <button className="btn btn-sm" type="button" onClick={() => done(undefined)}>
+        {t("cancel")}
+      </button>
+    </form>
+  );
+}
+
+/** Filters kept by name, for this person, and a way to keep the one on screen. */
+function SavedFilters({
+  connection,
+  open,
+  scope,
+  current,
+  apply,
+}: {
+  connection: TeamConnection;
+  open: boolean;
+  scope: string;
+  current: TodoFilter;
+  apply: (filter: TodoFilter) => void;
+}) {
+  const [filters, setFilters] = useState<readonly TeamSavedFilter[]>([]);
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+  const load = useCallback(() => {
+    connection
+      .call<{ filters: TeamSavedFilter[] }>("filters.list", { scope })
+      .then((answer) => setFilters(answer.filters))
+      .catch(() => setFilters([]));
+  }, [connection, scope]);
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
+  const query = JSON.stringify(current);
+  const plain = current.kind === "all" && current.label === undefined && current.mine !== true;
+  const save = (event: FormEvent) => {
+    event.preventDefault();
+    void connection
+      .call("filters.save", { scope, name: name.trim(), query })
+      .then(() => {
+        setNaming(false);
+        setName("");
+        toast(t("filterSaved"));
+        load();
+      })
+      .catch(toastError);
+  };
+  return (
+    <span className="saved-filters">
+      {filters.map((filter) => {
+        const read = readFilter(filter.query);
+        return (
+          <span key={filter.id} className={filter.query === query ? "chip saved-filter active" : "chip saved-filter"}>
+            <button className="saved-filter-name" onClick={() => read !== undefined && apply(read)}>
+              <Icon name="search" size={12} /> {filter.name}
+            </button>
+            <button
+              className="saved-filter-remove"
+              aria-label={t("remove")}
+              onClick={() =>
+                void connection
+                  .call("filters.delete", { filter: filter.id })
+                  .then(load)
+                  .catch(toastError)
+              }
+            >
+              ×
+            </button>
+          </span>
+        );
+      })}
+      {naming ? (
+        <form className="saved-filter-new" onSubmit={save}>
+          <input autoFocus value={name} placeholder={t("filterName")} maxLength={60} onChange={(event) => setName(event.target.value)} />
+          <button className="btn btn-primary btn-sm" type="submit" disabled={name.trim() === ""}>
+            {t("save")}
+          </button>
+          <button className="btn btn-sm" type="button" onClick={() => setNaming(false)}>
+            {t("cancel")}
+          </button>
+        </form>
+      ) : plain || filters.some((filter) => filter.query === query) ? null : (
+        <button className="btn btn-invisible btn-sm" onClick={() => setNaming(true)}>
+          + {t("filterSave")}
+        </button>
+      )}
+    </span>
   );
 }
 
@@ -478,7 +723,6 @@ function Board({
 
 export function Profile({ connection, state, account }: { connection: TeamConnection; state: ConnectionState; account: ConsoleAccount }) {
   const open = state.kind === "open";
-  const accountId = state.kind === "open" ? state.hello.account.id : undefined;
   const [days, setDays] = useState<readonly TeamActivityDay[]>([]);
   const [profile, setProfile] = useState<TeamProfile | undefined>(undefined);
   const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
@@ -540,10 +784,6 @@ export function Profile({ connection, state, account }: { connection: TeamConnec
           <Heatmap days={days} />
         </section>
         <section>
-          <h2>{t("myTodos")}</h2>
-          <Todos connection={connection} open={open} account={{ ...account, ...(accountId === undefined ? {} : { id: accountId }) }} />
-        </section>
-        <section>
           <h2>{t("timeline")}</h2>
           <Timeline connection={connection} open={open} account={account.username} projectNames={names} />
         </section>
@@ -589,10 +829,9 @@ const NOTIFICATION_PHRASE: Record<TeamNotification["kind"], Phrase> = {
   "review-answered": "nReviewAnswered",
   "access-requested": "nAccessRequested",
   "access-decided": "nAccessDecided",
+  watch: "nWatch",
 };
 
-const KIND_PHRASE: Record<TeamTodoKind, Phrase> = { task: "kindTask", asset: "kindAsset", translation: "kindTranslation", voice: "kindVoice" };
-const KINDS: readonly TeamTodoKind[] = ["task", "asset", "translation", "voice"];
 
 /** The caller's notifications and how many are unread, kept current by their topic. */
 export function useNotifications(connection: TeamConnection, state: ConnectionState): {
@@ -667,149 +906,160 @@ export function NotificationList({
   );
 }
 
-/** The notifications as a page of their own, for a phone. */
+/** The notifications as a page of their own: an inbox, unread first, as GitHub keeps one. */
 export function Notifications({ connection, state, open }: { connection: TeamConnection; state: ConnectionState; open?: (target: NotificationTarget) => void }) {
   const { unread, list, readAll } = useNotifications(connection, state);
+  const [filter, setFilter] = useState<"unread" | "all">("unread");
+  const shown = list === undefined ? undefined : filter === "unread" ? list.filter((n) => n.readAt === undefined) : list;
   return (
-    <section className="page-narrow">
+    <section className="page-narrow inbox">
       <header className="page-head">
-        <h1>{t("notifications")}</h1>
-        {unread > 0 ? (
-          <button className="ghost small" onClick={readAll}>
-            {t("markAllRead")}
-          </button>
-        ) : null}
+        <h1 className="page-title">{t("notifications")}</h1>
+        <button className="btn btn-sm" disabled={unread === 0} onClick={readAll}>
+          <Icon name="tick" size={14} />
+          {t("markAllRead")}
+        </button>
       </header>
-      <NotificationList list={list} connection={connection} {...(open === undefined ? {} : { open })} />
+      <UnderlineNav
+        label={t("notifications")}
+        active={filter}
+        onSelect={setFilter}
+        tabs={[
+          { key: "unread", label: t("inboxUnread"), count: unread },
+          { key: "all", label: t("inboxAll") },
+        ]}
+      />
+      {shown === undefined ? (
+        <Skeleton rows={4} />
+      ) : shown.length === 0 ? (
+        <Blankslate icon="bell" title={filter === "unread" ? t("inboxZero") : t("noNotifications")}>
+          {filter === "unread" ? t("inboxZeroLead") : t("inboxEmptyLead")}
+        </Blankslate>
+      ) : (
+        <NotificationList list={shown} connection={connection} {...(open === undefined ? {} : { open })} />
+      )}
     </section>
   );
 }
 
-/** The bell: a count of unread notifications, and the list when opened. */
-export function Bell({
-  connection,
-  state,
-  label,
-  open,
-}: {
-  connection: TeamConnection;
-  state: ConnectionState;
-  label?: boolean;
-  open?: (target: NotificationTarget) => void;
-}) {
-  const { unread, list, readAll } = useNotifications(connection, state);
-  const [shown, setShown] = useState(false);
-  const [place, setPlace] = useState<{ left: number; top: number } | undefined>(undefined);
-  const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!shown) return undefined;
-    const away = (event: MouseEvent) => {
-      if (root.current !== null && !root.current.contains(event.target as Node)) setShown(false);
-    };
-    const key = (event: KeyboardEvent) => event.key === "Escape" && setShown(false);
-    document.addEventListener("mousedown", away);
-    document.addEventListener("keydown", key);
-    return () => {
-      document.removeEventListener("mousedown", away);
-      document.removeEventListener("keydown", key);
-    };
-  }, [shown]);
+/** The to-dos of whoever is looking, across every project, as a board. */
+export function MyTodos({ connection, state, account }: { connection: TeamConnection; state: ConnectionState; account: ConsoleAccount }) {
+  const accountId = state.kind === "open" ? state.hello.account.id : undefined;
   return (
-    <div className="bell" ref={root}>
-      <button
-        className={label === true ? "side-link bell-button" : "ghost bell-button"}
-        aria-label={t("notifications")}
-        aria-expanded={shown}
-        onClick={(event) => {
-          // In the side bar the panel sits beside it, fixed, so the bar's own scrolling cannot clip it.
-          const box = event.currentTarget.getBoundingClientRect();
-          setPlace(label === true ? { left: box.right + 12, top: Math.max(8, Math.min(box.top, window.innerHeight - 420)) } : undefined);
-          setShown((value) => !value);
-        }}
-      >
-        <Icon name="bell" />
-        {label === true ? <span className="side-link-text">{t("notifications")}</span> : null}
-        {unread > 0 ? <span className="badge">{unread > 99 ? "99+" : unread}</span> : null}
-      </button>
-      {shown ? (
-        <div className="bell-panel card" style={place === undefined ? undefined : { position: "fixed", left: place.left, top: place.top }}>
-          <div className="bell-head">
-            <strong>{t("notifications")}</strong>
-            {unread > 0 ? (
-              <button className="ghost small" onClick={readAll}>
-                {t("markAllRead")}
-              </button>
-            ) : null}
-          </div>
-          <NotificationList
-            list={list}
-            connection={connection}
-            open={(target) => {
-              setShown(false);
-              open?.(target);
-            }}
-          />
+    <section className="my-todos">
+      <header className="page-head">
+        <div>
+          <h1 className="page-title">{t("myTodos")}</h1>
+          <p className="muted">{t("myTodosLead")}</p>
         </div>
-      ) : null}
-    </div>
+      </header>
+      <Todos connection={connection} open={state.kind === "open"} account={{ ...account, ...(accountId === undefined ? {} : { id: accountId }) }} />
+    </section>
   );
 }
 
 /* --------------------------------------------------------------- settings */
 
+/** The parts of the personal settings, each on a page of its own, the way GitHub's are. */
+export const PERSONAL_SECTIONS = ["profile", "appearance", "notifications", "security", "tokens", "studio"] as const;
+export type PersonalSection = (typeof PERSONAL_SECTIONS)[number];
+const PERSONAL_PHRASE: Record<PersonalSection, Phrase> = {
+  profile: "profile",
+  appearance: "appearance",
+  notifications: "notifications",
+  security: "adminSecurity",
+  tokens: "tokensTitle",
+  studio: "settingsStudio",
+};
+const PERSONAL_ICON: Record<PersonalSection, IconName> = {
+  profile: "people",
+  appearance: "palette",
+  notifications: "bell",
+  security: "shield",
+  tokens: "key",
+  studio: "leaf",
+};
+
 /** This browser's look and language: kept here, not on the account. */
 function Appearance() {
   const [theme, setTheme] = useState<ThemeChoice>(() => chosenTheme());
   return (
-    <div className="card settings-block">
-      <h2>{t("appearance")}</h2>
-      <div className="setting-row">
-        <span>{t("theme")}</span>
-        <div className="segmented" role="group" aria-label={t("theme")}>
-          {(["system", "light", "dark"] as const).map((choice) => (
-            <button
-              key={choice}
-              aria-pressed={theme === choice}
-              className={theme === choice ? "active" : undefined}
-              onClick={() => {
-                chooseTheme(choice);
-                setTheme(choice);
-              }}
-            >
-              {t(choice === "system" ? "themeSystem" : choice === "light" ? "themeLight" : "themeDark")}
-            </button>
-          ))}
+    <div>
+      <Subhead title={t("appearance")}>{t("appearanceLead")}</Subhead>
+      <div className="box">
+        <div className="box-row">
+          <div className="box-row-text">
+            <strong>{t("theme")}</strong>
+            <span>{t("themeLead")}</span>
+          </div>
+          <div className="segmented" role="group" aria-label={t("theme")}>
+            {(["system", "light", "dark"] as const).map((choice) => (
+              <button
+                key={choice}
+                aria-pressed={theme === choice}
+                className={theme === choice ? "active" : undefined}
+                onClick={() => {
+                  chooseTheme(choice);
+                  setTheme(choice);
+                }}
+              >
+                {t(choice === "system" ? "themeSystem" : choice === "light" ? "themeLight" : "themeDark")}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="box-row">
+          <div className="box-row-text">
+            <strong>{t("languageLabel")}</strong>
+            <span>{t("languageHint")}</span>
+          </div>
+          <LanguageSelect />
         </div>
       </div>
-      <LanguagePicker />
-      <p className="muted small">{t("appearanceLead")}</p>
     </div>
   );
 }
 
-export function LanguagePicker() {
+function LanguageSelect() {
   const current = chosenLanguage();
   return (
-    <label className="setting-row">
-      <span>{t("languageLabel")}</span>
-      <select value={current ?? ""} onChange={(event) => chooseLanguage(event.target.value === "" ? undefined : (event.target.value as Language))}>
-        <option value="">{t("languageAuto")}</option>
-        <option value="zh">中文</option>
-        <option value="en">English</option>
-      </select>
-    </label>
+    <SelectPanel<"" | Language>
+      label={t("languageLabel")}
+      align="end"
+      value={current ?? ""}
+      onChange={(chosen) => chooseLanguage(chosen === "" ? undefined : chosen)}
+      options={[
+        { value: "", label: t("languageAuto") },
+        { value: "zh", label: "中文" },
+        { value: "en", label: "English" },
+        { value: "ja", label: "日本語" },
+      ]}
+    />
   );
 }
 
-export function Settings({ connection, state }: { connection: TeamConnection; state: ConnectionState }) {
-  const open = state.kind === "open";
+export function LanguagePicker() {
+  return (
+    <div className="setting-row">
+      <span>{t("languageLabel")}</span>
+      <LanguageSelect />
+    </div>
+  );
+}
+
+/** Name, words about oneself, time zone and picture: what the rest of the team sees. */
+function ProfileSettings({ connection, open, policy }: { connection: TeamConnection; open: boolean; policy?: TeamAccountPolicy | undefined }) {
   const [profile, setProfile] = useState<TeamProfile | undefined>(undefined);
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
-  const [note, setNote] = useState<string | undefined>(undefined);
-  const [devices, setDevices] = useState<readonly TeamAccountDevice[]>([]);
+  const [timezone, setTimezone] = useState("");
+  const [saving, setSaving] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const [cropping, setCropping] = useState<File | undefined>(undefined);
+  const nameLocked = policy?.displayName !== undefined;
+  const bioLocked = policy?.bio !== undefined;
+  const zoneLocked = policy?.timezone !== undefined;
+  const avatarLocked = policy?.lockAvatar === true;
 
   const load = useCallback(() => {
     connection
@@ -818,25 +1068,31 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
         setProfile(answer.profile);
         setDisplayName(answer.profile.displayName);
         setBio(answer.profile.bio ?? "");
+        setTimezone(answer.profile.timezone ?? "");
       })
-      .catch(() => undefined);
-    connection
-      .call<{ devices: TeamAccountDevice[] }>("account.devices.list")
-      .then((answer) => setDevices(answer.devices))
       .catch(() => undefined);
   }, [connection]);
   useEffect(() => {
     if (open) load();
   }, [open, load]);
 
+  const unchanged =
+    profile !== undefined && displayName === profile.displayName && bio === (profile.bio ?? "") && timezone === (profile.timezone ?? "");
   const save = async (event: FormEvent) => {
     event.preventDefault();
+    setSaving(true);
     try {
-      await connection.call("account.profile.update", { displayName, bio });
-      setNote(t("saved"));
+      await connection.call("account.profile.update", {
+        ...(nameLocked ? {} : { displayName }),
+        ...(bioLocked ? {} : { bio }),
+        ...(zoneLocked ? {} : { timezone }),
+      });
+      toast(t("saved"));
       load();
     } catch (caught) {
-      setNote(errorText(caught));
+      toastError(caught);
+    } finally {
+      setSaving(false);
     }
   };
   const upload = async (body: Blob | undefined) => {
@@ -847,7 +1103,7 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
       load();
       if (profile !== undefined) forgetFace(profile.username);
     } catch (caught) {
-      setNote(errorText(caught));
+      toastError(caught);
     }
   };
   const removeAvatar = async () => {
@@ -855,27 +1111,62 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
     load();
     if (profile !== undefined) forgetFace(profile.username);
   };
-  const [connectLink, setConnectLink] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    void studioConnectLink().then(setConnectLink);
-  }, []);
+  const localTime = timezone === "" ? undefined : localTimeIn(timezone);
 
   return (
-    <section className="settings">
-      <h1>{t("settings")}</h1>
-      <Appearance />
-      <div className="card settings-block">
-        <h2>{t("profile")}</h2>
-        <div className="avatar-row">
-          <Face name={profile?.displayName || profile?.username || "?"} url={profile?.avatarUrl} size={64} />
-          <button className="ghost" onClick={() => picker.current?.click()}>
-            {t("changeAvatar")}
-          </button>
-          {profile?.avatarUrl !== undefined ? (
-            <button className="ghost" onClick={() => void removeAvatar()}>
-              {t("removeAvatar")}
+    <div>
+      <Subhead title={t("profile")}>{t("profileLead")}</Subhead>
+      <div className="profile-grid">
+        <form className="profile-fields" onSubmit={(event) => void save(event)}>
+          <label className="form-field">
+            <span className="form-label">
+              {t("displayName")} {nameLocked ? <LockedNote /> : null}
+            </span>
+            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={128} required disabled={nameLocked} />
+          </label>
+          <label className="form-field">
+            <span className="form-label">
+              {t("bio")} {bioLocked ? <LockedNote /> : null}
+            </span>
+            <textarea value={bio} onChange={(event) => setBio(event.target.value)} maxLength={400} rows={3} disabled={bioLocked} />
+          </label>
+          <div className="form-field">
+            <span className="form-label">
+              {t("timezone")} {zoneLocked ? <LockedNote /> : null}
+            </span>
+            <SelectPanel<string>
+              label={t("timezone")}
+              value={timezone === "" ? "-" : timezone}
+              filterFrom={0}
+              options={[{ value: "-", label: t("timezoneUnset") }, ...timeZones().map((zone) => ({ value: zone, label: zone }))]}
+              onChange={(zone) => setTimezone(zone === "-" ? "" : zone)}
+              disabled={zoneLocked}
+            />
+            <span className="form-hint">{localTime === undefined ? t("timezoneHint") : t("timezoneNow", { time: localTime })}</span>
+          </div>
+          <div className="profile-save">
+            <button className="btn btn-primary" type="submit" disabled={saving || unchanged || (nameLocked && bioLocked && zoneLocked)}>
+              {saving ? t("sending") : t("saveProfile")}
             </button>
-          ) : null}
+          </div>
+        </form>
+        <div className="profile-picture">
+          <span className="form-label">
+            {t("avatar")} {avatarLocked ? <LockedNote /> : null}
+          </span>
+          <Face name={profile?.displayName || profile?.username || "?"} url={profile?.avatarUrl} size={160} />
+          {avatarLocked ? null : (
+            <div className="profile-picture-actions">
+              <button className="btn btn-sm" onClick={() => picker.current?.click()}>
+                <Icon name="upload" size={14} /> {t("changeAvatar")}
+              </button>
+              {profile?.avatarUrl === undefined ? null : (
+                <button className="btn btn-invisible btn-sm" onClick={() => void removeAvatar()}>
+                  {t("removeAvatar")}
+                </button>
+              )}
+            </div>
+          )}
           <input
             ref={picker}
             type="file"
@@ -887,62 +1178,139 @@ export function Settings({ connection, state }: { connection: TeamConnection; st
             }}
           />
         </div>
-        {cropping !== undefined ? (
-          <AvatarCropper
-            file={cropping}
-            cancel={() => setCropping(undefined)}
-            done={(blob) => {
-              setCropping(undefined);
-              void upload(blob);
-            }}
-          />
-        ) : null}
-        <form className="stack" onSubmit={(event) => void save(event)}>
-          <label>
-            <span className="muted small">{t("displayName")}</span>
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={128} required />
-          </label>
-          <label>
-            <span className="muted small">{t("bio")}</span>
-            <textarea value={bio} onChange={(event) => setBio(event.target.value)} maxLength={400} rows={3} />
-          </label>
-          <div className="actions">
-            {note !== undefined ? <span className="muted small">{note}</span> : null}
-            <button className="primary" type="submit">
-              {t("save")}
-            </button>
-          </div>
-        </form>
       </div>
-      <div className="card settings-block">
-        <h2>{t("devices")}</h2>
-        {devices.length === 0 ? (
-          <p className="muted">{t("noDevices")}</p>
+      {cropping !== undefined ? (
+        <AvatarCropper
+          file={cropping}
+          cancel={() => setCropping(undefined)}
+          done={(blob) => {
+            setCropping(undefined);
+            void upload(blob);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Two-step sign-in and the Studio apps signed in to this account. */
+function SecuritySettings({ connection, open }: { connection: TeamConnection; open: boolean }) {
+  const [devices, setDevices] = useState<readonly TeamAccountDevice[] | undefined>(undefined);
+  const load = useCallback(() => {
+    connection
+      .call<{ devices: TeamAccountDevice[] }>("account.devices.list")
+      .then((answer) => setDevices(answer.devices))
+      .catch(() => setDevices([]));
+  }, [connection]);
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
+  const signOut = (device: TeamAccountDevice) =>
+    void confirmAction({ title: t("signOutDeviceTitle", { name: device.name }), body: t("signOutDeviceBody"), confirmLabel: t("signOutDevice"), danger: true }).then(
+      (yes) =>
+        yes &&
+        void connection
+          .call("account.devices.revoke", { device: device.id })
+          .then(load)
+          .catch(toastError),
+    );
+  return (
+    <>
+      <div>
+        <Subhead title={t("adminSecurity")}>{t("securityLead")}</Subhead>
+        {open ? <TwoFactorPanel connection={connection} /> : <Skeleton />}
+      </div>
+      <div>
+        <Subhead title={t("devices")}>{t("devicesLead")}</Subhead>
+        {devices === undefined ? (
+          <Skeleton />
+        ) : devices.length === 0 ? (
+          <div className="box">
+            <Blankslate icon="workbench" title={t("noDevices")} compact />
+          </div>
         ) : (
-          <ul className="member-list">
+          <div className="box">
             {devices.map((device) => (
-              <li key={device.id}>
-                <span>
-                  {device.name} <span className="muted small">· {device.client} · {ago(device.lastUsedAt)}</span>
-                </span>
-                <button
-                  className="ghost small"
-                  onClick={() => void connection.call("account.devices.revoke", { device: device.id }).then(load)}
-                >
+              <div key={device.id} className="box-row">
+                <Icon name="workbench" size={18} />
+                <div className="box-row-text">
+                  <strong>{device.name}</strong>
+                  <span>
+                    {device.client} · {t("lastUsed", { when: ago(device.lastUsedAt) })}
+                  </span>
+                </div>
+                <button className="btn btn-sm btn-danger" onClick={() => signOut(device)}>
                   {t("signOutDevice")}
                 </button>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </div>
-      <div className="card settings-block">
-        <h2>{t("connectStudio")}</h2>
-        <p className="muted">{t("connectStudioLead")}</p>
-        <a className="primary link-button" href={connectLink}>
-          {t("connectStudio")}
-        </a>
+    </>
+  );
+}
+
+/** Opening Studio already pointed at this server, and the Studio settings kept here. */
+function StudioSettings({ connection, open }: { connection: TeamConnection; open: boolean }) {
+  const [connectLink, setConnectLink] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    void studioConnectLink().then(setConnectLink);
+  }, []);
+  return (
+    <>
+      <div>
+        <Subhead title={t("connectStudioTitle")}>{t("settingsStudioLead")}</Subhead>
+        <div className="box">
+          <div className="box-row">
+            <Icon name="leaf" size={18} />
+            <div className="box-row-text">
+              <strong>{t("connectStudio")}</strong>
+              <span>{t("connectStudioLead")}</span>
+            </div>
+            <a className="btn btn-primary btn-sm" href={connectLink}>
+              <Icon name="external" size={14} /> {t("connectStudioOpen")}
+            </a>
+          </div>
+        </div>
       </div>
+      <StudioConfigCard connection={connection} open={open} />
+    </>
+  );
+}
+
+export function Settings({
+  connection,
+  state,
+  section,
+  go,
+}: {
+  connection: TeamConnection;
+  state: ConnectionState;
+  section: PersonalSection;
+  go: (section: PersonalSection) => void;
+}) {
+  const open = state.kind === "open";
+  const policy = useAccountPolicy(connection, open)?.policy;
+  const item = (key: PersonalSection) => ({ key, label: t(PERSONAL_PHRASE[key]), icon: PERSONAL_ICON[key] });
+  return (
+    <section className="settings-page">
+      <header className="page-head">
+        <h1 className="page-title">{t("settings")}</h1>
+      </header>
+      <SettingsLayout
+        label={t("settings")}
+        active={section}
+        onSelect={go}
+        groups={[(["profile", "appearance", "notifications"] as const).map(item), (["security", "tokens"] as const).map(item), (["studio"] as const).map(item)]}
+      >
+        {section === "profile" ? <ProfileSettings connection={connection} open={open} policy={policy} /> : null}
+        {section === "appearance" ? <Appearance /> : null}
+        {section === "notifications" ? <NotificationSettings connection={connection} open={open} policy={policy} /> : null}
+        {section === "security" ? <SecuritySettings connection={connection} open={open} /> : null}
+        {section === "tokens" ? open ? <ApiTokens connection={connection} policy={policy} /> : <Skeleton /> : null}
+        {section === "studio" ? <StudioSettings connection={connection} open={open} /> : null}
+      </SettingsLayout>
     </section>
   );
 }

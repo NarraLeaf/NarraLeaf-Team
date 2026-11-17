@@ -53,11 +53,11 @@ describe("the story readers", () => {
     if (!view.supported) throw new Error("not supported");
     expect(view.order).toEqual(["sc1", "sc2", "sc3"]);
     expect(view.scenes["sc1"]?.rows).toEqual([
-      { id: "b1", depth: 0, disabled: false, kind: "narration", text: "海风很冷。" },
-      { id: "b2", depth: 0, disabled: false, kind: "dialogue", speaker: { characterId: "ch1" }, text: "你来了。" },
-      { id: "b3", depth: 0, disabled: false, kind: "choice", text: "怎么回答？" },
-      { id: "b4", depth: 1, disabled: false, kind: "option", text: "嗯。" },
-      { id: "b5", depth: 2, disabled: true, kind: "command", command: "setBackground" },
+      { id: "b1", depth: 0, disabled: false, kind: "narration", text: "海风很冷。", textId: "t1" },
+      { id: "b2", depth: 0, disabled: false, kind: "dialogue", speaker: { characterId: "ch1" }, text: "你来了。", textId: "t2" },
+      { id: "b3", depth: 0, disabled: false, kind: "choice", text: "怎么回答？", textId: "t3" },
+      { id: "b4", depth: 1, disabled: false, kind: "option", text: "嗯。", textId: "t4" },
+      { id: "b5", depth: 2, disabled: true, kind: "command", command: "setBackground", block: "action", payload: { action: "setBackground", assetId: "a" } },
     ]);
   });
 

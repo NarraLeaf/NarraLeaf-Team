@@ -94,6 +94,42 @@ describe("migrate", () => {
       // ⚠ These lines track whichever migration is last: a new one appended to
       // the list is a new thing to undo here, and the failure when it is
       // forgotten is this test rather than a server in the field.
+      database.exec("ALTER TABLE users DROP COLUMN deleted_at");
+      database.exec("ALTER TABLE users DROP COLUMN failed_signins");
+      database.exec("ALTER TABLE users DROP COLUMN locked_until");
+      database.exec("DROP TABLE studio_configs");
+      database.exec("DROP TABLE account_policies");
+      database.exec("DROP TABLE policy_templates");
+      database.exec("DROP TABLE sso_subjects");
+      database.exec("ALTER TABLE projects DROP COLUMN title");
+      database.exec("ALTER TABLE projects DROP COLUMN archived_at");
+      database.exec("DROP TABLE api_tokens");
+      database.exec("DROP TABLE password_resets");
+      database.exec("DROP TABLE recovery_codes");
+      database.exec("DROP TABLE user_totp");
+      database.exec("DROP TABLE glossary");
+      database.exec("DROP TABLE voice_lines");
+      database.exec("DROP TABLE project_templates");
+      database.exec("ALTER TABLE todos DROP COLUMN milestone_id");
+      database.exec("DROP TABLE push_subscriptions");
+      database.exec("DROP TABLE notification_prefs");
+      database.exec("DROP TABLE watches");
+      database.exec("DROP TABLE watch_touched");
+      database.exec("DROP TABLE reactions");
+      database.exec("ALTER TABLE users DROP COLUMN timezone");
+      database.exec("ALTER TABLE users DROP COLUMN digest");
+      database.exec("ALTER TABLE users DROP COLUMN last_digest_at");
+      database.exec("ALTER TABLE users DROP COLUMN notify_hook");
+      database.exec("DROP TABLE builds");
+      database.exec("DROP TABLE attachments");
+      database.exec("DROP TABLE share_links");
+      database.exec("DROP TABLE approval_history");
+      database.exec("DROP TABLE approvals");
+      database.exec("DROP TABLE asset_locks");
+      database.exec("DROP TABLE saved_filters");
+      database.exec("ALTER TABLE todos DROP COLUMN labels");
+      database.exec("ALTER TABLE milestones DROP COLUMN due_at");
+      database.exec("ALTER TABLE milestones DROP COLUMN gate");
       database.exec("DROP TABLE chat_messages");
       database.exec("DROP TABLE doc_versions");
       database.exec("ALTER TABLE activity DROP COLUMN count");
@@ -103,6 +139,7 @@ describe("migrate", () => {
       database.exec("DROP TABLE doc_snapshots");
       database.exec("DROP TABLE reviews");
       database.exec("DROP TABLE milestones");
+      database.exec("DROP TABLE webhook_deliveries");
       database.exec("DROP TABLE webhooks");
       database.exec("ALTER TABLE todos DROP COLUMN done_revision");
       database.exec("DROP TABLE activity");

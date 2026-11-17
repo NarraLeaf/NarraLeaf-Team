@@ -60,7 +60,19 @@ import { SIGN_IN_REFUSED_MESSAGE } from "../identity/users.js";
 import type { TeamService } from "../team/service.js";
 import { LOGO_SERVE_PREFIX, SIGNIN_IMAGE_SERVE_PREFIX } from "./avatars.js";
 import { remoteAddressOf, sameOrigin } from "./origin.js";
-import { answering, checkSignIn, holdOff, onlyMethods, readJson, refuse, sendJson } from "./studio.js";
+import {
+  answering,
+  BAD_CODE_MESSAGE,
+  checkSignIn,
+  holdOff,
+  onlyMethods,
+  readJson,
+  refuse,
+  SECOND_FACTOR_MESSAGE,
+  sendJson,
+} from "./studio.js";
+import { oidcButton, serveConsoleSecurity } from "./consoleSecurity.js";
+import { totpEnabled, twoFactorRequired } from "../identity/totp.js";
 
 const API_PREFIX = "/api/console/v1";
 export const CONSOLE_SIGN_IN_PATH = `${API_PREFIX}/sign-in`;
@@ -80,6 +92,8 @@ export interface ConsoleOptions {
    * than serving nothing.
    */
   readonly root?: string;
+  /** Tell the sessions on a topic something happened: an upload, a guest's note. Absent in a test that does not listen. */
+  readonly publish?: (topic: string, payload: unknown) => void;
 }
 
 /**
@@ -198,7 +212,15 @@ function serveApi(service: TeamService, request: IncomingMessage, response: Serv
       refuse(response, 401, describeWebSessionRefusal(identified.reason, describeRefusal));
       return;
     }
-    sendJson(response, 200, { account: accountBody(identified.user), watermark: storedWatermark(service.database) });
+    sendJson(response, 200, {
+      account: accountBody(identified.user),
+      watermark: storedWatermark(service.database),
+      // Required and not on: the console shows the setup page and nothing else.
+      twoFactor: {
+        required: twoFactorRequired(service.database, identified.user.id),
+        enabled: totpEnabled(service.database, identified.user.id),
+      },
+    });
     return;
   }
   if (path === CONSOLE_LOOK_PATH) {
@@ -215,6 +237,9 @@ function serveApi(service: TeamService, request: IncomingMessage, response: Serv
       return;
     }
     answering(service, response, setUp(service, request, response));
+    return;
+  }
+  if (serveConsoleSecurity(service, request, response, path)) {
     return;
   }
   refuse(response, 404, "this server has nothing at that address.");
@@ -237,6 +262,12 @@ async function signIn(service: TeamService, request: IncomingMessage, response: 
       return;
     case "refused":
       refuse(response, 401, SIGN_IN_REFUSED_MESSAGE);
+      return;
+    case "second-factor":
+      sendJson(response, 401, { error: SECOND_FACTOR_MESSAGE, secondFactor: true });
+      return;
+    case "bad-code":
+      sendJson(response, 401, { error: BAD_CODE_MESSAGE, secondFactor: true });
       return;
     case "accepted":
       break;
@@ -265,6 +296,7 @@ function lookBody(service: TeamService, host: string): Record<string, unknown> {
     ...(signin.image === undefined ? {} : { signinImageUrl: `${SIGNIN_IMAGE_SERVE_PREFIX}${signin.image}` }),
     signinLayout: signin.image === undefined ? "center" : signin.layout,
     setupNeeded: countUsers(service.database) === 0,
+    ...(oidcButton(service) === undefined ? {} : { sso: { oidc: oidcButton(service) } }),
   };
 }
 
@@ -410,7 +442,11 @@ async function serveFile(
   const extension = extname(resolved).toLowerCase();
   const found = relative === "" ? undefined : await fileAt(resolved);
   if (found === undefined) {
-    if (extension !== "") {
+    // The build keeps its files at the top and under assets/; deeper than that
+    // an address is a screen even with a dot in it, as a comparison's
+    // `from...to` has.
+    const screen = relative.includes("/") && !relative.startsWith("assets/");
+    if (extension !== "" && !screen) {
       // A file that is not there, rather than a screen.
       refuse(response, 404, "there is nothing at that address");
       return;

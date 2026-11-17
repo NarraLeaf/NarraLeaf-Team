@@ -42,7 +42,7 @@ import { identityLayout } from "./identity/layout.js";
 import { defaultPasswordHasher } from "./identity/passwords.js";
 import { storedIdentity, storedTokenLifetimes } from "./identity/settings.js";
 import { mintToken } from "./identity/tokens.js";
-import { authenticate, SIGN_IN_REFUSED_MESSAGE } from "./identity/users.js";
+import { authenticate, clearFailedSignIns, SIGN_IN_REFUSED_MESSAGE } from "./identity/users.js";
 import { readPassword } from "./stdin.js";
 import { readAuthority } from "./tls/authority.js";
 
@@ -123,6 +123,7 @@ export async function tokenMint(
       stderr(`nlteam: ${SIGN_IN_REFUSED_MESSAGE}\n`);
       return 1;
     }
+    clearFailedSignIns(database, result.user.id);
 
     const keys = await KeyStore.open(layout.keysDir);
     // A Team server that has never been brought up has no authority to name. That is

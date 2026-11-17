@@ -14,6 +14,7 @@
  * HTTP/2 secure listener that `allowHTTP1` puts in front of the same port. What
  * is left over is the protocol, and the protocol does not know which it is on.
  */
+import { POLICIES } from "../src/identity/policy.js";
 import { randomUUID } from "node:crypto";
 import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -466,20 +467,38 @@ describe("opening a session", () => {
     // No history here, because this harness has read no repositories. Announced
     // from what the build serves rather than written down beside it.
     expect([...(client.hello?.capabilities ?? [])].sort()).toEqual([
+      "account-policy",
       "activity",
       "admin",
+      "api-tokens",
+      "approvals",
+      "archive",
+      "attachments",
+      "builds",
       "chat",
       "clients",
       "comments",
+      "digests",
+      "glossary",
       "live",
+      "locks",
       "milestones",
       "notifications",
       "oauth",
       "overlay",
       "password-sign-in",
+      "push",
+      "reactions",
       "reviews",
       "session",
+      "shares",
+      "storage",
+      "studio-config",
+      "templates",
       "todos",
+      "two-factor",
+      "voice",
+      "watches",
       "webhooks",
     ]);
   });
@@ -3565,7 +3584,13 @@ const ADMIN_READS = [
   TEAM_METHODS.adminServerStatus,
   TEAM_METHODS.adminWebhooksList,
   TEAM_METHODS.adminDocumentsStatus,
+  TEAM_METHODS.adminStorageList,
+  TEAM_METHODS.adminBackupsList,
+  TEAM_METHODS.adminPoliciesList,
 ];
+
+/** Reads that need an account named, so are only tested at the gate. */
+const ADMIN_LOOKUPS = [TEAM_METHODS.adminUsersPolicy];
 
 /** Every method of the family that changes something. */
 const ADMIN_WRITES = [
@@ -3584,10 +3609,23 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminWebhooksCreate,
   TEAM_METHODS.adminWebhooksDelete,
   TEAM_METHODS.adminWebhooksTest,
+  TEAM_METHODS.adminWebhooksDeliveries,
+  TEAM_METHODS.adminWebhooksRedeliver,
+  TEAM_METHODS.adminEmailTest,
+  TEAM_METHODS.adminUsersResetLink,
+  TEAM_METHODS.adminUsersResetTwoFactor,
+  TEAM_METHODS.adminBackupsCreate,
+  TEAM_METHODS.adminPoliciesSave,
+  TEAM_METHODS.adminPoliciesDelete,
+  TEAM_METHODS.adminUsersPolicySet,
+  TEAM_METHODS.adminUsersDelete,
+  TEAM_METHODS.adminUsersLock,
+  TEAM_METHODS.adminUsersUnlock,
+  TEAM_METHODS.adminUsersUpdate,
 ];
 
 /** Both halves, which is what the gate has to cover. */
-const ADMIN_METHODS = [...ADMIN_READS, ...ADMIN_WRITES];
+const ADMIN_METHODS = [...ADMIN_READS, ...ADMIN_LOOKUPS, ...ADMIN_WRITES];
 
 describe("who may administer a server", () => {
   it("names every method of the family in the lists the gate is tested against", () => {
@@ -3882,6 +3920,7 @@ describe("the settings, as an operator reads them", () => {
       "edit log kept (days)",
       "sign-in token",
       "repository token",
+      ...POLICIES.map((policy) => policy.label),
     ]);
   });
 
@@ -4409,6 +4448,60 @@ describe("changing an account over the session", () => {
     expect((await ada.call(TEAM_METHODS.adminUsersDisable, { username: "nobody" })).code).toBe(
       "not-found",
     );
+  });
+});
+
+describe("deleting, locking and editing an account", () => {
+  it("deletes an account, takes it off the list and keeps its name", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+
+    const answer = await ada.value(TEAM_METHODS.adminUsersDelete, { username: "bob" });
+
+    expect(answer["deleted"]).toMatchObject({ username: "bob" });
+    const bob = requireUser(team.database, "bob");
+    expect(bob.deletedAt).toBeTypeOf("number");
+    expect(bob.disabledAt).toBeTypeOf("number");
+    expect(bob.groups).toEqual([]);
+    await watcher.until(() => watcher.events.length > 0);
+    expect(firstEventKind(watcher)).toBe("user-deleted");
+    const listed = (await ada.value(TEAM_METHODS.adminUsersList, {}))["users"] as { username: string }[];
+    expect(listed.map((user) => user.username)).not.toContain("bob");
+    // Gone for every other change, and not to be brought back.
+    expect((await ada.call(TEAM_METHODS.adminUsersEnable, { username: "bob" })).code).toBe("not-found");
+  });
+
+  it("will not delete the caller's own account", async () => {
+    const { ada, team } = await administered();
+    setAdmin(team.database, "bob", true);
+
+    expect((await ada.call(TEAM_METHODS.adminUsersDelete, { username: "ada" })).code).toBe("refused");
+  });
+
+  it("locks an account for a while and unlocks it again", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+
+    const locked = answered(await ada.value(TEAM_METHODS.adminUsersLock, { username: "bob", minutes: 30 }));
+    expect(locked["lockedUntil"]).toBeGreaterThan(Date.now() + 29 * 60_000);
+    await watcher.until(() => watcher.events.length > 0);
+    expect(firstEventKind(watcher)).toBe("user-locked");
+
+    const unlocked = answered(await ada.value(TEAM_METHODS.adminUsersUnlock, { username: "bob" }));
+    expect(unlocked["lockedUntil"]).toBeUndefined();
+    expect(requireUser(team.database, "bob").lockedUntil).toBeUndefined();
+    expect((await ada.call(TEAM_METHODS.adminUsersLock, { username: "bob", minutes: 0 })).code).toBe("bad-params");
+  });
+
+  it("changes another account's name and address", async () => {
+    const { ada, team } = await administered();
+
+    const changed = answered(
+      await ada.value(TEAM_METHODS.adminUsersUpdate, { username: "bob", displayName: "Bob Li", email: "bob@example.com" }),
+    );
+    expect(changed).toMatchObject({ displayName: "Bob Li", email: "bob@example.com" });
+
+    await ada.value(TEAM_METHODS.adminUsersUpdate, { username: "bob", email: "" });
+    expect(requireUser(team.database, "bob").email).toBeUndefined();
+    expect((await ada.call(TEAM_METHODS.adminUsersUpdate, { username: "bob", email: "not an address" })).code).toBe("bad-params");
   });
 });
 
@@ -5390,6 +5483,30 @@ describe("a team project's documents, with this server as their authority", () =
     expect(await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"))).toMatchObject({ kind: "effect" });
   });
 
+  it("refuses an edit to an asset somebody else holds, and lets it through once they let go", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    const editAsset = {
+      project,
+      clientId: "client-asset",
+      document: { doc: "assets", assetType: "image" },
+      op: { op: "update-asset", assetId: "bg-1", patch: { name: "Harbour" } },
+    };
+    expect(await ada.value(TEAM_METHODS.assetsLock, { project, asset: "bg-1", minutes: 30 })).toMatchObject({ lock: { holder: "ada" } });
+    expect(await bob.value(TEAM_METHODS.assetsLocks, { project })).toMatchObject({ locks: [{ asset: "bg-1", holder: "ada" }] });
+    const refused = await bob.call(TEAM_METHODS.docIntent, editAsset);
+    expect(refused.code).toBe("refused");
+    expect(refused.message).toMatch(/holds asset bg-1/);
+    // A story edit touches no asset, and goes through.
+    expect(await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"))).toMatchObject({ kind: "effect" });
+    // The holder is not kept out of their own asset.
+    expect((await ada.call(TEAM_METHODS.docIntent, { ...editAsset, clientId: "client-asset-ada" })).message ?? "").not.toMatch(/holds asset/);
+
+    expect((await bob.call(TEAM_METHODS.assetsUnlock, { project, asset: "bg-1" })).code).toBe("refused");
+    await ada.value(TEAM_METHODS.assetsUnlock, { project, asset: "bg-1" });
+    expect((await bob.call(TEAM_METHODS.docIntent, { ...editAsset, clientId: "client-asset-2" })).message ?? "").not.toMatch(/holds asset/);
+  });
+
   it("saves a version on request, with the label an author gave it", async () => {
     const { ada, project, commits } = await withDocuments();
     await follow(ada, project);
@@ -5722,5 +5839,60 @@ describe("permission templates and asking for access", () => {
     await root.value(TEAM_METHODS.accessRequestsDecide, { id, approve: true });
     expect((await bob.value(TEAM_METHODS.projectsList))["mayCreate"]).toBe(true);
     expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { kind: "creator" })).code).toBe("conflict");
+  });
+});
+
+describe("account policies", () => {
+  it("fixes what a template says, keeps the account from changing it, and lets it go when cleared", async () => {
+    const { ada, bob } = await administered();
+
+    const saved = await ada.value(TEAM_METHODS.adminPoliciesSave, {
+      name: "contractors",
+      policy: { displayName: { value: "Contractor" }, digest: { value: "daily" }, apiTokens: "off", studioConfig: "read" },
+    });
+    const template = saved["template"] as { id: string; accounts: number };
+    expect(template.accounts).toBe(0);
+    await ada.value(TEAM_METHODS.adminUsersPolicySet, { username: "bob", template: template.id });
+
+    const view = await bob.value(TEAM_METHODS.accountPolicy);
+    expect(view["template"]).toEqual({ id: template.id, name: "contractors" });
+    expect((view["policy"] as Record<string, unknown>)["apiTokens"]).toBe("off");
+
+    // Written onto the account, then held there.
+    expect(((await bob.value(TEAM_METHODS.accountProfileGet))["profile"] as Record<string, unknown>)["displayName"]).toBe("Contractor");
+    expect((await bob.call(TEAM_METHODS.accountProfileUpdate, { displayName: "Bobby" })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountProfileUpdate, { displayName: "Contractor" })).code).toBeUndefined();
+    expect((await bob.call(TEAM_METHODS.notificationsPrefsSet, { digest: "weekly" })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci" })).code).toBe("refused");
+    expect((await bob.value(TEAM_METHODS.accountStudioConfig))["access"]).toBe("read");
+
+    const listed = await ada.value(TEAM_METHODS.adminUsersList);
+    const row = (listed["users"] as { username: string; policy?: { templateName?: string } }[]).find((user) => user.username === "bob");
+    expect(row?.policy?.templateName).toBe("contractors");
+
+    // Deleting the template leaves bob with its settings as his own.
+    await ada.value(TEAM_METHODS.adminPoliciesDelete, { id: template.id });
+    const after = await ada.value(TEAM_METHODS.adminUsersPolicy, { username: "bob" });
+    expect(after["template"]).toBeUndefined();
+    expect(after["custom"]).toBe(true);
+    expect((after["policy"] as Record<string, unknown>)["apiTokens"]).toBe("off");
+
+    await ada.value(TEAM_METHODS.adminUsersPolicySet, { username: "bob", clear: true });
+    expect((await bob.call(TEAM_METHODS.accountProfileUpdate, { displayName: "Bobby" })).code).toBeUndefined();
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci" })).code).toBeUndefined();
+  });
+
+  it("caps an API token's lifetime and its reach, and refuses a policy it cannot read", async () => {
+    const { ada, bob } = await administered();
+    await ada.value(TEAM_METHODS.adminUsersPolicySet, { usernames: ["bob"], policy: { apiTokens: "read", apiTokenMaxDays: 30 } });
+
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci", write: true })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci", expiresInDays: 60 })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci", expiresInDays: 30 })).code).toBeUndefined();
+
+    expect((await ada.call(TEAM_METHODS.adminUsersPolicySet, { username: "bob", policy: { apiTokens: "sometimes" } })).code).toBe("bad-params");
+    expect((await ada.call(TEAM_METHODS.adminPoliciesSave, { name: "", policy: {} })).code).toBe("bad-params");
+    await ada.value(TEAM_METHODS.adminPoliciesSave, { name: "same", policy: {} });
+    expect((await ada.call(TEAM_METHODS.adminPoliciesSave, { name: "same", policy: {} })).code).toBe("bad-params");
   });
 });

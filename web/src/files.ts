@@ -5,6 +5,8 @@
 export interface TreeFile {
   readonly path: string;
   readonly size: number;
+  /** Lore's content address, where the server has one: equal hashes are equal bytes. */
+  readonly hash?: string;
 }
 
 export interface Tree {
@@ -17,7 +19,9 @@ export interface Tree {
   readonly total: number;
 }
 
+/** A project's files, or - as `share:<token>` - what a share link shows of one. */
 function base(project: string): string {
+  if (project.startsWith("share:")) return `/api/team/v1/share/${encodeURIComponent(project.slice("share:".length))}`;
   return `/api/team/v1/projects/${encodeURIComponent(project)}`;
 }
 

@@ -358,7 +358,7 @@ export function seedProjectMembers(database: DatabaseSync, projectId: string, cr
     .prepare(
       `INSERT OR IGNORE INTO project_members (project_id, user_id, role, added_by, added_at)
        SELECT ?, id, CASE WHEN id = ? THEN 'owner' ELSE ? END, ?, ? FROM users
-       WHERE id = ? OR ? <> 'none'`,
+       WHERE id = ? OR (? <> 'none' AND deleted_at IS NULL)`,
     )
     .run(projectId, createdBy, access, createdBy, now, createdBy, access);
 }

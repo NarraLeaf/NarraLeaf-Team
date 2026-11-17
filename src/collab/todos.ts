@@ -13,11 +13,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { integerColumn, optionalIntegerColumn, optionalTextColumn, textColumn, type Row } from "../identity/database.js";
 import { findUserById, type UserRecord } from "../identity/users.js";
 import { maySeeProject, projectRole, visibleProjectIds } from "../projects/members.js";
-import type { TeamTodo, TeamTodoKind, TeamTodoStatus, TeamTodoVisibility } from "../team/protocol.js";
+import type { TeamTodo, TeamTodoKind, TeamTodoPriority, TeamTodoStatus, TeamTodoVisibility } from "../team/protocol.js";
 
 export const TODO_STATUSES: readonly TeamTodoStatus[] = ["open", "doing", "done"];
 export const TODO_VISIBILITIES: readonly TeamTodoVisibility[] = ["private", "project"];
 export const TODO_KINDS: readonly TeamTodoKind[] = ["task", "asset", "translation", "voice"];
+export const TODO_PRIORITIES: readonly TeamTodoPriority[] = [0, 1, 2, 3];
 
 /** One to-do as stored, with ids rather than usernames. */
 export interface TodoRecord {
@@ -41,6 +42,10 @@ export interface TodoRecord {
   readonly kind: TeamTodoKind;
   readonly locale: string | undefined;
   readonly asset: string | undefined;
+  readonly labels: readonly string[];
+  /** The milestone of its project it counts toward. */
+  readonly milestoneId: string | undefined;
+  readonly priority: TeamTodoPriority;
 }
 
 /** Why a to-do could not be written, in the caller's terms. */
@@ -51,6 +56,20 @@ export class TodoRefusal extends Error {
   ) {
     super(message);
   }
+}
+
+function readLabels(text: string | undefined): readonly string[] {
+  if (text === undefined) return [];
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed.filter((label): label is string => typeof label === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLabels(labels: readonly string[] | undefined): string | null {
+  return labels === undefined || labels.length === 0 ? null : JSON.stringify(labels);
 }
 
 function toRecord(row: Row): TodoRecord {
@@ -78,6 +97,12 @@ function toRecord(row: Row): TodoRecord {
     kind: (TODO_KINDS as readonly string[]).includes(textColumn(row, "kind")) ? (textColumn(row, "kind") as TeamTodoKind) : "task",
     locale: optionalTextColumn(row, "locale"),
     asset: optionalTextColumn(row, "asset"),
+    labels: readLabels(optionalTextColumn(row, "labels")),
+    milestoneId: optionalTextColumn(row, "milestone_id"),
+    // Out of range reads as none: a priority written by a newer Team still leaves a to-do.
+    priority: (TODO_PRIORITIES as readonly number[]).includes(optionalIntegerColumn(row, "priority") ?? 0)
+      ? ((optionalIntegerColumn(row, "priority") ?? 0) as TeamTodoPriority)
+      : 0,
   };
 }
 
@@ -128,6 +153,9 @@ export function todoView(database: DatabaseSync, todo: TodoRecord): TeamTodo {
     kind: todo.kind,
     ...(todo.locale === undefined ? {} : { locale: todo.locale }),
     ...(todo.asset === undefined ? {} : { asset: todo.asset }),
+    ...(todo.labels.length === 0 ? {} : { labels: todo.labels }),
+    ...(todo.milestoneId === undefined ? {} : { milestone: todo.milestoneId }),
+    ...(todo.priority === 0 ? {} : { priority: todo.priority }),
   };
 }
 
@@ -146,6 +174,10 @@ export interface TodoInput {
   readonly locale?: string | null;
   /** The asset that answered an asset request. */
   readonly asset?: string | null;
+  readonly labels?: readonly string[];
+  /** The milestone it counts toward, of the same project; `null` takes it off. */
+  readonly milestoneId?: string | null;
+  readonly priority?: TeamTodoPriority;
 }
 
 /** Check that a to-do's shape holds together, for the caller making it so. */
@@ -159,6 +191,7 @@ function checkShape(
     anchored: boolean;
     kind: TeamTodoKind;
     locale: string | undefined;
+    milestoneId?: string | undefined;
   },
 ): void {
   if (shape.projectId !== undefined && !maySeeProject(database, shape.projectId, actor)) {
@@ -172,6 +205,12 @@ function checkShape(
   }
   if ((shape.kind === "translation" || shape.kind === "voice") && shape.locale === undefined) {
     throw new TodoRefusal("bad-params", "a translation or voice to-do names its locale");
+  }
+  if (shape.milestoneId !== undefined) {
+    const milestone = database.prepare("SELECT project_id FROM milestones WHERE id = ?").get(shape.milestoneId) as Row | undefined;
+    if (milestone === undefined || shape.projectId === undefined || textColumn(milestone, "project_id") !== shape.projectId) {
+      throw new TodoRefusal("bad-params", "a to-do counts toward a milestone of its own project");
+    }
   }
   if (shape.anchored && shape.projectId === undefined) {
     throw new TodoRefusal("bad-params", "an anchored to-do has to be in the project it points into");
@@ -197,14 +236,15 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
   }
   const kind = input.kind ?? "task";
   const locale = input.locale ?? undefined;
-  checkShape(database, actor, { projectId, assigneeId, visibility, anchored: anchor !== undefined, kind, locale });
+  const milestoneId = input.milestoneId ?? undefined;
+  checkShape(database, actor, { projectId, assigneeId, visibility, anchored: anchor !== undefined, kind, locale, milestoneId });
   const status = input.status ?? "open";
   const id = randomUUID();
   database
     .prepare(
       `INSERT INTO todos (id, owner_id, assignee_id, project_id, document, element, revision, title, body, status,
-                          visibility, due_at, created_at, updated_at, done_at, kind, locale, asset)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                          visibility, due_at, created_at, updated_at, done_at, kind, locale, asset, labels, milestone_id, priority)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -225,6 +265,9 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
       kind,
       locale ?? null,
       input.asset ?? null,
+      writeLabels(input.labels),
+      milestoneId ?? null,
+      input.priority ?? 0,
     );
   return findTodo(database, id) as TodoRecord;
 }
@@ -260,7 +303,10 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
   };
   const kind = input.kind ?? current.kind;
   const locale = input.locale === undefined ? current.locale : (input.locale ?? undefined);
-  checkShape(database, actor, { ...next, anchored: next.anchor !== undefined, kind, locale });
+  // A to-do moved to another project leaves its milestone behind.
+  const milestoneId =
+    input.milestoneId === undefined ? (next.projectId === current.projectId ? current.milestoneId : undefined) : (input.milestoneId ?? undefined);
+  checkShape(database, actor, { ...next, anchored: next.anchor !== undefined, kind, locale, milestoneId });
   const status = input.status ?? current.status;
   const doneAt = status === "done" ? (current.doneAt ?? now) : null;
   if (input.doneRevision !== undefined && (input.status !== "done" || next.projectId === undefined)) {
@@ -272,7 +318,7 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
     .prepare(
       `UPDATE todos SET assignee_id = ?, project_id = ?, document = ?, element = ?, revision = ?, title = ?, body = ?,
                         status = ?, visibility = ?, due_at = ?, updated_at = ?, done_at = ?, done_revision = ?,
-                        kind = ?, locale = ?, asset = ? WHERE id = ?`,
+                        kind = ?, locale = ?, asset = ?, labels = ?, milestone_id = ?, priority = ? WHERE id = ?`,
     )
     .run(
       next.assigneeId ?? null,
@@ -291,6 +337,9 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
       kind,
       locale ?? null,
       input.asset === undefined ? (current.asset ?? null) : input.asset,
+      input.labels === undefined ? writeLabels(current.labels) : writeLabels(input.labels),
+      milestoneId ?? null,
+      input.priority ?? current.priority,
       id,
     );
   return findTodo(database, id) as TodoRecord;

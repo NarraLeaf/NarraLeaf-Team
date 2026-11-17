@@ -11,16 +11,18 @@ import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { setUp, signIn, SignInError, type ConsoleAccount } from "./api";
 import { LanguagePicker } from "./Collab";
 import { t } from "./i18n";
-import { fetchLook, type SigninLayout, type TeamLook } from "./look";
+import { Icon } from "./Icon";
+import { LeafLogo } from "./LeafLogo";
+import { fetchLook, teamName, type SigninLayout, type TeamLook } from "./look";
 
 export function TeamMark({ look, size = 28 }: { look: TeamLook | undefined; size?: number }) {
   if (look?.logoUrl !== undefined) {
     return <img className="team-mark" src={look.logoUrl} alt="" style={{ width: size, height: size }} />;
   }
-  const letter = Array.from(look?.name ?? "N")[0]?.toUpperCase() ?? "N";
+  // No logo of its own: NarraLeaf's leaf, not the first letter of a name that may be an address.
   return (
-    <span className="team-mark team-mark-letter" aria-hidden="true" style={{ width: size, height: size, fontSize: Math.round(size * 0.5) }}>
-      {letter}
+    <span className="team-mark team-mark-leaf" aria-hidden="true" style={{ width: size, height: size }}>
+      <LeafLogo size={Math.round(size * 0.92)} />
     </span>
   );
 }
@@ -40,7 +42,7 @@ function Frame({ look, children }: { look: TeamLook; children: ReactNode }) {
           <img src={picture} alt="" />
           <div className="gate-picture-brand">
             <TeamMark look={look} size={30} />
-            <span>{look.name}</span>
+            <span>{teamName(look.name)}</span>
           </div>
         </section>
       ) : null}
@@ -49,12 +51,15 @@ function Frame({ look, children }: { look: TeamLook; children: ReactNode }) {
           {layout === "left" || layout === "right" ? null : (
             <div className="gate-brand">
               <TeamMark look={look} />
-              <span>{look.name}</span>
+              <span>{teamName(look.name)}</span>
             </div>
           )}
           {children}
         </div>
       </div>
+      <a className="gate-powered" href="https://narraleaf.com" target="_blank" rel="noreferrer">
+        <LeafLogo size={14} /> Powered by NarraLeaf
+      </a>
     </main>
   );
 }
@@ -62,22 +67,76 @@ function Frame({ look, children }: { look: TeamLook; children: ReactNode }) {
 export function SignIn({ look, hint, onSignedIn }: { look: TeamLook; hint?: string | undefined; onSignedIn: (account: ConsoleAccount) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
+  const [error, setError] = useState<string | undefined>(() => ssoFailure());
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError(undefined);
     try {
-      onSignedIn(await signIn(username.trim(), password));
+      onSignedIn(await signIn(username.trim(), password, code?.trim()));
     } catch (caught) {
+      if (caught instanceof SignInError && caught.secondFactor) {
+        // The password was right: keep it, and ask for the code. A wrong code says so.
+        setError(code === undefined ? undefined : caught.message);
+        setCode("");
+        return;
+      }
       setError(caught instanceof SignInError ? caught.message : String(caught));
       setPassword("");
+      setCode(undefined);
     } finally {
       setBusy(false);
     }
   };
+
+  if (code !== undefined) {
+    return (
+      <Frame look={look}>
+        <form className="gate-form" onSubmit={(event) => void submit(event)}>
+          <div className="gate-title">
+            <h1>{t("tfaSignInTitle")}</h1>
+            <p className="muted">{t("tfaSignInLead")}</p>
+          </div>
+          <label className="field">
+            <span>{t("tfaCode")}</span>
+            <input
+              className="code-input"
+              autoComplete="one-time-code"
+              inputMode="text"
+              spellCheck={false}
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              maxLength={32}
+              required
+              autoFocus
+            />
+          </label>
+          {error === undefined ? null : (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <button className="primary big" type="submit" disabled={busy}>
+            {busy ? t("signingIn") : t("tfaVerify")}
+          </button>
+          <button
+            className="btn btn-invisible"
+            type="button"
+            onClick={() => {
+              setCode(undefined);
+              setPassword("");
+              setError(undefined);
+            }}
+          >
+            {t("back")}
+          </button>
+        </form>
+      </Frame>
+    );
+  }
 
   return (
     <Frame look={look}>
@@ -109,6 +168,11 @@ export function SignIn({ look, hint, onSignedIn }: { look: TeamLook; hint?: stri
         <button className="primary big" type="submit" disabled={busy}>
           {busy ? t("signingIn") : t("signIn")}
         </button>
+        {look.sso?.oidc === undefined ? null : (
+          <a className="btn big sso-button" href="/api/console/v1/sso/oidc/start">
+            <Icon name="key" size={15} /> {t("ssoSignIn", { name: look.sso.oidc })}
+          </a>
+        )}
         <p className="muted small">{t("forgotPassword")}</p>
         <div className="gate-foot">
           <span className="mono">{window.location.host}</span>
@@ -117,6 +181,25 @@ export function SignIn({ look, hint, onSignedIn }: { look: TeamLook; hint?: stri
       </form>
     </Frame>
   );
+}
+
+/** What a single sign-on that came back refused says, from the `?sso=` the server sent it back with. */
+function ssoFailure(): string | undefined {
+  const reason = new URLSearchParams(window.location.search).get("sso");
+  if (reason === null) return undefined;
+  window.history.replaceState(null, "", window.location.pathname);
+  switch (reason) {
+    case "unknown":
+      return t("ssoUnknown");
+    case "disabled":
+      return t("ssoDisabled");
+    case "expired":
+      return t("ssoExpired");
+    case "unreachable":
+      return t("ssoUnreachable");
+    default:
+      return t("ssoFailed");
+  }
 }
 
 type Step = "code" | "account" | "look";

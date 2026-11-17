@@ -16,6 +16,7 @@ import {
   listTodos,
   maySeeTodo,
   TODO_KINDS,
+  TODO_PRIORITIES,
   TODO_STATUSES,
   TODO_VISIBILITIES,
   todoAccounts,
@@ -25,6 +26,7 @@ import {
   type TodoInput,
   type TodoRecord,
 } from "../../collab/todos.js";
+import { accountPolicy, FIXED_BY_ADMIN } from "../../identity/accountPolicy.js";
 import { findUser, findUserById, type UserRecord } from "../../identity/users.js";
 import { profileBody } from "../../projects/answers.js";
 import { findProject } from "../../projects/registry.js";
@@ -46,7 +48,10 @@ import {
   ANCHOR_FIELD_LIMIT,
   projectTodosTopic,
   TEAM_METHODS,
+  TODO_LABEL_LENGTH,
+  TODO_LABELS_LIMIT,
   type TeamNotification,
+  type TeamTodoPriority,
   type TeamTodosEvent,
 } from "../protocol.js";
 
@@ -67,6 +72,16 @@ function accountNamed(context: MethodContext, username: string): UserRecord {
 }
 
 /** A project id or name the caller can see, or a not-found refusal. */
+/** Whether a name is a time zone this runtime knows. */
+function isTimeZone(name: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: name });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function projectRef(context: MethodContext, reference: string): string {
   const project = findProject(context.options.database, reference);
   if (project === undefined || !projectVisible(context, project.id)) {
@@ -81,7 +96,7 @@ function refused(error: unknown): never {
 }
 
 /** Tell everybody entitled to it that a to-do changed, or went. */
-function announceTodo(context: MethodContext, todo: TodoRecord, event: TeamTodosEvent, previous?: TodoRecord): void {
+export function announceTodo(context: MethodContext, todo: TodoRecord, event: TeamTodosEvent, previous?: TodoRecord): void {
   for (const accountId of new Set([...todoAccounts(todo), ...(previous === undefined ? [] : todoAccounts(previous))])) {
     const user = findUserById(context.options.database, accountId);
     // An assignee who can no longer see it hears that it went, not what it says now.
@@ -108,6 +123,19 @@ function announceNotifications(context: MethodContext, written: Map<string, Team
 }
 
 /** The parts of a to-do the parameters name, `null` meaning "clear it". */
+/** Labels as given, trimmed, without repeats; at most {@link TODO_LABELS_LIMIT} short ones. */
+function todoLabels(value: unknown): string[] {
+  if (value === null) return [];
+  if (!Array.isArray(value) || value.some((label) => typeof label !== "string")) {
+    throw new MethodError("bad-params", "labels has to be a list of words");
+  }
+  const labels = [...new Set((value as string[]).map((label) => label.trim()).filter((label) => label !== ""))];
+  if (labels.length > TODO_LABELS_LIMIT || labels.some((label) => label.length > TODO_LABEL_LENGTH)) {
+    throw new MethodError("bad-params", `a to-do carries at most ${TODO_LABELS_LIMIT} labels of ${TODO_LABEL_LENGTH} characters`);
+  }
+  return labels;
+}
+
 function todoInput(context: MethodContext, read: Record<string, unknown>): TodoInput {
   const input: { -readonly [K in keyof TodoInput]: TodoInput[K] } = {};
   if (read["title"] !== undefined) input.title = requiredText(read, "title", TITLE_LIMIT);
@@ -129,6 +157,15 @@ function todoInput(context: MethodContext, read: Record<string, unknown>): TodoI
   if (read["kind"] !== undefined) input.kind = oneOf(read, "kind", TODO_KINDS);
   if (read["locale"] !== undefined) input.locale = read["locale"] === null ? null : requiredText(read, "locale", 35);
   if (read["asset"] !== undefined) input.asset = read["asset"] === null ? null : requiredText(read, "asset", ANCHOR_FIELD_LIMIT);
+  if (read["labels"] !== undefined) input.labels = todoLabels(read["labels"]);
+  if (read["milestone"] !== undefined) input.milestoneId = read["milestone"] === null ? null : requiredText(read, "milestone", ID_LIMIT);
+  if (read["priority"] !== undefined) {
+    const priority = read["priority"];
+    if (!(TODO_PRIORITIES as readonly unknown[]).includes(priority)) {
+      throw new MethodError("bad-params", "priority has to be 0, 1, 2 or 3");
+    }
+    input.priority = priority as TeamTodoPriority;
+  }
   if (read["anchor"] !== undefined) {
     if (read["anchor"] === null) {
       input.anchor = null;
@@ -153,7 +190,8 @@ export function collabMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const username = optionalText(paramsObject(params), "username", USERNAME_LIMIT);
         const user = username === undefined ? context.user : accountNamed(context, username);
-        return { profile: profileBody(user) };
+        const online = context.online?.(user.id);
+        return { profile: { ...profileBody(user), ...(online === undefined ? {} : { online }) } };
       },
     },
     {
@@ -163,7 +201,22 @@ export function collabMethods(): TeamMethod[] {
         const read = paramsObject(params);
         const displayName = read["displayName"] === undefined ? undefined : requiredText(read, "displayName", DISPLAY_NAME_LIMIT);
         const bio = read["bio"] === undefined ? undefined : (optionalText(read, "bio", BIO_LIMIT) ?? "");
+        const timezone = read["timezone"] === undefined ? undefined : (optionalText(read, "timezone", 64) ?? "");
+        if (timezone !== undefined && timezone !== "" && !isTimeZone(timezone)) {
+          throw new MethodError("bad-params", "timezone has to be an IANA time zone such as Asia/Shanghai");
+        }
         const database = context.options.database;
+        const fixed = accountPolicy(database, context.user.id).policy;
+        const now = findUserById(database, context.user.id) ?? context.user;
+        // A fixed field the page sends back unchanged is fine: the settings page saves all three at once.
+        if (
+          (fixed.displayName !== undefined && displayName !== undefined && displayName !== now.displayName) ||
+          (fixed.bio !== undefined && bio !== undefined && bio !== (now.bio ?? "")) ||
+          (fixed.timezone !== undefined && timezone !== undefined && timezone !== (now.timezone ?? ""))
+        ) {
+          throw new MethodError("refused", FIXED_BY_ADMIN);
+        }
+        if (timezone !== undefined) database.prepare("UPDATE users SET timezone = ? WHERE id = ?").run(timezone === "" ? null : timezone, context.user.id);
         if (displayName !== undefined) database.prepare("UPDATE users SET display_name = ? WHERE id = ?").run(displayName, context.user.id);
         if (bio !== undefined) database.prepare("UPDATE users SET bio = ? WHERE id = ?").run(bio === "" ? null : bio, context.user.id);
         return { profile: profileBody(findUserById(database, context.user.id) ?? context.user) };

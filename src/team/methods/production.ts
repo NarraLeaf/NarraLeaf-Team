@@ -13,7 +13,13 @@ import {
   listMilestones,
   MilestoneRefusal,
   milestoneView,
+  updateMilestone,
 } from "../../collab/milestones.js";
+import { APPROVAL_STATUSES, ApprovalRefusal, approvalHistory, approvalView, listApprovals, setApproval } from "../../collab/approvals.js";
+import { listLocks, lockAsset, LockRefusal, lockView, unlockAsset } from "../../collab/locks.js";
+import { deleteFilter, FilterRefusal, listFilters, saveFilter } from "../../collab/filters.js";
+import { BuildRefusal, buildView, deleteAttachment, deleteBuild, listBuilds, updateBuild } from "../../collab/builds.js";
+import { createShare, listShares, revokeShare, ShareRefusal, shareLinkView } from "../../collab/shares.js";
 import { createReview, findReview, listReviews, REVIEW_STATUSES, ReviewRefusal, reviewView, updateReview } from "../../collab/reviews.js";
 import {
   createWebhook,
@@ -21,7 +27,12 @@ import {
   deliverOne,
   emitWebhookEvent,
   findWebhook,
+  findWebhookDelivery,
+  listWebhookDeliveries,
   listWebhooks,
+  redeliver,
+  WEBHOOK_DELIVERIES_KEPT,
+  webhookDeliveryView,
   WebhookRefusal,
   webhookView,
 } from "../../collab/webhooks.js";
@@ -29,12 +40,14 @@ import { findUser, isOperator, type UserRecord } from "../../identity/users.js";
 import { findProject } from "../../projects/registry.js";
 import { projectRole } from "../../projects/members.js";
 import {
+  boundedCount,
   flag,
   MethodError,
   oneOf,
   optionalText,
   paramsObject,
   projectVisible,
+  requiredInteger,
   requiredText,
   type MethodContext,
   type TeamMethod,
@@ -42,13 +55,19 @@ import {
 import {
   accountNotificationsTopic,
   ANCHOR_FIELD_LIMIT,
+  projectApprovalsTopic,
+  projectBuildsTopic,
   projectChatTopic,
+  projectLocksTopic,
   projectMilestonesTopic,
   projectReviewsTopic,
   TEAM_METHODS,
   TEAM_WEBHOOK_EVENTS,
   TEAM_WEBHOOK_FORMATS,
+  type TeamApprovalsEvent,
+  type TeamBuildsEvent,
   type TeamChatEvent,
+  type TeamLocksEvent,
   type TeamMilestonesEvent,
   type TeamNotification,
   type TeamReviewsEvent,
@@ -76,7 +95,17 @@ function accountNamed(context: MethodContext, username: string): UserRecord {
 }
 
 function refused(error: unknown): never {
-  if (error instanceof ReviewRefusal || error instanceof MilestoneRefusal || error instanceof WebhookRefusal || error instanceof ChatRefusal) {
+  if (
+    error instanceof ReviewRefusal ||
+    error instanceof MilestoneRefusal ||
+    error instanceof WebhookRefusal ||
+    error instanceof ChatRefusal ||
+    error instanceof ApprovalRefusal ||
+    error instanceof LockRefusal ||
+    error instanceof FilterRefusal ||
+    error instanceof BuildRefusal ||
+    error instanceof ShareRefusal
+  ) {
     throw new MethodError(error.code, error.message);
   }
   throw error;
@@ -86,6 +115,22 @@ function tellAccounts(context: MethodContext, written: Map<string, TeamNotificat
   for (const [accountId, notification] of written) {
     context.publish(accountNotificationsTopic(accountId), { kind: "notification", notification }, new Set([accountId]));
   }
+}
+
+/** A time in milliseconds, `null` to clear it, or absent. */
+function optionalTime(read: Record<string, unknown>, key: string): number | null | undefined {
+  const value = read[key];
+  if (value === undefined || value === null) return value;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new MethodError("bad-params", `${key} has to be a time in milliseconds, or null`);
+  }
+  return value;
+}
+
+/** A short text, `null` to clear it, or absent to leave it. */
+function nullableText(read: Record<string, unknown>, key: string, limit: number): string | null | undefined {
+  if (read[key] === null) return null;
+  return optionalText(read, key, limit);
 }
 
 function requireOperator(context: MethodContext): void {
@@ -279,13 +324,17 @@ export function productionMethods(): TeamMethod[] {
         const read = paramsObject(params);
         const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
         const note = optionalText(read, "note", NOTE_LIMIT);
+        const dueAt = optionalTime(read, "dueAt");
         let milestone;
         try {
           milestone = createMilestone(context.options.database, context.user, {
             projectId,
             name: requiredText(read, "name", NAME_LIMIT),
-            revision: requiredText(read, "revision", ANCHOR_FIELD_LIMIT),
+            // A milestone that is only planned names no revision yet.
+            revision: optionalText(read, "revision", ANCHOR_FIELD_LIMIT) ?? "",
             ...(note === undefined ? {} : { note }),
+            ...(typeof dueAt === "number" ? { dueAt } : {}),
+            gate: flag(read, "gate", false),
           });
         } catch (error) {
           refused(error);
@@ -298,7 +347,10 @@ export function productionMethods(): TeamMethod[] {
           projectId,
           actor: context.account.username,
           ref: milestone.revision,
-          summary: `${context.account.username} marked ${milestone.revision.slice(0, 8)} as “${milestone.name}”`,
+          summary:
+            milestone.revision === ""
+              ? `${context.account.username} planned “${milestone.name}”`
+              : `${context.account.username} marked ${milestone.revision.slice(0, 8)} as “${milestone.name}”`,
         });
         return { milestone: view };
       },
@@ -315,6 +367,309 @@ export function productionMethods(): TeamMethod[] {
           refused(error);
         }
         context.publish(projectMilestonesTopic(removed.projectId), { kind: "milestone-removed", milestone: removed.id } satisfies TeamMilestonesEvent);
+        return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.milestonesUpdate,
+      capability: "milestones",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const id = requiredText(read, "milestone", ID_LIMIT);
+        const input: { name?: string; revision?: string; note?: string | null; dueAt?: number | null; gate?: boolean } = {};
+        if (read["name"] !== undefined) input.name = requiredText(read, "name", NAME_LIMIT);
+        if (read["revision"] !== undefined) input.revision = read["revision"] === null ? "" : (optionalText(read, "revision", ANCHOR_FIELD_LIMIT) ?? "");
+        if (read["note"] !== undefined) input.note = read["note"] === null ? null : (optionalText(read, "note", NOTE_LIMIT) ?? null);
+        const dueAt = optionalTime(read, "dueAt");
+        if (dueAt !== undefined) input.dueAt = dueAt;
+        if (read["gate"] !== undefined) input.gate = flag(read, "gate", false);
+        let milestone;
+        try {
+          milestone = updateMilestone(context.options.database, context.user, id, input);
+        } catch (error) {
+          refused(error);
+        }
+        const view = milestoneView(context.options.database, milestone);
+        context.publish(projectMilestonesTopic(milestone.projectId), { kind: "milestone-set", milestone: view } satisfies TeamMilestonesEvent);
+        return { milestone: view };
+      },
+    },
+    {
+      name: TEAM_METHODS.approvalsList,
+      capability: "approvals",
+      handle: (params: unknown, context: MethodContext) => {
+        const projectId = projectRef(context, requiredText(paramsObject(params), "project", ID_LIMIT));
+        try {
+          return { approvals: listApprovals(context.options.database, context.user, projectId).map((a) => approvalView(context.options.database, a)) };
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.approvalsHistory,
+      capability: "approvals",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
+        const target = requiredText(read, "target", ANCHOR_FIELD_LIMIT);
+        try {
+          return { changes: approvalHistory(context.options.database, context.user, projectId, target).map((a) => approvalView(context.options.database, a)) };
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.approvalsSet,
+      capability: "approvals",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
+        const note = optionalText(read, "note", NOTE_LIMIT);
+        let approval;
+        try {
+          approval = setApproval(context.options.database, context.user, {
+            projectId,
+            target: requiredText(read, "target", ANCHOR_FIELD_LIMIT),
+            status: oneOf(read, "status", APPROVAL_STATUSES),
+            ...(note === undefined ? {} : { note }),
+          });
+        } catch (error) {
+          refused(error);
+        }
+        const view = approvalView(context.options.database, approval);
+        context.publish(projectApprovalsTopic(projectId), { kind: "approval-set", approval: view } satisfies TeamApprovalsEvent);
+        if (approval.status === "approved" || approval.status === "changes") {
+          recordActivity(context.options.database, {
+            accountId: context.user.id,
+            projectId,
+            kind: approval.status === "approved" ? "approved" : "sent-back",
+            ref: approval.target,
+            summary: approval.note ?? approval.target,
+          });
+        }
+        return { approval: view };
+      },
+    },
+    {
+      name: TEAM_METHODS.assetsLocks,
+      capability: "locks",
+      handle: (params: unknown, context: MethodContext) => {
+        const projectId = projectRef(context, requiredText(paramsObject(params), "project", ID_LIMIT));
+        try {
+          return { locks: listLocks(context.options.database, context.user, projectId).map((lock) => lockView(context.options.database, lock)) };
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.assetsLock,
+      capability: "locks",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
+        const note = optionalText(read, "note", NAME_LIMIT * 2);
+        const minutes = read["minutes"] === undefined ? undefined : requiredInteger(read, "minutes");
+        let lock;
+        try {
+          lock = lockAsset(context.options.database, context.user, {
+            projectId,
+            assetId: requiredText(read, "asset", ANCHOR_FIELD_LIMIT),
+            ...(minutes === undefined ? {} : { minutes }),
+            ...(note === undefined ? {} : { note }),
+          });
+        } catch (error) {
+          refused(error);
+        }
+        const view = lockView(context.options.database, lock);
+        context.publish(projectLocksTopic(projectId), { kind: "lock-set", lock: view } satisfies TeamLocksEvent);
+        return { lock: view };
+      },
+    },
+    {
+      name: TEAM_METHODS.assetsUnlock,
+      capability: "locks",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
+        const asset = requiredText(read, "asset", ANCHOR_FIELD_LIMIT);
+        let gone;
+        try {
+          gone = unlockAsset(context.options.database, context.user, projectId, asset);
+        } catch (error) {
+          refused(error);
+        }
+        if (gone !== undefined) {
+          context.publish(projectLocksTopic(projectId), { kind: "lock-released", project: projectId, asset } satisfies TeamLocksEvent);
+        }
+        return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.buildsList,
+      capability: "builds",
+      handle: (params: unknown, context: MethodContext) => {
+        const projectId = projectRef(context, requiredText(paramsObject(params), "project", ID_LIMIT));
+        try {
+          return { builds: listBuilds(context.options.database, context.user, projectId).map((build) => buildView(context.options.database, build)) };
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.buildsUpdate,
+      capability: "builds",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const id = requiredText(read, "build", ID_LIMIT);
+        const name = optionalText(read, "name", NAME_LIMIT + 40);
+        const note = nullableText(read, "note", 2000);
+        const revision = nullableText(read, "revision", ID_LIMIT);
+        const platform = nullableText(read, "platform", 40);
+        if (typeof revision === "string" && !/^[A-Za-z0-9]{8,128}$/.test(revision)) throw new MethodError("bad-params", "that is not a revision id");
+        let changed;
+        try {
+          changed = updateBuild(context.options.database, context.user, id, {
+            ...(name === undefined ? {} : { name }),
+            ...(note === undefined ? {} : { note }),
+            ...(revision === undefined ? {} : { revision }),
+            ...(platform === undefined ? {} : { platform }),
+            ...(read["latest"] === undefined ? {} : { latest: flag(read, "latest", false) }),
+          });
+        } catch (error) {
+          refused(error);
+        }
+        const topic = projectBuildsTopic(changed.build.projectId);
+        if (changed.unset !== undefined) {
+          context.publish(topic, { kind: "build-set", build: buildView(context.options.database, changed.unset) } satisfies TeamBuildsEvent);
+        }
+        const view = buildView(context.options.database, changed.build);
+        context.publish(topic, { kind: "build-set", build: view } satisfies TeamBuildsEvent);
+        return { build: view };
+      },
+    },
+    {
+      name: TEAM_METHODS.buildsDelete,
+      capability: "builds",
+      handle: async (params: unknown, context: MethodContext) => {
+        const id = requiredText(paramsObject(params), "build", ID_LIMIT);
+        let gone;
+        try {
+          gone = await deleteBuild(context.options.database, context.options.root, context.user, id);
+        } catch (error) {
+          refused(error);
+        }
+        context.publish(projectBuildsTopic(gone.projectId), { kind: "build-removed", build: gone.id } satisfies TeamBuildsEvent);
+        return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.attachmentsDelete,
+      capability: "attachments",
+      handle: async (params: unknown, context: MethodContext) => {
+        const id = requiredText(paramsObject(params), "attachment", ID_LIMIT);
+        try {
+          await deleteAttachment(context.options.database, context.options.root, context.user, id);
+        } catch (error) {
+          refused(error);
+        }
+        return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.sharesList,
+      capability: "shares",
+      handle: (params: unknown, context: MethodContext) => {
+        const projectId = projectRef(context, requiredText(paramsObject(params), "project", ID_LIMIT));
+        try {
+          return { shares: listShares(context.options.database, context.user, projectId).map((share) => shareLinkView(context.options.database, share)) };
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.sharesCreate,
+      capability: "shares",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const projectId = projectRef(context, requiredText(read, "project", ID_LIMIT));
+        const label = optionalText(read, "label", 120);
+        const scope = optionalText(read, "scope", 256);
+        const revision = optionalText(read, "revision", ID_LIMIT);
+        const rawPaths = read["paths"];
+        if (rawPaths !== undefined && rawPaths !== null && (!Array.isArray(rawPaths) || rawPaths.some((p) => typeof p !== "string"))) {
+          throw new MethodError("bad-params", "paths has to be a list of paths");
+        }
+        const days = read["days"] === undefined || read["days"] === null ? undefined : requiredInteger(read, "days");
+        let made;
+        try {
+          made = createShare(context.options.database, context.user, {
+            projectId,
+            ...(label === undefined ? {} : { label }),
+            ...(scope === undefined ? {} : { scope }),
+            ...(revision === undefined ? {} : { revision }),
+            ...(Array.isArray(rawPaths) ? { paths: rawPaths as string[] } : {}),
+            allowComments: flag(read, "allowComments", false),
+            ...(days === undefined ? {} : { days }),
+          });
+        } catch (error) {
+          refused(error);
+        }
+        // The token is in this answer and nowhere else, ever: only its hash is kept.
+        return { share: shareLinkView(context.options.database, made.share), token: made.token };
+      },
+    },
+    {
+      name: TEAM_METHODS.sharesRevoke,
+      capability: "shares",
+      handle: (params: unknown, context: MethodContext) => {
+        const id = requiredText(paramsObject(params), "share", ID_LIMIT);
+        try {
+          return { share: shareLinkView(context.options.database, revokeShare(context.options.database, context.user, id)) };
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.filtersList,
+      capability: "todos",
+      handle: (params: unknown, context: MethodContext) => {
+        const scope = optionalText(paramsObject(params), "scope", NAME_LIMIT);
+        return { filters: listFilters(context.options.database, context.user, scope) };
+      },
+    },
+    {
+      name: TEAM_METHODS.filtersSave,
+      capability: "todos",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        try {
+          return {
+            filter: saveFilter(context.options.database, context.user, {
+              scope: requiredText(read, "scope", NAME_LIMIT),
+              name: requiredText(read, "name", NAME_LIMIT),
+              query: requiredText(read, "query", NOTE_LIMIT),
+            }),
+          };
+        } catch (error) {
+          refused(error);
+        }
+      },
+    },
+    {
+      name: TEAM_METHODS.filtersDelete,
+      capability: "todos",
+      handle: (params: unknown, context: MethodContext) => {
+        try {
+          deleteFilter(context.options.database, context.user, requiredText(paramsObject(params), "filter", ID_LIMIT));
+        } catch (error) {
+          refused(error);
+        }
         return {};
       },
     },
@@ -375,7 +730,28 @@ export function productionMethods(): TeamMethod[] {
           actor: context.account.username,
           summary: `test from ${context.account.username}`,
         });
-        return { status };
+        return { status, ...latestError(context, hook.id) };
+      },
+    },
+    {
+      name: TEAM_METHODS.adminWebhooksDeliveries,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        requireOperator(context);
+        const read = paramsObject(params);
+        const hook = findWebhook(context.options.database, requiredText(read, "webhook", ID_LIMIT));
+        if (hook === undefined) throw new MethodError("not-found", "there is no webhook of that id");
+        return { deliveries: listWebhookDeliveries(context.options.database, hook.id, boundedCount(read, "limit", 50, WEBHOOK_DELIVERIES_KEPT)).map(webhookDeliveryView) };
+      },
+    },
+    {
+      name: TEAM_METHODS.adminWebhooksRedeliver,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        requireOperator(context);
+        const again = redeliver(context.options.database, requiredInteger(paramsObject(params), "delivery"));
+        if (again === undefined) throw new MethodError("not-found", "there is no delivery of that id");
+        return { delivery: webhookDeliveryView(again) };
       },
     },
     {
@@ -434,10 +810,38 @@ export function productionMethods(): TeamMethod[] {
           actor: context.account.username,
           summary: `test from ${context.account.username}`,
         });
-        return { status };
+        return { status, ...latestError(context, hook.id) };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsWebhooksDeliveries,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const hook = ownedWebhook(context, read);
+        return { deliveries: listWebhookDeliveries(context.options.database, hook.id, boundedCount(read, "limit", 50, WEBHOOK_DELIVERIES_KEPT)).map(webhookDeliveryView) };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsWebhooksRedeliver,
+      capability: "webhooks",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const past = findWebhookDelivery(context.options.database, requiredInteger(read, "delivery"));
+        if (past === undefined) throw new MethodError("not-found", "there is no delivery of that id");
+        ownedWebhook(context, { webhook: past.webhookId });
+        const again = redeliver(context.options.database, past.id);
+        if (again === undefined) throw new MethodError("not-found", "there is no delivery of that id");
+        return { delivery: webhookDeliveryView(again) };
       },
     },
   ];
+}
+
+/** Why the latest delivery of a webhook failed, where it did: what a test answers beside the status. */
+function latestError(context: MethodContext, webhookId: string): { error?: string } {
+  const error = listWebhookDeliveries(context.options.database, webhookId, 1)[0]?.error;
+  return error === undefined ? {} : { error };
 }
 
 /**

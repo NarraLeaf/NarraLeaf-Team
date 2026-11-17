@@ -40,7 +40,11 @@ import { serveConsole, type ConsoleOptions } from "./console.js";
 import { serveOAuth } from "./oauth.js";
 import { serveProjectFiles } from "./files.js";
 import { serveAvatars } from "./avatars.js";
+import { serveUploads } from "./uploads.js";
+import { serveStudioConfig } from "./studioConfig.js";
 import { serveStudioApi } from "./studio.js";
+import { remoteAddressOf } from "./origin.js";
+import { addressAllowed } from "../identity/policy.js";
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 
@@ -89,6 +93,26 @@ export function webHandler(
     // that decision is made once for all of them.
     const path = new URL(request.url ?? "/", "http://team.invalid").pathname;
 
+    // `security.allowed_networks`, before any arm: the console and the API are
+    // both behind it. Health and the public signing keys stay open, because what
+    // asks for them is a monitor or a verifier, never a person.
+    const database = options.studio?.database ?? options.console?.service.database;
+    if (
+      database !== undefined &&
+      path !== "/health" &&
+      path !== "/.well-known/jwks.json" &&
+      !addressAllowed(database, remoteAddressOf(request))
+    ) {
+      const refused = "this server does not take requests from your network\n";
+      response.writeHead(403, {
+        "content-type": "text/plain; charset=utf-8",
+        "content-length": Buffer.byteLength(refused),
+        "cache-control": "no-store",
+      });
+      response.end(refused);
+      return;
+    }
+
     if (path === "/.well-known/nlteam") {
       serveDiscovery(discovery(), request, response);
       return;
@@ -122,6 +146,14 @@ export function webHandler(
     }
 
     if (options.console !== undefined && serveAvatars(options.console.service, request, response, path)) {
+      return;
+    }
+
+    if (options.console !== undefined && serveStudioConfig(options.console.service, request, response, path)) {
+      return;
+    }
+
+    if (options.console !== undefined && serveUploads(options.console.service, options.console.publish, request, response, path)) {
       return;
     }
 

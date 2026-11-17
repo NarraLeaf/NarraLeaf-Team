@@ -23,6 +23,7 @@ import { openRevisionTree, type RevisionTree } from "./read.js";
 import type { WorkingCopyOptions } from "./workingCopy.js";
 import { knowsCommit, knowsCommitsOf, recordCommits } from "../collab/activity.js";
 import { emitWebhookEvent } from "../collab/webhooks.js";
+import { notifyWatchers } from "../collab/watches.js";
 import { isSnapshotMessage, isVersion } from "../authority/versions.js";
 import { forLog } from "../identity/audit.js";
 import { audienceHosts, authUrl, dataRemoteUrl, type IdentityConfig } from "../identity/config.js";
@@ -445,6 +446,12 @@ export class ProjectReadings {
       recordCommits(database, projectId, page.revisions);
       // Only what is new since the last pass: the first pass's backfill is history, not news.
       for (const revision of fresh.slice(0, 20).reverse()) {
+        notifyWatchers(database, {
+          projectId,
+          kind: "commit",
+          ref: revision.id,
+          summary: `${revision.by ?? "?"} 提交了${revision.message ? `：${revision.message.split("\n")[0]!.slice(0, 200)}` : "修改"}`,
+        });
         emitWebhookEvent(database, {
           type: "commit",
           projectId,

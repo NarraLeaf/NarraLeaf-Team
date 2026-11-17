@@ -4,8 +4,14 @@
  * About the caller and nobody else, so nothing here needs a gate beyond being
  * signed in. An operator ends every device of an account at once with
  * `admin.users.revokeTokens`; this is the finer tool a person uses on their own.
+ *
+ * Also here: the account policy the caller is under (what an operator fixed, which the settings
+ * page draws as read-only), and what this server keeps of the caller's Studio preferences.
  */
+import { accountPolicyView } from "../../identity/accountPolicy.js";
+import { recordDecision } from "../../identity/audit.js";
 import { listGrants, OAUTH_CLIENTS, revokeGrant } from "../../identity/oauth.js";
+import { deleteStudioConfig, studioConfigStatus } from "../../identity/studioConfig.js";
 import { paramsObject, requiredText, type MethodContext, type TeamMethod } from "../methods.js";
 import { TEAM_METHODS, type TeamAccountDevice } from "../protocol.js";
 
@@ -38,6 +44,32 @@ export function accountMethods(): TeamMethod[] {
         // and signing out one already signed out is the state they asked for.
         revokeGrant(context.options.database, id, context.user.id);
         return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.accountPolicy,
+      capability: "account-policy",
+      handle: (_params: unknown, context: MethodContext) => accountPolicyView(context.options.database, context.user.id),
+    },
+    {
+      name: TEAM_METHODS.accountStudioConfig,
+      capability: "studio-config",
+      handle: (_params: unknown, context: MethodContext) => studioConfigStatus(context.options.database, context.user.id),
+    },
+    {
+      name: TEAM_METHODS.accountStudioConfigDelete,
+      capability: "studio-config",
+      handle: (_params: unknown, context: MethodContext) => {
+        // Throwing one's own backup away is allowed whatever the policy: it only ever loses data the account put there.
+        if (deleteStudioConfig(context.options.database, context.user.id)) {
+          recordDecision(context.options.database, {
+            username: context.user.username,
+            resource: `account:${context.user.username}`,
+            allowed: true,
+            detail: "Studio preferences removed",
+          });
+        }
+        return studioConfigStatus(context.options.database, context.user.id);
       },
     },
   ];

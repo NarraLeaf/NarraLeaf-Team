@@ -28,6 +28,8 @@ import type { ConsoleAccount } from "./api";
 import { Face } from "./Collab";
 import { Icon } from "./Icon";
 import { t } from "./i18n";
+import { MentionField, PersonHover, ReactionBar, useReactions } from "./Notify";
+import { SelectPanel } from "./ui";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 /** Studio's own bound for one line (src/shared/live/presence.ts there). */
@@ -146,7 +148,7 @@ function ProjectChannel({ connection, state, projectId, account }: { connection:
       stick.current = true;
       if (event.kind === "chat-message") {
         setMessages((current) => (current?.some((m) => m.id === event.message.id) ? current : [...(current ?? []), event.message]));
-      } else {
+      } else if (event.kind === "chat-deleted") {
         setMessages((current) => current?.map((m) => (m.id === event.id ? { ...m, body: "", deletedAt: Date.now() } : m)));
       }
     });
@@ -170,6 +172,9 @@ function ProjectChannel({ connection, state, projectId, account }: { connection:
     }
   };
 
+  const targets = useMemo(() => (messages ?? []).filter((m) => m.deletedAt === undefined).map((m) => String(m.id)), [messages]);
+  const reactions = useReactions(connection, projectId, "chat", targets);
+
   let lastDay = "";
   return (
     <>
@@ -190,7 +195,11 @@ function ProjectChannel({ connection, state, projectId, account }: { connection:
             <div key={message.id}>
               {divider}
               <div className={mine ? "chat-line mine" : "chat-line"}>
-                {mine ? null : <Face name={message.author ?? "?"} size={24} />}
+                {mine ? null : (
+                  <PersonHover connection={connection} username={message.author}>
+                    <Face name={message.author ?? "?"} user={message.author} size={24} />
+                  </PersonHover>
+                )}
                 <div className="chat-bubble">
                   {mine ? null : <span className="chat-who">{message.author ?? t("chatGone")}</span>}
                   {message.deletedAt !== undefined ? (
@@ -206,6 +215,17 @@ function ProjectChannel({ connection, state, projectId, account }: { connection:
                       </button>
                     ) : null}
                   </span>
+                  {message.deletedAt === undefined ? (
+                    <ReactionBar
+                      connection={connection}
+                      projectId={projectId}
+                      kind="chat"
+                      target={String(message.id)}
+                      reactions={reactions.get(String(message.id))}
+                      me={account.username}
+                      canReact
+                    />
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -214,9 +234,11 @@ function ProjectChannel({ connection, state, projectId, account }: { connection:
         <div ref={bottom} />
       </div>
       <form className="chat-compose" onSubmit={(event) => void send(event)}>
-        <input
+        <MentionField
+          as="input"
+          connection={connection}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onValue={setDraft}
           placeholder={t("chatChannelPlaceholder")}
           aria-label={t("chatChannelPlaceholder")}
           maxLength={CHAT_BODY_LIMIT}
@@ -358,16 +380,21 @@ export function LiveChat({ connection, state, projectId, account }: { connection
       ) : (
         <>
           {sessions.length > 1 ? (
-            <label className="chat-pick">
+            <div className="chat-pick">
               <span className="muted small">{t("chatSession")}</span>
-              <select value={picked} onChange={(event) => setPicked(event.target.value)} disabled={joined === "yes"}>
-                {sessions.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.title ?? t("chatSessionBy", { who: s.openedBy })}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <SelectPanel
+                label={t("chatSession")}
+                size="small"
+                value={picked}
+                onChange={setPicked}
+                disabled={joined === "yes"}
+                options={sessions.map((s) => ({
+                  value: s.id,
+                  label: s.title ?? t("chatSessionBy", { who: s.openedBy }),
+                  description: s.title === undefined ? undefined : t("chatSessionBy", { who: s.openedBy }),
+                }))}
+              />
+            </div>
           ) : null}
           {session !== undefined ? (
             <div className="chat-members">

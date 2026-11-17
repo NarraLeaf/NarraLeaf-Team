@@ -5,6 +5,7 @@
  * Every step announces itself, because the first one can take a minute on a
  * slow connection and a silent program is indistinguishable from a stuck one.
  */
+import { Housekeeping } from "./identity/housekeeping.js";
 import { createServer, type IncomingMessage, type RequestListener, type Server } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
@@ -57,7 +58,10 @@ import { openProjectFiles } from "./authority/project.js";
 import { OwedBytesStore } from "./authority/owedBytes.js";
 import { loadProjectFiles } from "./authority/projectFiles.js";
 import { commitSnapshot } from "./projects/workingCopy.js";
-import { projectDocTopic, projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
+import { accountNotificationsTopic, projectDocTopic, projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
+import { digestJob } from "./collab/digest.js";
+import { backupJob, removePidFile, writePidFile } from "./backup.js";
+import { setNotificationAnnouncer } from "./collab/notifications.js";
 import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
 import { ensureCertificates } from "./tls/authority.js";
@@ -206,6 +210,8 @@ export async function up(
   let team: TeamSocket | undefined;
   /** Where a live session's files wait for the machines that are short of them. */
   let blobs: TeamBlobStore | undefined;
+  let housekeeping: Housekeeping | undefined;
+  let pidWritten = false;
 
   try {
     const artifact = resolveArtifact();
@@ -219,6 +225,9 @@ export async function up(
     // Identity comes up first: it is quick, and a port already taken is worth
     // discovering before a download rather than after one.
     database = await openMigratedDatabase(identity.databasePath);
+    // So `nlteam restore` can tell a server is running here and refuse.
+    await writePidFile(identity.root);
+    pidWritten = true;
     // What this server is being brought up as, written down before anything can
     // mint against it. A token's audience depends on the ports and the host
     // names, and a `nlteam token mint` run in another terminal has no command
@@ -368,6 +377,19 @@ export async function up(
     });
     readings = projects;
 
+    // Retention, webhook retries and the other jobs that run on the hour.
+    housekeeping = new Housekeeping(database);
+    // Daily and weekly digests: whoever is due when the hour comes round.
+    housekeeping.add(digestJob);
+    // Scheduled backups, when `backup.every_hours` asks for them.
+    housekeeping.add(backupJob(identity.root, (line) => stdout(`${line}\n`)));
+    housekeeping.start();
+    // Notifications written away from a request (a watched project's commit found by a refresh)
+    // reach the account's open sessions through the hub, once there is one.
+    setNotificationAnnouncer((accountId, notification) => {
+      team?.hub.publish(accountNotificationsTopic(accountId), { kind: "notification", notification }, new Set([accountId]));
+    });
+
     // Opened before the service below, because whether there is one is part of
     // what this server announces. Opening empties the directory: a file in it
     // belongs to a live session, live sessions are held in memory, and this
@@ -494,7 +516,7 @@ export async function up(
       identity: identityRoutes,
       studio,
       blobs: { store: blobStore, presence: socket.presence, service: studio },
-      console: { service: studio, root: consoleRoot() },
+      console: { service: studio, root: consoleRoot(), publish: (topic, payload) => socket.hub.publish(topic, payload) },
     });
     const upgradeTeam = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
       if (team?.handleUpgrade(request, socket, head) === true) {
@@ -735,10 +757,13 @@ export async function up(
     // It holds a sweep timer and parked readers, each of which is a response
     // waiting for a byte that is not going to come now.
     blobs?.close();
+    housekeeping?.stop();
+    setNotificationAnnouncer(undefined);
     // It holds a timer and a reader that would go on reading repositories
     // through a database that is about to be closed under it.
     readings?.stop();
     database?.close();
+    if (pidWritten) await removePidFile(identity.root);
   }
 }
 

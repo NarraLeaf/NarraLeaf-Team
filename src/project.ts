@@ -385,7 +385,7 @@ export async function projectList(
   const database = await openMigratedDatabase(layout.databasePath);
 
   try {
-    const names = new Map(listUsers(database).map((user) => [user.id, user.username]));
+    const names = new Map(listUsers(database, { includeDeleted: true }).map((user) => [user.id, user.username]));
     renderProjects(
       listProjects(database).map((project) => ({
         name: project.name,

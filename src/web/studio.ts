@@ -34,7 +34,18 @@ import {
   sharedSignInLimiter,
 } from "../identity/signin.js";
 import { mintToken } from "../identity/tokens.js";
-import { authenticate, SIGN_IN_REFUSED_MESSAGE, type UserRecord } from "../identity/users.js";
+import {
+  authenticate,
+  clearFailedSignIns,
+  normaliseUsername,
+  recordFailedSignIn,
+  SIGN_IN_REFUSED_MESSAGE,
+  type UserRecord,
+} from "../identity/users.js";
+import { LDAP_BIND, LDAP_URL, readPolicy } from "../identity/policy.js";
+import { bindDnFor, ldapBind } from "../identity/ldap.js";
+import { externalAccount } from "../identity/sso.js";
+import { totpEnabled, twoFactorRequired, verifySecondFactor } from "../identity/totp.js";
 import { mintingConfig, type TeamService } from "../team/service.js";
 import { originIsOurs, remoteAddressOf } from "./origin.js";
 
@@ -253,8 +264,21 @@ async function answerSignIn(
     case "refused":
       refuse(response, 401, SIGN_IN_REFUSED_MESSAGE);
       return;
+    case "second-factor":
+      sendJson(response, 401, { error: SECOND_FACTOR_MESSAGE, secondFactor: true });
+      return;
+    case "bad-code":
+      sendJson(response, 401, { error: BAD_CODE_MESSAGE, secondFactor: true });
+      return;
     case "accepted":
       break;
+  }
+  // A server that asks every account for a second step is set up in the
+  // console, which can show the secret and take the first code; Studio can
+  // only take codes. Until then, Studio is told where to go.
+  if (twoFactorRequired(options.database, outcome.user.id) && !totpEnabled(options.database, outcome.user.id)) {
+    sendJson(response, 403, { error: ENROLL_FIRST_MESSAGE, enrollTwoFactor: true });
+    return;
   }
   const result = { user: outcome.user };
 
@@ -279,6 +303,12 @@ async function answerSignIn(
   });
 }
 
+/** What a sign-in answers when the account wants a code from its authenticator as well. */
+export const SECOND_FACTOR_MESSAGE = "this account signs in with a code from its authenticator app as well";
+export const BAD_CODE_MESSAGE = "that code is not right";
+export const ENROLL_FIRST_MESSAGE =
+  "this server asks every account for two-step sign-in; sign in to the web console once to set it up, then sign in here";
+
 /** What a username and a password amounted to. */
 export type SignInOutcome =
   | { readonly kind: "accepted"; readonly user: UserRecord }
@@ -287,7 +317,11 @@ export type SignInOutcome =
   /** Refused often enough from here that this one was not tried. */
   | { readonly kind: "held"; readonly seconds: number }
   /** Not this account, not this password, or not an account a person signs in to. */
-  | { readonly kind: "refused" };
+  | { readonly kind: "refused" }
+  /** The password was right and this account asks for a code as well; send it again with `code`. */
+  | { readonly kind: "second-factor" }
+  /** The password was right and the code was not. */
+  | { readonly kind: "bad-code" };
 
 /**
  * Read a sign-in body and check it, with every guard this door has.
@@ -335,8 +369,27 @@ export async function checkSignIn(
     username,
     password,
   );
-  if (result.kind === "refused" || result.user.isServiceAccount) {
-    if (result.kind === "refused") {
+  if (result.kind === "refused" && result.reason === "locked") {
+    // Answered as a hold, which the limiter also gives for a name that does not exist, so it
+    // says how long to wait and nothing more about the account.
+    const seconds = Math.max(1, Math.ceil((result.until - Date.now()) / 1000));
+    limiter.refused(username, address);
+    options.log?.(`${door}: sign-in for ${JSON.stringify(username)} refused, the account is locked`);
+    return { kind: "held", seconds: Math.min(seconds, 24 * 60 * 60) };
+  }
+  let user: UserRecord | undefined = result.kind === "signed-in" ? result.user : undefined;
+  // A directory, when one is set up and the local password did not do: the
+  // person's directory password is checked by binding as them, and the account
+  // here is found or made from the name they typed.
+  if (
+    user === undefined &&
+    result.kind === "refused" &&
+    (result.reason === "no-such-user" || result.reason === "wrong-password")
+  ) {
+    user = await directorySignIn(options, username, password);
+  }
+  if (user === undefined || user.isServiceAccount) {
+    if (user === undefined) {
       limiter.refused(username, address);
     } else {
       // The password was right; the account is simply not one a person signs
@@ -347,7 +400,48 @@ export async function checkSignIn(
     options.log?.(`${door}: sign-in refused for ${JSON.stringify(username)}`);
     return { kind: "refused" };
   }
-  limiter.accepted(username, address);
 
-  return { kind: "accepted", user: result.user };
+  // The second step, for an account that has turned it on. Asked for only once
+  // the password was right, so the question itself says nothing about who has
+  // an account here.
+  if (totpEnabled(options.database, user.id)) {
+    const code = text(body, "code");
+    if (code === undefined) {
+      return { kind: "second-factor" };
+    }
+    if (!verifySecondFactor(options.database, user.id, code)) {
+      limiter.refused(username, address);
+      recordFailedSignIn(options.database, user.id);
+      await holdRefusedSignIn();
+      options.log?.(`${door}: second step refused for ${JSON.stringify(username)}`);
+      return { kind: "bad-code" };
+    }
+  }
+  limiter.accepted(username, address);
+  clearFailedSignIns(options.database, user.id);
+
+  return { kind: "accepted", user };
+}
+
+/** A sign-in checked against `sso.ldap_url`, or undefined. */
+async function directorySignIn(
+  options: TeamService,
+  username: string,
+  password: string,
+): Promise<UserRecord | undefined> {
+  const url = readPolicy(options.database, LDAP_URL);
+  const template = readPolicy(options.database, LDAP_BIND);
+  if (url === "" || template === "" || !template.includes("{username}")) {
+    return undefined;
+  }
+  const name = normaliseUsername(username);
+  if (!(await ldapBind(url, bindDnFor(template, name), password))) {
+    return undefined;
+  }
+  const matched = await externalAccount(options.database, { provider: "ldap", subject: name, username: name });
+  if (matched.kind !== "matched") {
+    return undefined;
+  }
+  options.log?.(`studio: ${matched.user.username} signed in through the directory${matched.created ? " (account made)" : ""}`);
+  return matched.user;
 }

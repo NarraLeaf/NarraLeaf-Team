@@ -16,18 +16,24 @@ export class SignInError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** The password was right and a code from the account's authenticator is wanted too. */
+    readonly secondFactor = false,
   ) {
     super(message);
   }
 }
 
-async function readError(response: Response): Promise<string> {
+async function readBody(response: Response): Promise<{ error: string; secondFactor: boolean }> {
   try {
-    const body = (await response.json()) as { error?: unknown };
-    return typeof body.error === "string" ? body.error : response.statusText;
+    const body = (await response.json()) as { error?: unknown; secondFactor?: unknown };
+    return { error: typeof body.error === "string" ? body.error : response.statusText, secondFactor: body.secondFactor === true };
   } catch {
-    return response.statusText;
+    return { error: response.statusText, secondFactor: false };
   }
+}
+
+async function readError(response: Response): Promise<string> {
+  return (await readBody(response)).error;
 }
 
 /** Whether every page carries the viewer's name across it, as an operator set. */
@@ -36,8 +42,20 @@ export interface Watermark {
   readonly text?: string;
 }
 
+/** Whether this server asks for two-step sign-in, and whether this account has it. */
+export interface TwoFactorState {
+  readonly required: boolean;
+  readonly enabled: boolean;
+}
+
+export interface ConsoleSession {
+  readonly account: ConsoleAccount;
+  readonly watermark: Watermark;
+  readonly twoFactor: TwoFactorState;
+}
+
 /** The signed-in account and what the server says to draw over it, or undefined when there is no session. */
-export async function currentSession(): Promise<{ account: ConsoleAccount; watermark: Watermark } | undefined> {
+export async function currentSession(): Promise<ConsoleSession | undefined> {
   const response = await fetch("/api/console/v1/session", { credentials: "same-origin" });
   if (response.status === 401) {
     return undefined;
@@ -45,8 +63,8 @@ export async function currentSession(): Promise<{ account: ConsoleAccount; water
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-  const body = (await response.json()) as { account: ConsoleAccount; watermark?: Watermark };
-  return { account: body.account, watermark: body.watermark ?? { enabled: false } };
+  const body = (await response.json()) as { account: ConsoleAccount; watermark?: Watermark; twoFactor?: TwoFactorState };
+  return { account: body.account, watermark: body.watermark ?? { enabled: false }, twoFactor: body.twoFactor ?? { required: false, enabled: false } };
 }
 
 /** The signed-in account, or undefined when there is no session. */
@@ -77,15 +95,16 @@ export async function setUp(form: SetupForm): Promise<ConsoleAccount> {
   return ((await response.json()) as { account: ConsoleAccount }).account;
 }
 
-export async function signIn(username: string, password: string): Promise<ConsoleAccount> {
+export async function signIn(username: string, password: string, code?: string): Promise<ConsoleAccount> {
   const response = await fetch("/api/console/v1/sign-in", {
     method: "POST",
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, ...(code === undefined ? {} : { code }) }),
   });
   if (!response.ok) {
-    throw new SignInError(await readError(response), response.status);
+    const body = await readBody(response);
+    throw new SignInError(body.error, response.status, body.secondFactor);
   }
   return ((await response.json()) as { account: ConsoleAccount }).account;
 }

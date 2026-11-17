@@ -5,15 +5,15 @@
  * what it holds as a new revision - a history version. Between the two everything happens in the
  * authority, and nothing is written to the repository except by a snapshot.
  */
-import { commitSnapshot, ensureWorkingCopy, readWorkingFile, workingCopyHead, type SnapshotResult, type WorkingCopyOptions } from "../projects/workingCopy.js";
+import { commitSnapshot, ensureWorkingCopy, readWorkingBytes, workingCopyHead, type SnapshotResult, type WorkingCopyOptions } from "../projects/workingCopy.js";
 import { listCheckedOutFiles, loadProjectFiles, type LoadedProject } from "./projectFiles.js";
 import { ProjectAuthority } from "./projectAuthority.js";
 
-/** The project's documents at the latest revision of its repository. */
+/** The project's documents at the latest revision of its repository, read as bytes so a picture stays one. */
 export async function openProjectFiles(options: WorkingCopyOptions): Promise<LoadedProject> {
   const copy = await ensureWorkingCopy(options);
   const revision = await workingCopyHead(copy, options);
-  const loaded = await loadProjectFiles(await listCheckedOutFiles(copy.path), (path) => readWorkingFile(copy, path));
+  const loaded = await loadProjectFiles(await listCheckedOutFiles(copy.path), (path) => readWorkingBytes(copy, path));
   return { ...loaded, ...(revision === undefined ? {} : { revision }) };
 }
 

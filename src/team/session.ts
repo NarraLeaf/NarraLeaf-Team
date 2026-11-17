@@ -31,6 +31,9 @@
  * a code it can act on plus a line in the operator's log.
  */
 import { isOperator, type UserRecord } from "../identity/users.js";
+import type { ApiTokenLimits } from "../identity/apitokens.js";
+import { totpEnabled, twoFactorRequired } from "../identity/totp.js";
+import type { DatabaseSync } from "node:sqlite";
 import { judgeCollaboration } from "./collaboration.js";
 import type { TeamService } from "./service.js";
 import type { TeamHub, HubSession } from "./hub.js";
@@ -156,7 +159,7 @@ function closeCodeFor(code: TeamErrorCode): number {
 
 /** What asking a session's credential again answers. */
 export type SessionIdentity =
-  | { readonly kind: "identified"; readonly user: UserRecord }
+  | { readonly kind: "identified"; readonly user: UserRecord; readonly limits?: ApiTokenLimits }
   | { readonly kind: "refused"; readonly detail: string };
 
 export class TeamSession implements HubSession {
@@ -179,6 +182,8 @@ export class TeamSession implements HubSession {
   private inFlight = 0;
   private revalidation: NodeJS.Timeout | undefined;
   private over = false;
+  /** What the credential this session opened with may do, when it is an API token. */
+  private limits: ApiTokenLimits | undefined;
 
   constructor(options: SessionOptions) {
     this.options = options;
@@ -340,6 +345,11 @@ export class TeamSession implements HubSession {
       this.fail(id, "refused", collaboration.detail);
       return;
     }
+    const gated = gateCall(this.options.service.database, user, this.limits, method.name, frame.params);
+    if (gated !== undefined) {
+      this.fail(id, "refused", gated);
+      return;
+    }
 
     const context: MethodContext = {
       options: this.options.service,
@@ -353,6 +363,7 @@ export class TeamSession implements HubSession {
       recheck: (userId) => {
         this.options.hub.recheck(userId);
       },
+      online: (userId) => this.options.hub.isOnline(userId),
     };
 
     this.inFlight += 1;
@@ -415,6 +426,17 @@ export class TeamSession implements HubSession {
     }
     if (verdict.kind === "refused") {
       this.fail(id, "refused", verdict.detail);
+      return;
+    }
+    const topicProject = projectOfTopic(frame.topic);
+    const gated =
+      this.limits?.projects !== undefined && topicProject !== undefined && !this.limits.projects.includes(topicProject)
+        ? "this API token does not reach that project"
+        : isAdminTopic(frame.topic) && this.limits !== undefined
+          ? "an API token does not reach the management plane"
+          : gateCall(this.options.service.database, user, this.limits, "topic.subscribe.list", undefined);
+    if (gated !== undefined) {
+      this.fail(id, "refused", gated);
       return;
     }
 
@@ -540,6 +562,7 @@ export class TeamSession implements HubSession {
       this.bye("unauthenticated", identified.detail);
       return undefined;
     }
+    this.limits = identified.limits;
     this.withdrawManagement(identified.user);
     this.withdrawProjects(identified.user);
     return identified.user;
@@ -560,3 +583,77 @@ export class TeamSession implements HubSession {
     this.options.connection.send(JSON.stringify(frame));
   }
 }
+
+/** The last part of a method name that only reads, as an API token without write may call. */
+const READ_ENDINGS = new Set([
+  "list", "get", "history", "discover", "deliveries", "heatmap", "locks", "prefs", "head",
+  "effects", "base", "files", "file", "status", "ping", "byCode", "key", "usage",
+]);
+
+/** Whether a method only reads, by the last part of its name. */
+export function readsOnly(method: string): boolean {
+  return READ_ENDINGS.has(method.slice(method.lastIndexOf(".") + 1));
+}
+
+/**
+ * The refusal for one call that its credential or this server's policy does not
+ * allow, or undefined.
+ *
+ * Two rules. An API token never reaches the management plane or makes tokens,
+ * reads only unless it was made to write, and reaches only the projects it
+ * names. And while `security.require_two_factor` is on, an account without a
+ * second factor can do nothing but set one up.
+ */
+export function gateCall(
+  database: DatabaseSync,
+  user: UserRecord,
+  limits: ApiTokenLimits | undefined,
+  method: string,
+  params: unknown,
+): string | undefined {
+  const ref =
+    params !== null && typeof params === "object" ? (params as Record<string, unknown>)["project"] : undefined;
+  const project =
+    typeof ref === "string"
+      ? (database.prepare("SELECT id, archived_at FROM projects WHERE id = ? OR name = ?").get(ref, ref) as
+          | Record<string, unknown>
+          | undefined)
+      : undefined;
+  if (limits !== undefined) {
+    if (method.startsWith("admin.") || method.startsWith("account.")) {
+      return "an API token does not reach the management plane or this account's own settings";
+    }
+    if (!limits.write && !readsOnly(method)) {
+      return "this API token reads only";
+    }
+    if (limits.projects !== undefined && typeof ref === "string") {
+      const id = project === undefined ? ref : String(project["id"]);
+      if (!limits.projects.includes(id)) {
+        return "this API token does not reach that project";
+      }
+    }
+  } else if (
+    !method.startsWith("account.totp.") &&
+    !method.startsWith("server.") &&
+    // So a client can say why it is being held, and by whom.
+    method !== "account.policy" &&
+    twoFactorRequired(database, user.id) &&
+    !totpEnabled(database, user.id)
+  ) {
+    return "two-step sign-in is required for this account; set it up first";
+  }
+  // An archived project is read-only for everybody: what it holds may be read,
+  // and the only thing done to it is bringing it back or removing it.
+  if (
+    project !== undefined &&
+    project["archived_at"] !== null &&
+    !readsOnly(method) &&
+    !ARCHIVE_EXEMPT.has(method)
+  ) {
+    return "this project is archived; restore it to change anything in it";
+  }
+  return undefined;
+}
+
+/** What may still be done to an archived project. */
+const ARCHIVE_EXEMPT = new Set(["projects.restore", "projects.archive", "projects.forget", "projects.update"]);

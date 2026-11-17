@@ -42,8 +42,11 @@ import { liveMethods } from "./methods/live.js";
 import { overlayMethods } from "./methods/overlay.js";
 import { docMethods } from "./methods/doc.js";
 import { serverMethods } from "./methods/server.js";
+import { notifyMethods } from "./methods/notify.js";
+import { planningMethods } from "./methods/planning.js";
 import { projectMethods } from "./methods/projects.js";
 import { accessMethods } from "./methods/access.js";
+import { securityMethods } from "./methods/security.js";
 import { TeamPresence } from "./presence.js";
 import {
   ANSWER_BYTES_LIMIT,
@@ -53,7 +56,9 @@ import {
 } from "./protocol.js";
 import { TeamSession, type SessionIdentity } from "./session.js";
 import { describeWebSessionRefusal, identifyWebSession, webSessionCookie } from "../identity/websessions.js";
-import { sameOrigin } from "../web/origin.js";
+import { remoteAddressOf, sameOrigin } from "../web/origin.js";
+import { addressAllowed } from "../identity/policy.js";
+import { API_TOKEN_PREFIX, identifyApiToken } from "../identity/apitokens.js";
 import { completeUpgrade, isWebSocketUpgrade, refuseUpgrade } from "./websocket.js";
 
 /**
@@ -156,6 +161,17 @@ function credentialOf(
   const cookie = webSessionCookie(request.headers.cookie);
   if (authorization !== undefined || cookie === undefined) {
     const token = bearerToken(authorization);
+    if (token !== undefined && token.startsWith(API_TOKEN_PREFIX)) {
+      return {
+        kind: "ok",
+        identify: () => {
+          const identified = identifyApiToken(service.database, token);
+          return identified.kind === "identified"
+            ? { kind: "identified", user: identified.user, limits: identified.limits }
+            : { kind: "refused", detail: identified.detail };
+        },
+      };
+    }
     return {
       kind: "ok",
       identify: () => {
@@ -186,7 +202,10 @@ export function teamMethods(): readonly TeamMethod[] {
     ...projectMethods(),
     ...accessMethods(),
     ...accountMethods(),
+    ...securityMethods(),
     ...collabMethods(),
+    ...notifyMethods(),
+    ...planningMethods(),
     ...productionMethods(),
     ...commentMethods(),
     ...clientMethods(),
@@ -234,6 +253,11 @@ export function createTeamSocket(options: TeamSocketOptions): TeamSocket {
     }
     if (!isWebSocketUpgrade(request)) {
       refuseUpgrade(socket, 400, "that is not a WebSocket handshake this server speaks");
+      return true;
+    }
+
+    if (!addressAllowed(options.service.database, remoteAddressOf(request))) {
+      refuseUpgrade(socket, 403, "this server does not take requests from your network");
       return true;
     }
 

@@ -227,6 +227,22 @@ async function answer(
     if (answered) return;
     revision = "head";
   }
+  await answerRevision(service, request, response, { projectId: project.id, kind: asked.kind, revision, filePath });
+}
+
+/**
+ * Answer a tree or a file of one revision of a project the caller may already read. `shows`, where
+ * given, is the list of paths the caller may see - a share link's - and holds both the tree and the
+ * file to it: a path it does not show is not there.
+ */
+export async function answerRevision(
+  service: TeamService,
+  request: IncomingMessage,
+  response: ServerResponse,
+  asked: { projectId: string; kind: "tree" | "raw"; revision: string; filePath: string; shows?: (path: string) => boolean },
+): Promise<void> {
+  const { revision, filePath, shows } = asked;
+  const project = { id: asked.projectId };
   if (revision !== "head" && !/^[A-Za-z0-9]{8,128}$/.test(revision)) {
     refuse(response, 400, "that is not a revision id");
     return;
@@ -247,8 +263,8 @@ async function answer(
   if (asked.kind === "tree") {
     const listed = await readings(project.id, revision, async (tree) => ({
       revision: tree.revision,
-      files: tree.files.slice(0, MAXIMUM_TREE_FILES),
-      total: tree.files.length,
+      files: (shows === undefined ? tree.files : tree.files.filter((file) => shows(file.path))).slice(0, MAXIMUM_TREE_FILES),
+      total: shows === undefined ? tree.files.length : tree.files.filter((file) => shows(file.path)).length,
     }));
     if (listed === undefined) {
       refuse(response, 404, "Team has not read that revision of this project");
@@ -262,7 +278,7 @@ async function answer(
     return;
   }
 
-  if (filePath === "" || filePath.includes("\0")) {
+  if (filePath === "" || filePath.includes("\0") || (shows !== undefined && !shows(filePath))) {
     refuse(response, 404, "there is nothing at that address");
     return;
   }

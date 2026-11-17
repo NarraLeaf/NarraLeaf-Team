@@ -19,6 +19,7 @@ import { stat, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { describeDuration } from "./duration.js";
+import { POLICIES, policyStored, shownPolicy } from "./identity/policy.js";
 import { audienceHosts, hostOf, type IdentityConfig } from "./identity/config.js";
 import {
   COLLABORATION_KEY,
@@ -188,7 +189,7 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
   const lifetimes = storedTokenLifetimes(context.database);
   const storageRoot = storageRootOf(context.root);
   const { config, database } = context;
-  return [
+  const rows: TeamAdminSetting[] = [
     {
       group: "server",
       label: SERVER_NAME_SETTING,
@@ -294,4 +295,16 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       editable: false,
     },
   ];
+  // The policies come last, so that the rows above keep the positions a command
+  // line already finds them by.
+  for (const policy of POLICIES) {
+    rows.push({
+      group: policy.group,
+      label: policy.label,
+      value: shownPolicy(database, policy),
+      stored: policyStored(database, policy.key),
+      editable: true,
+    });
+  }
+  return rows;
 }

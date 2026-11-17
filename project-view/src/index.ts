@@ -100,7 +100,7 @@ export function normalisePath(path: string): string {
 
 /** How a line of the script reads, which is all a viewer needs to draw it. */
 export type StoryRow =
-  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "narration"; readonly text: string }
+  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "narration"; readonly text: string; readonly textId?: string }
   | {
       readonly id: string;
       readonly depth: number;
@@ -109,9 +109,13 @@ export type StoryRow =
       /** A Studio character, resolved through {@link readCharacters}, or a bare name. */
       readonly speaker: { readonly characterId: string } | { readonly name: string } | undefined;
       readonly text: string;
+      /** The line's translation unit and voice id: one key for text, translation and voice. */
+      readonly textId?: string;
+      /** The clip the line plays, as an asset id. */
+      readonly voiceAssetId?: string;
     }
-  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "choice"; readonly text: string }
-  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "option"; readonly text: string }
+  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "choice"; readonly text: string; readonly textId?: string }
+  | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "option"; readonly text: string; readonly textId?: string }
   | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "note"; readonly text: string }
   | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "invalid"; readonly text: string }
   | { readonly id: string; readonly depth: number; readonly disabled: boolean; readonly kind: "empty" }
@@ -127,12 +131,18 @@ export type StoryRow =
       readonly kind: "command";
       readonly command: string;
       readonly detail?: string;
+      /** The block's own kind (`action`, `control`, `jump`, `declaration`, `nodeAction`…). */
+      readonly block: string;
+      /** Everything the block says, for a viewer that names what the step acts on. */
+      readonly payload: Readonly<Record<string, Json>>;
     };
 
 export interface StoryScene {
   readonly id: string;
   readonly name: string;
   readonly description?: string;
+  /** The image the scene opens on, as an asset id. */
+  readonly backgroundAssetId?: string;
   readonly rows: readonly StoryRow[];
 }
 
@@ -161,6 +171,12 @@ function segmentText(segment: Json): string {
   return text(value?.["value"]) ?? "";
 }
 
+/** A text segment's unit id (`{ textId, value }`), as a `textId` field to spread into a row. */
+function segmentId(segment: Json): { textId?: string } {
+  const textId = text(record(segment)?.["textId"]);
+  return textId === undefined || textId === "" ? {} : { textId };
+}
+
 /** A command's name and the one detail worth showing, from an `action` / `control` / `jump` payload. */
 function commandOf(kind: string, payload: Record<string, Json>): { command: string; detail?: string } {
   const command = text(payload["action"]) ?? text(payload["control"]) ?? text(payload["operation"]) ?? kind;
@@ -181,20 +197,23 @@ function rowOf(block: Record<string, Json>, depth: number): StoryRow | undefined
   switch (kind) {
     case "nodeAction": {
       const action = text(payload["action"]);
-      if (action === "narration") return { ...base, kind: "narration", text: segmentText(payload["text"]) };
+      if (action === "narration") return { ...base, kind: "narration", text: segmentText(payload["text"]), ...segmentId(payload["text"]) };
       if (action === "dialogue") {
         const characterId = text(payload["characterId"]);
         const name = text(payload["speakerName"]);
+        const voiceAssetId = text(payload["voiceAssetId"]);
         return {
           ...base,
           kind: "dialogue",
           speaker: characterId !== undefined ? { characterId } : name !== undefined ? { name } : undefined,
           text: segmentText(payload["text"]),
+          ...segmentId(payload["text"]),
+          ...(voiceAssetId === undefined || voiceAssetId === "" ? {} : { voiceAssetId }),
         };
       }
-      if (action === "choice") return { ...base, kind: "choice", text: segmentText(payload["prompt"]) };
-      if (action === "choiceOption") return { ...base, kind: "option", text: segmentText(payload["text"]) };
-      return { ...base, kind: "command", command: action ?? kind };
+      if (action === "choice") return { ...base, kind: "choice", text: segmentText(payload["prompt"]), ...segmentId(payload["prompt"]) };
+      if (action === "choiceOption") return { ...base, kind: "option", text: segmentText(payload["text"]), ...segmentId(payload["text"]) };
+      return { ...base, kind: "command", command: action ?? kind, block: kind, payload };
     }
     case "note":
       return { ...base, kind: "note", text: segmentText(payload["text"]) || (text(payload["text"]) ?? "") };
@@ -203,9 +222,9 @@ function rowOf(block: Record<string, Json>, depth: number): StoryRow | undefined
     case "empty":
       return { ...base, kind: "empty" };
     case "declaration":
-      return { ...base, kind: "command", command: "declare", detail: text(payload["name"]) ?? "" };
+      return { ...base, kind: "command", command: "declare", detail: text(payload["name"]) ?? "", block: kind, payload };
     default:
-      return { ...base, kind: "command", ...commandOf(kind, payload) };
+      return { ...base, kind: "command", ...commandOf(kind, payload), block: kind, payload };
   }
 }
 
@@ -241,10 +260,12 @@ export function readStoryDocument(json: Json): StoryDocumentView | Unsupported {
     const scene = record(value);
     if (scene === undefined) continue;
     const description = text(scene["description"]);
+    const backgroundAssetId = text(scene["defaultBackgroundAssetId"]);
     scenes[key] = {
       id: text(scene["id"]) ?? key,
       name: text(scene["name"]) ?? key,
       ...(description === undefined || description === "" ? {} : { description }),
+      ...(backgroundAssetId === undefined || backgroundAssetId === "" ? {} : { backgroundAssetId }),
       rows: rowsOf(scene),
     };
   }
@@ -278,6 +299,8 @@ export interface CharacterView {
   readonly name: string;
   readonly description: string;
   readonly nicknames: readonly string[];
+  /** Where its default face is drawn, when Studio has baked one. */
+  readonly avatarPath?: string;
 }
 
 /** The characters, by id. A store this cannot read is an empty map: lines then show their bare ids. */
@@ -288,14 +311,42 @@ export function readCharacters(json: Json): ReadonlyMap<string, CharacterView> {
     const profile = record(record(entry)?.["profile"]);
     const id = text(profile?.["id"]);
     if (profile === undefined || id === undefined) continue;
+    const appearance = record(profile["appearance"]);
+    const pose = text(appearance?.["defaultPoseId"]);
+    const baked = pose !== undefined && record(record(appearance?.["avatars"])?.[pose]) !== undefined;
     characters.set(id, {
       id,
+      ...(baked ? { avatarPath: `resources/characters/avatars/${id}/${pose}.png` } : {}),
       name: text(profile["name"]) ?? id,
       description: text(profile["description"]) ?? "",
       nicknames: list(profile["nicknames"]).flatMap((n) => (typeof n === "string" ? [n] : [])),
     });
   }
   return characters;
+}
+
+/* ------------------------------------------------------------- variables */
+
+export const VARIABLE_STORE_PATH = "editor/variables.json";
+
+export interface VariableView {
+  readonly id: string;
+  readonly name: string;
+  /** `saved`, `persistent`, or `scene`. */
+  readonly scope: string;
+  readonly valueType: string;
+}
+
+/** The project's variables, by id. A store this cannot read is an empty map. */
+export function readVariables(json: Json): ReadonlyMap<string, VariableView> {
+  const variables = new Map<string, VariableView>();
+  for (const [key, value] of Object.entries(record(record(json)?.["entries"]) ?? {})) {
+    const entry = record(value);
+    if (entry === undefined) continue;
+    const id = text(entry["id"]) ?? key;
+    variables.set(id, { id, name: text(entry["name"]) ?? id, scope: text(entry["scope"]) ?? "", valueType: text(entry["valueType"]) ?? "" });
+  }
+  return variables;
 }
 
 /* ---------------------------------------------------------------- assets */
