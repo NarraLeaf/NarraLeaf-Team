@@ -51,7 +51,7 @@ function contextFor(database: DatabaseSync, name: string, published: unknown[] =
     user,
     account: { username: user.username, displayName: user.displayName } as unknown as MethodContext["account"],
     publish: (_topic, payload) => published.push(payload),
-    connection: { id: "c" },
+    connection: { id: "c", kernel: { agree: () => {}, forget: () => {}, agreed: () => true } },
     presence: {} as MethodContext["presence"],
   };
 }

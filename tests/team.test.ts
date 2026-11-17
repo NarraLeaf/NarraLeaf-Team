@@ -5486,6 +5486,8 @@ describe("a team project's documents, with this server as their authority", () =
   it("refuses an edit to an asset somebody else holds, and lets it through once they let go", async () => {
     const { ada, bob, project, team } = await withDocuments();
     setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    await follow(ada, project);
+    await follow(bob, project);
     const editAsset = {
       project,
       clientId: "client-asset",
