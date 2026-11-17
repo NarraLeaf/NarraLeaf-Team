@@ -1168,6 +1168,17 @@ const MIGRATIONS: readonly Migration[] = [
        ) STRICT`,
     ],
   },
+  {
+    version: 30,
+    description: "deleted accounts, and accounts locked after wrong passwords",
+    statements: [
+      // A deleted account keeps its row, so the history that names it still resolves, and its
+      // name, so nobody else can take it and be mistaken for it.
+      "ALTER TABLE users ADD COLUMN deleted_at INTEGER",
+      "ALTER TABLE users ADD COLUMN failed_signins INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE users ADD COLUMN locked_until INTEGER",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

@@ -35,6 +35,8 @@ export const WEBHOOKS_ALLOW_PRIVATE = "webhooks.allow_private";
 export const STUDIO_ACCESS_HOURS = "token.studio_access_hours";
 export const REQUIRE_TWO_FACTOR = "security.require_two_factor";
 export const ALLOWED_NETWORKS = "security.allowed_networks";
+export const LOCKOUT_ATTEMPTS = "security.lockout_attempts";
+export const LOCKOUT_MINUTES = "security.lockout_minutes";
 export const STORAGE_QUOTA_MB = "storage.project_quota_mb";
 export const BUILD_LIMIT_MB = "storage.build_limit_mb";
 export const BACKUP_EVERY_HOURS = "backup.every_hours";
@@ -64,6 +66,9 @@ export const POLICIES: readonly PolicyDefinition[] = [
   { key: STUDIO_ACCESS_HOURS, label: "studio access token (hours)", group: "tokens", kind: "number", fallback: "24", min: 1, max: 720 },
   { key: REQUIRE_TWO_FACTOR, label: "two-factor required", group: "security", kind: "switch", fallback: "off" },
   { key: ALLOWED_NETWORKS, label: "allowed networks", group: "security", kind: "networks", fallback: "" },
+  // Wrong passwords (or second steps) in a row before an account is locked; 0 never locks one.
+  { key: LOCKOUT_ATTEMPTS, label: "lock after wrong passwords", group: "security", kind: "number", fallback: "10", min: 0, max: 100 },
+  { key: LOCKOUT_MINUTES, label: "lock lasts (minutes)", group: "security", kind: "number", fallback: "15", min: 1, max: 1440 },
   { key: STORAGE_QUOTA_MB, label: "project storage quota (MB)", group: "storage", kind: "number", fallback: "0", min: 0, max: 10_000_000 },
   { key: BUILD_LIMIT_MB, label: "largest play build (MB)", group: "storage", kind: "number", fallback: "1024", min: 1, max: 100_000 },
   { key: BACKUP_EVERY_HOURS, label: "backup every (hours)", group: "backup", kind: "number", fallback: "0", min: 0, max: 24 * 30 },

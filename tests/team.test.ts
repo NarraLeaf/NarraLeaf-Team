@@ -3617,6 +3617,10 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminPoliciesSave,
   TEAM_METHODS.adminPoliciesDelete,
   TEAM_METHODS.adminUsersPolicySet,
+  TEAM_METHODS.adminUsersDelete,
+  TEAM_METHODS.adminUsersLock,
+  TEAM_METHODS.adminUsersUnlock,
+  TEAM_METHODS.adminUsersUpdate,
 ];
 
 /** Both halves, which is what the gate has to cover. */
@@ -4443,6 +4447,60 @@ describe("changing an account over the session", () => {
     expect((await ada.call(TEAM_METHODS.adminUsersDisable, { username: "nobody" })).code).toBe(
       "not-found",
     );
+  });
+});
+
+describe("deleting, locking and editing an account", () => {
+  it("deletes an account, takes it off the list and keeps its name", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+
+    const answer = await ada.value(TEAM_METHODS.adminUsersDelete, { username: "bob" });
+
+    expect(answer["deleted"]).toMatchObject({ username: "bob" });
+    const bob = requireUser(team.database, "bob");
+    expect(bob.deletedAt).toBeTypeOf("number");
+    expect(bob.disabledAt).toBeTypeOf("number");
+    expect(bob.groups).toEqual([]);
+    await watcher.until(() => watcher.events.length > 0);
+    expect(firstEventKind(watcher)).toBe("user-deleted");
+    const listed = (await ada.value(TEAM_METHODS.adminUsersList, {}))["users"] as { username: string }[];
+    expect(listed.map((user) => user.username)).not.toContain("bob");
+    // Gone for every other change, and not to be brought back.
+    expect((await ada.call(TEAM_METHODS.adminUsersEnable, { username: "bob" })).code).toBe("not-found");
+  });
+
+  it("will not delete the caller's own account", async () => {
+    const { ada, team } = await administered();
+    setAdmin(team.database, "bob", true);
+
+    expect((await ada.call(TEAM_METHODS.adminUsersDelete, { username: "ada" })).code).toBe("refused");
+  });
+
+  it("locks an account for a while and unlocks it again", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+
+    const locked = answered(await ada.value(TEAM_METHODS.adminUsersLock, { username: "bob", minutes: 30 }));
+    expect(locked["lockedUntil"]).toBeGreaterThan(Date.now() + 29 * 60_000);
+    await watcher.until(() => watcher.events.length > 0);
+    expect(firstEventKind(watcher)).toBe("user-locked");
+
+    const unlocked = answered(await ada.value(TEAM_METHODS.adminUsersUnlock, { username: "bob" }));
+    expect(unlocked["lockedUntil"]).toBeUndefined();
+    expect(requireUser(team.database, "bob").lockedUntil).toBeUndefined();
+    expect((await ada.call(TEAM_METHODS.adminUsersLock, { username: "bob", minutes: 0 })).code).toBe("bad-params");
+  });
+
+  it("changes another account's name and address", async () => {
+    const { ada, team } = await administered();
+
+    const changed = answered(
+      await ada.value(TEAM_METHODS.adminUsersUpdate, { username: "bob", displayName: "Bob Li", email: "bob@example.com" }),
+    );
+    expect(changed).toMatchObject({ displayName: "Bob Li", email: "bob@example.com" });
+
+    await ada.value(TEAM_METHODS.adminUsersUpdate, { username: "bob", email: "" });
+    expect(requireUser(team.database, "bob").email).toBeUndefined();
+    expect((await ada.call(TEAM_METHODS.adminUsersUpdate, { username: "bob", email: "not an address" })).code).toBe("bad-params");
   });
 });
 

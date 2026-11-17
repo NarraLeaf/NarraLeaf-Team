@@ -17,7 +17,7 @@ import type {
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
-import { ActionMenu, Checkbox, confirmAction, CopyText, Flash, RelativeTime, SettingsLayout, Skeleton, Subhead, toast, type MenuAction } from "./ui";
+import { ActionMenu, Checkbox, confirmAction, CopyText, Dialog, Flash, RelativeTime, SettingsLayout, Skeleton, Subhead, toast, type MenuAction } from "./ui";
 import { Icon, type IconName } from "./Icon";
 import { Face } from "./Collab";
 import { Webhooks } from "./Production";
@@ -144,11 +144,129 @@ export function Admin({
 
 /* ------------------------------------------------------------- accounts */
 
+/** A lock with no end is sent as the largest safe integer. */
+const FOREVER = Number.MAX_SAFE_INTEGER;
+
+function isLockedNow(user: TeamAdminUser): boolean {
+  return user.lockedUntil !== undefined && user.lockedUntil > Date.now();
+}
+
+function lockedTitle(user: TeamAdminUser): string {
+  return user.lockedUntil === undefined || user.lockedUntil >= FOREVER
+    ? t("lockedForever")
+    : t("lockedUntil", { time: new Date(user.lockedUntil).toLocaleString() });
+}
+
+/** An operator changing somebody's display name and address. */
+function ProfileDialog({
+  user,
+  onClose,
+  onSave,
+}: {
+  user: TeamAdminUser;
+  onClose: () => void;
+  onSave: (change: { displayName: string; email: string }) => Promise<void>;
+}) {
+  const [displayName, setDisplayName] = useState(user.displayName);
+  const [email, setEmail] = useState(user.email ?? "");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event?: FormEvent) => {
+    event?.preventDefault();
+    setBusy(true);
+    await onSave({ displayName: displayName.trim(), email: email.trim() });
+    setBusy(false);
+  };
+  return (
+    <Dialog
+      title={t("editProfileTitle", { name: user.displayName || user.username })}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            {t("cancel")}
+          </button>
+          <button className="btn btn-primary" disabled={busy || displayName.trim() === ""} onClick={() => void submit()}>
+            {t("save")}
+          </button>
+        </>
+      }
+    >
+      <form className="stack" onSubmit={(event) => void submit(event)}>
+        <label className="form-field">
+          <span className="form-label">{t("username")}</span>
+          <input value={user.username} disabled />
+        </label>
+        <label className="form-field">
+          <span className="form-label">{t("displayName")}</span>
+          <input value={displayName} maxLength={64} onChange={(event) => setDisplayName(event.target.value)} required autoFocus />
+        </label>
+        <label className="form-field">
+          <span className="form-label">{t("emailField")}</span>
+          <input type="email" value={email} maxLength={320} onChange={(event) => setEmail(event.target.value)} placeholder={t("emailNone")} />
+        </label>
+      </form>
+    </Dialog>
+  );
+}
+
+const LOCK_CHOICES: readonly { minutes: number | undefined; label: Phrase }[] = [
+  { minutes: 60, label: "lockHour" },
+  { minutes: 24 * 60, label: "lockDay" },
+  { minutes: 7 * 24 * 60, label: "lockWeek" },
+  { minutes: undefined, label: "lockUntilUnlocked" },
+];
+
+/** How long to keep an account from signing in. */
+function LockDialog({ name, onClose, onLock }: { name: string; onClose: () => void; onLock: (minutes: number | undefined) => Promise<void> }) {
+  const [choice, setChoice] = useState(0);
+  const [busy, setBusy] = useState(false);
+  return (
+    <Dialog
+      title={t("lockTitle", { name })}
+      onClose={onClose}
+      danger
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            {t("cancel")}
+          </button>
+          <button
+            className="btn btn-danger"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              void onLock(LOCK_CHOICES[choice]?.minutes).finally(() => setBusy(false));
+            }}
+          >
+            {t("lockAccount")}
+          </button>
+        </>
+      }
+    >
+      <div className="stack">
+        <p className="muted">{t("lockBody")}</p>
+        <fieldset className="policy-modes">
+          {LOCK_CHOICES.map((one, index) => (
+            <label key={one.label} className={choice === index ? "policy-mode active" : "policy-mode"}>
+              <input type="radio" name="lock-length" checked={choice === index} onChange={() => setChoice(index)} />
+              <span>
+                <strong>{t(one.label)}</strong>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      </div>
+    </Dialog>
+  );
+}
+
 function Accounts({ connection, me }: { connection: TeamConnection; me: string }) {
   const [users, setUsers] = useState<readonly TeamAdminUser[]>([]);
   const [query, setQuery] = useState("");
   const [form, setForm] = useState({ username: "", displayName: "", password: "" });
   const [policyFor, setPolicyFor] = useState<TeamAdminUser | undefined>(undefined);
+  const [editFor, setEditFor] = useState<TeamAdminUser | undefined>(undefined);
+  const [lockFor, setLockFor] = useState<TeamAdminUser | undefined>(undefined);
   const { run, view } = useAction();
   const load = useCallback(() => {
     void connection.call<{ users: TeamAdminUser[] }>("admin.users.list", { limit: 200 }).then((answer) => setUsers(answer.users));
@@ -163,6 +281,8 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
     const self = user.username === me;
     const creator = user.groups.includes("project-creator");
     const list: MenuAction[] = [];
+    const locked = isLockedNow(user);
+    list.push({ label: t("editProfile"), icon: "people", run: () => setEditFor(user) });
     if (!user.operator) {
       list.push({
         label: creator ? t("disallowCreate") : t("allowCreate"),
@@ -217,6 +337,15 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
         run: () =>
           askThen({ title: t("revokeTokensTitle", { name }), body: t("revokeTokensBody"), confirmLabel: t("revokeTokens") }, "admin.users.revokeTokens", user.username),
       },
+      locked
+        ? { label: t("unlockAccount"), icon: "lock", description: t("unlockAccountHint"), run: () => act("admin.users.unlock", user.username) }
+        : {
+            label: t("lockAccount"),
+            icon: "lock",
+            description: t("lockAccountHint"),
+            disabledReason: self ? t("notOnYourself") : undefined,
+            run: () => setLockFor(user),
+          },
       user.disabled
         ? { label: t("enable"), icon: "tick", run: () => act("admin.users.enable", user.username) }
         : {
@@ -231,6 +360,18 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
                 user.username,
               ),
           },
+      {
+        label: t("deleteAccount"),
+        icon: "trash",
+        danger: true,
+        disabledReason: self ? t("notOnYourself") : undefined,
+        run: () =>
+          askThen(
+            { title: t("deleteAccountTitle", { name }), body: t("deleteAccountBody"), confirmLabel: t("deleteAccount"), typeToConfirm: user.username },
+            "admin.users.delete",
+            user.username,
+          ),
+      },
     );
     return list;
   };
@@ -312,7 +453,15 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
                 </span>
               </td>
               <td>
-                <span className={user.disabled ? "status-dot off" : "status-dot on"}>{user.disabled ? t("disabledLabel") : t("activeLabel")}</span>
+                {user.disabled ? (
+                  <span className="status-dot off">{t("disabledLabel")}</span>
+                ) : isLockedNow(user) ? (
+                  <span className="status-dot locked" title={lockedTitle(user)}>
+                    {t("lockedLabel")}
+                  </span>
+                ) : (
+                  <span className="status-dot on">{t("activeLabel")}</span>
+                )}
               </td>
               <td className="admin-actions">
                 <ActionMenu actions={actions(user)} />
@@ -321,6 +470,32 @@ function Accounts({ connection, me }: { connection: TeamConnection; me: string }
           ))}
         </tbody>
       </table>
+      {editFor === undefined ? null : (
+        <ProfileDialog
+          user={editFor}
+          onClose={() => setEditFor(undefined)}
+          onSave={async (change) => {
+            const ok = await run(() => connection.call("admin.users.update", { username: editFor.username, ...change }).then(load), t("done"));
+            if (ok) setEditFor(undefined);
+          }}
+        />
+      )}
+      {lockFor === undefined ? null : (
+        <LockDialog
+          name={lockFor.displayName || lockFor.username}
+          onClose={() => setLockFor(undefined)}
+          onLock={async (minutes) => {
+            const ok = await run(
+              () =>
+                connection
+                  .call("admin.users.lock", { username: lockFor.username, ...(minutes === undefined ? {} : { minutes }) })
+                  .then(load),
+              t("done"),
+            );
+            if (ok) setLockFor(undefined);
+          }}
+        />
+      )}
       {policyFor === undefined ? null : (
         <AccountPolicyDialog
           connection={connection}
@@ -560,6 +735,8 @@ const SETTING_PHRASE: Record<string, Phrase> = {
   "studio access token (hours)": "setStudioAccessHours",
   "two-factor required": "setRequireTwoFactor",
   "allowed networks": "setAllowedNetworks",
+  "lock after wrong passwords": "setLockoutAttempts",
+  "lock lasts (minutes)": "setLockoutMinutes",
   "project storage quota (MB)": "setStorageQuota",
   "largest play build (MB)": "setBuildLimit",
   "backup every (hours)": "setBackupEvery",

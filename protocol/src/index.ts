@@ -1856,6 +1856,12 @@ export interface TeamAdminUser {
   readonly tokensInvalidatedAt?: number;
   /** The account policy an operator gave it: a template by name, or settings of its own. Absent when none. */
   readonly policy?: { readonly templateId?: string; readonly templateName?: string };
+  /**
+   * Until when its sign-ins are refused: after too many wrong passwords in a row, or because an
+   * operator locked it. Absent while it is not locked. A lock with no end reads as the largest
+   * safe integer.
+   */
+  readonly lockedUntil?: number;
 }
 
 /**
@@ -2159,7 +2165,12 @@ export type TeamAdminUsersEvent =
   | { readonly kind: "user-granted-admin"; readonly user: TeamAdminUser }
   | { readonly kind: "user-creator-set"; readonly user: TeamAdminUser }
   | { readonly kind: "user-revoked-admin"; readonly user: TeamAdminUser }
-  | { readonly kind: "user-tokens-revoked"; readonly user: TeamAdminUser };
+  | { readonly kind: "user-tokens-revoked"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-locked"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-unlocked"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-updated"; readonly user: TeamAdminUser }
+  /** The account is gone from the list; only its id and name are left, for the history that holds them. */
+  | { readonly kind: "user-deleted"; readonly id: string; readonly username: string };
 
 /** What happened on the `admin/settings` topic. */
 export type TeamAdminSettingsEvent =
@@ -2596,6 +2607,18 @@ export const TEAM_METHODS = {
   adminUsersPolicy: "admin.users.policy",
   /** Put accounts under a template, give them settings of their own, or clear their policy. Operators. */
   adminUsersPolicySet: "admin.users.policySet",
+  /**
+   * Delete an account for good. Its name and row stay for the history that names it; its
+   * password, profile, sessions, tokens and memberships go, and it never signs in again. Not
+   * the caller's own account, nor the last operator. Operators.
+   */
+  adminUsersDelete: "admin.users.delete",
+  /** Refuse an account's sign-ins, for `minutes` or until unlocked. Operators. */
+  adminUsersLock: "admin.users.lock",
+  /** Lift a lock, whether an operator put it on or wrong passwords did. Operators. */
+  adminUsersUnlock: "admin.users.unlock",
+  /** Change another account's display name or email address. Operators. */
+  adminUsersUpdate: "admin.users.update",
 } as const;
 
 export type TeamMethodName = (typeof TEAM_METHODS)[keyof typeof TEAM_METHODS];

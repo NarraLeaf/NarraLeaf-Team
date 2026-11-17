@@ -34,7 +34,14 @@ import {
   sharedSignInLimiter,
 } from "../identity/signin.js";
 import { mintToken } from "../identity/tokens.js";
-import { authenticate, normaliseUsername, SIGN_IN_REFUSED_MESSAGE, type UserRecord } from "../identity/users.js";
+import {
+  authenticate,
+  clearFailedSignIns,
+  normaliseUsername,
+  recordFailedSignIn,
+  SIGN_IN_REFUSED_MESSAGE,
+  type UserRecord,
+} from "../identity/users.js";
 import { LDAP_BIND, LDAP_URL, readPolicy } from "../identity/policy.js";
 import { bindDnFor, ldapBind } from "../identity/ldap.js";
 import { externalAccount } from "../identity/sso.js";
@@ -362,6 +369,14 @@ export async function checkSignIn(
     username,
     password,
   );
+  if (result.kind === "refused" && result.reason === "locked") {
+    // Answered as a hold, which the limiter also gives for a name that does not exist, so it
+    // says how long to wait and nothing more about the account.
+    const seconds = Math.max(1, Math.ceil((result.until - Date.now()) / 1000));
+    limiter.refused(username, address);
+    options.log?.(`${door}: sign-in for ${JSON.stringify(username)} refused, the account is locked`);
+    return { kind: "held", seconds: Math.min(seconds, 24 * 60 * 60) };
+  }
   let user: UserRecord | undefined = result.kind === "signed-in" ? result.user : undefined;
   // A directory, when one is set up and the local password did not do: the
   // person's directory password is checked by binding as them, and the account
@@ -396,12 +411,14 @@ export async function checkSignIn(
     }
     if (!verifySecondFactor(options.database, user.id, code)) {
       limiter.refused(username, address);
+      recordFailedSignIn(options.database, user.id);
       await holdRefusedSignIn();
       options.log?.(`${door}: second step refused for ${JSON.stringify(username)}`);
       return { kind: "bad-code" };
     }
   }
   limiter.accepted(username, address);
+  clearFailedSignIns(options.database, user.id);
 
   return { kind: "accepted", user };
 }

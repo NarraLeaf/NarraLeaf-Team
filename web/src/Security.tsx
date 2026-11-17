@@ -11,9 +11,25 @@ import { t } from "./i18n";
 import { LockedNote } from "./Locked";
 import { Checkbox, confirmAction, CopyText, Flash, RelativeTime, SelectPanel, Skeleton, Subhead, toast, toastError } from "./ui";
 import { formatBytes } from "./Builds";
+import { encodeQr, qrPath } from "./qr";
 import type { TeamConnection } from "./socket";
 
 /* ---------------------------------------------------------- two-step */
+
+/**
+ * A QR code an authenticator can scan. Always dark on light, whatever the console's theme, with
+ * the quiet zone the standard asks for, since a reader needs both to find it.
+ */
+function QrImage({ text, label }: { text: string; label: string }) {
+  const code = encodeQr(text);
+  const side = code.size + 8;
+  return (
+    <svg className="qr-image" viewBox={`0 0 ${side} ${side}`} role="img" aria-label={label} shapeRendering="crispEdges">
+      <rect width={side} height={side} fill="#fff" />
+      <path d={qrPath(code)} fill="#000" />
+    </svg>
+  );
+}
 
 interface TotpStatus {
   readonly enabled: boolean;
@@ -121,15 +137,20 @@ export function TwoFactorPanel({ connection, onEnabled }: { connection: TeamConn
       ) : setup !== undefined ? (
         <form className="stack" onSubmit={(event) => void confirm(event)}>
           <p>{t("tfaScanLead")}</p>
-          <div className="form-field">
-            <span className="form-label">{t("tfaSecret")}</span>
-            <CopyText value={setup.secret} />
-          </div>
-          <div className="form-field">
-            <span className="form-label">{t("tfaLink")}</span>
-            <a className="small mono break" href={setup.uri}>
-              {setup.uri}
-            </a>
+          <div className="tfa-setup">
+            <QrImage text={setup.uri} label={t("tfaQr")} />
+            <div className="stack">
+              <div className="form-field">
+                <span className="form-label">{t("tfaSecret")}</span>
+                <CopyText value={setup.secret} />
+              </div>
+              <div className="form-field">
+                <span className="form-label">{t("tfaLink")}</span>
+                <a className="small mono break" href={setup.uri}>
+                  {setup.uri}
+                </a>
+              </div>
+            </div>
           </div>
           <label className="form-field">
             <span className="form-label">{t("tfaCode")}</span>

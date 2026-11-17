@@ -19,6 +19,7 @@ import {
   type Row,
 } from "./database.js";
 import { MalformedPasswordHashError, type PasswordHasher } from "./passwords.js";
+import { LOCKOUT_ATTEMPTS, LOCKOUT_MINUTES, policyNumber } from "./policy.js";
 import { storedProjectAccess } from "./settings.js";
 
 /** One account. */
@@ -51,6 +52,13 @@ export interface UserRecord {
   readonly bio?: string;
   /** An IANA time zone the person set, absent where they set none. */
   readonly timezone?: string;
+  /**
+   * When an operator deleted the account, absent for one that exists. A deleted account keeps
+   * its row and its name and nothing else; see {@link deleteUser}.
+   */
+  readonly deletedAt?: number;
+  /** Until when sign-ins are refused after too many wrong passwords, or by an operator. */
+  readonly lockedUntil?: number;
 }
 
 /** Raised when a username does not fit the rules. */
@@ -256,7 +264,13 @@ function toUser(database: DatabaseSync, row: Row): UserRecord {
     ...optionalField("avatar", optionalTextColumn(row, "avatar")),
     ...optionalField("bio", optionalTextColumn(row, "bio")),
     ...optionalField("timezone", optionalTextColumn(row, "timezone")),
+    ...optionalMoment("deletedAt", optionalIntegerColumn(row, "deleted_at")),
+    ...optionalMoment("lockedUntil", optionalIntegerColumn(row, "locked_until")),
   };
+}
+
+function optionalMoment<K extends string>(key: K, value: number | undefined): { [P in K]?: number } {
+  return (value === undefined ? {} : { [key]: value }) as { [P in K]?: number };
 }
 
 function optionalField<K extends string>(key: K, value: string | undefined): { [P in K]?: string } {
@@ -265,7 +279,7 @@ function optionalField<K extends string>(key: K, value: string | undefined): { [
 
 const SELECT_USER =
   "SELECT id, username, display_name, email, is_service_account, created_at, " +
-  "disabled_at, token_epoch, tokens_invalidated_at, avatar, bio, timezone FROM users";
+  "disabled_at, token_epoch, tokens_invalidated_at, avatar, bio, timezone, deleted_at, locked_until FROM users";
 
 /**
  * Every account, in name order, one row at a time.
@@ -275,15 +289,24 @@ const SELECT_USER =
  * down would have held every row first - and every row costs a second query for
  * the groups it is in. A caller that wants the lot has {@link listUsers}.
  */
-export function* eachUser(database: DatabaseSync): Generator<UserRecord> {
-  for (const row of database.prepare(`${SELECT_USER} ORDER BY username`).iterate()) {
+export function* eachUser(database: DatabaseSync, options: ListOptions = {}): Generator<UserRecord> {
+  const where = options.includeDeleted === true ? "" : "WHERE deleted_at IS NULL ";
+  for (const row of database.prepare(`${SELECT_USER} ${where}ORDER BY username`).iterate()) {
     yield toUser(database, row as Row);
   }
 }
 
+export interface ListOptions {
+  /**
+   * Deleted accounts too. Left out by default: they are names kept for the history that holds
+   * them, not accounts anybody can pick, add or sign in as.
+   */
+  readonly includeDeleted?: boolean;
+}
+
 /** Every account, in name order. */
-export function listUsers(database: DatabaseSync): UserRecord[] {
-  return [...eachUser(database)];
+export function listUsers(database: DatabaseSync, options: ListOptions = {}): UserRecord[] {
+  return [...eachUser(database, options)];
 }
 
 export interface UserQuery {
@@ -319,7 +342,7 @@ export interface UserPage {
  * without a second query.
  */
 export function pageUsers(database: DatabaseSync, query: UserQuery): UserPage {
-  const conditions: string[] = [];
+  const conditions: string[] = ["deleted_at IS NULL"];
   const values: (string | number)[] = [];
   const cursor = parseUserCursor(query.before);
   if (cursor !== undefined) {
@@ -328,7 +351,7 @@ export function pageUsers(database: DatabaseSync, query: UserQuery): UserPage {
   }
   const rows = database
     .prepare(
-      `${SELECT_USER} ${conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")} `}` +
+      `${SELECT_USER} WHERE ${conditions.join(" AND ")} ` +
         "ORDER BY created_at DESC, id DESC LIMIT ?",
     )
     .all(...values, query.limit + 1);
@@ -564,7 +587,7 @@ export async function createUser(
  * not.
  */
 export function disableUser(database: DatabaseSync, username: string): UserRecord {
-  const user = requireUser(database, username);
+  const user = requireLiveUser(database, username);
   const now = Date.now();
   database
     .prepare(
@@ -583,7 +606,7 @@ export function disableUser(database: DatabaseSync, username: string): UserRecor
  * not become untrue.
  */
 export function enableUser(database: DatabaseSync, username: string): UserRecord {
-  const user = requireUser(database, username);
+  const user = requireLiveUser(database, username);
   database.prepare("UPDATE users SET disabled_at = NULL WHERE id = ?").run(user.id);
   return requireUser(database, user.username);
 }
@@ -599,13 +622,158 @@ export function enableUser(database: DatabaseSync, username: string): UserRecord
  * either of them reaches, and where neither does.
  */
 export function revokeUserTokens(database: DatabaseSync, username: string): UserRecord {
-  const user = requireUser(database, username);
+  const user = requireLiveUser(database, username);
   database
     .prepare(
       "UPDATE users SET token_epoch = token_epoch + 1, tokens_invalidated_at = ? WHERE id = ?",
     )
     .run(Date.now(), user.id);
   return requireUser(database, user.username);
+}
+
+/** Raised for a change to an account an operator has deleted: there is nothing left to change. */
+export class DeletedUserError extends Error {
+  constructor(username: string) {
+    super(`${username} was deleted`);
+    this.name = "DeletedUserError";
+  }
+}
+
+function requireLiveUser(database: DatabaseSync, username: string): UserRecord {
+  const user = requireUser(database, username);
+  if (user.deletedAt !== undefined) {
+    throw new DeletedUserError(user.username);
+  }
+  return user;
+}
+
+/** A stored password hash no password matches: it is not in any form a hasher reads. */
+const NO_PASSWORD = "deleted";
+
+/**
+ * The tables whose rows go with an account when it goes, which the schema says with
+ * `ON DELETE CASCADE`. Reviews are kept although they say so: a review somebody gave is part of
+ * the project's history, and the account's row - which is what the history points at - stays.
+ */
+const KEPT_ON_DELETE = new Set(["reviews"]);
+
+function personalTables(database: DatabaseSync): { table: string; column: string }[] {
+  const tables = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .all()
+    .map((row) => textColumn(row, "name"));
+  const found: { table: string; column: string }[] = [];
+  for (const table of tables) {
+    if (KEPT_ON_DELETE.has(table)) continue;
+    for (const key of database.prepare(`PRAGMA foreign_key_list("${table.replaceAll('"', '""')}")`).all()) {
+      if (key["table"] === "users" && String(key["on_delete"]).toUpperCase() === "CASCADE") {
+        found.push({ table, column: textColumn(key, "from") });
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Delete an account.
+ *
+ * The row stays, because comments, history, audit and the projects it made name it by id, and
+ * the name stays with it so nobody can later take it and be read as the person who wrote those.
+ * Everything else goes: the password, the address, the picture and the line about themselves,
+ * every session and token, the second step, its memberships and groups, and every other row the
+ * schema marks as going with the account. It can never sign in again, and an operator cannot
+ * bring it back: that is what makes this different from disabling it.
+ */
+export function deleteUser(database: DatabaseSync, username: string): UserRecord {
+  const user = requireLiveUser(database, username);
+  const now = Date.now();
+  inTransaction(database, () => {
+    for (const { table, column } of personalTables(database)) {
+      database.prepare(`DELETE FROM "${table.replaceAll('"', '""')}" WHERE "${column.replaceAll('"', '""')}" = ?`).run(user.id);
+    }
+    database
+      .prepare(
+        "UPDATE users SET deleted_at = ?, disabled_at = COALESCE(disabled_at, ?), " +
+          "token_epoch = token_epoch + 1, tokens_invalidated_at = ?, display_name = username, " +
+          "email = NULL, avatar = NULL, bio = NULL, timezone = NULL, notify_hook = NULL, " +
+          "password_hash = ?, failed_signins = 0, locked_until = NULL WHERE id = ?",
+      )
+      .run(now, now, now, NO_PASSWORD, user.id);
+  });
+  return requireUser(database, user.username);
+}
+
+/**
+ * Refuse an account's sign-ins until a moment, or for good with no moment named.
+ *
+ * Unlike disabling, the tokens it holds are left alone: a lock is about the door, and it is what
+ * too many wrong passwords puts on an account by itself.
+ */
+export function lockUser(database: DatabaseSync, username: string, until?: number): UserRecord {
+  const user = requireLiveUser(database, username);
+  database
+    .prepare("UPDATE users SET locked_until = ?, failed_signins = 0 WHERE id = ?")
+    .run(until ?? Number.MAX_SAFE_INTEGER, user.id);
+  return requireUser(database, user.username);
+}
+
+/** Take a lock off, and forget the wrong passwords that led to it. */
+export function unlockUser(database: DatabaseSync, username: string): UserRecord {
+  const user = requireLiveUser(database, username);
+  database.prepare("UPDATE users SET locked_until = NULL, failed_signins = 0 WHERE id = ?").run(user.id);
+  return requireUser(database, user.username);
+}
+
+/** Whether an account is locked at this moment. */
+export function isLocked(user: UserRecord, now = Date.now()): boolean {
+  return user.lockedUntil !== undefined && user.lockedUntil > now;
+}
+
+/** What an operator may change of somebody else's account. */
+export interface ProfileChange {
+  readonly displayName?: string;
+  /** An empty string takes the address away. */
+  readonly email?: string;
+}
+
+/** Change an account's display name or address, held to the limits an account is made with. */
+export function updateUserProfile(database: DatabaseSync, username: string, change: ProfileChange): UserRecord {
+  const user = requireLiveUser(database, username);
+  if (change.displayName !== undefined) {
+    const name = change.displayName.trim();
+    if (name === "" || Buffer.byteLength(name, "utf-8") > DISPLAY_NAME_LIMIT) {
+      throw new InvalidDisplayNameError();
+    }
+    database.prepare("UPDATE users SET display_name = ? WHERE id = ?").run(name, user.id);
+  }
+  if (change.email !== undefined) {
+    const email = change.email.trim();
+    if (Buffer.byteLength(email, "utf-8") > EMAIL_LIMIT) {
+      throw new InvalidEmailError();
+    }
+    database.prepare("UPDATE users SET email = ? WHERE id = ?").run(email === "" ? null : email, user.id);
+  }
+  return requireUser(database, user.username);
+}
+
+/**
+ * Count one wrong password, or one wrong second step, against an account, and lock it when
+ * `security.lockout_attempts` of them have come in a row. Nothing is counted while that is 0.
+ */
+export function recordFailedSignIn(database: DatabaseSync, userId: string, now = Date.now()): void {
+  const attempts = policyNumber(database, LOCKOUT_ATTEMPTS);
+  if (attempts <= 0) return;
+  const row = database
+    .prepare("UPDATE users SET failed_signins = failed_signins + 1 WHERE id = ? RETURNING failed_signins")
+    .get(userId);
+  if (row === undefined || integerColumn(row, "failed_signins") < attempts) return;
+  const until = now + policyNumber(database, LOCKOUT_MINUTES) * 60_000;
+  database.prepare("UPDATE users SET locked_until = ?, failed_signins = 0 WHERE id = ?").run(until, userId);
+}
+
+/** Forget the wrong passwords counted against an account, once it has signed in. */
+export function clearFailedSignIns(database: DatabaseSync, userId: string): void {
+  database.prepare("UPDATE users SET failed_signins = 0 WHERE id = ? AND failed_signins <> 0").run(userId);
 }
 
 /**
@@ -625,7 +793,7 @@ export function setAdmin(
   username: string,
   admin: boolean,
 ): UserRecord {
-  const user = requireUser(database, username);
+  const user = requireLiveUser(database, username);
   if (admin) {
     database
       .prepare(
@@ -643,7 +811,7 @@ export function setAdmin(
 
 /** Let an account make projects, or stop it. Doing it twice is doing it once. */
 export function setProjectCreator(database: DatabaseSync, username: string, allowed: boolean): UserRecord {
-  const user = requireUser(database, username);
+  const user = requireLiveUser(database, username);
   if (allowed) {
     database
       .prepare(
@@ -674,6 +842,7 @@ export function setProjectCreator(database: DatabaseSync, username: string, allo
  * that said one was left.
  */
 export function countEnabledAdmins(database: DatabaseSync): number {
+  // A deleted account is also disabled, so the condition below already leaves it out.
   const row = database
     .prepare(
       "SELECT COUNT(*) AS count FROM user_groups JOIN users ON users.id = user_groups.user_id " +
@@ -699,12 +868,14 @@ export type SignInFailure =
   | "no-such-user"
   | "wrong-password"
   | "disabled"
+  | "locked"
   | "unreadable-password-hash";
 
 /** The outcome of checking a name and a password. */
 export type SignInResult =
   | { readonly kind: "signed-in"; readonly user: UserRecord }
-  | { readonly kind: "refused"; readonly reason: SignInFailure };
+  | { readonly kind: "refused"; readonly reason: Exclude<SignInFailure, "locked"> }
+  | { readonly kind: "refused"; readonly reason: "locked"; readonly until: number };
 
 /**
  * The one sentence a failed sign-in is reported with, whichever way it failed.
@@ -745,9 +916,16 @@ export async function authenticate(
   password: string,
 ): Promise<SignInResult> {
   const user = findUser(database, username);
-  if (user === undefined) {
+  // A deleted account is answered exactly as one that never existed.
+  if (user === undefined || user.deletedAt !== undefined) {
     await hasher.verify(password, await decoy(hasher));
     return { kind: "refused", reason: "no-such-user" };
+  }
+  // Locked: the password is not checked at all, or the lock would not stop anybody guessing.
+  // The decoy keeps the answer as slow as a real check.
+  if (isLocked(user)) {
+    await hasher.verify(password, await decoy(hasher));
+    return { kind: "refused", reason: "locked", until: user.lockedUntil ?? 0 };
   }
 
   const stored = passwordHashOf(database, user.id);
@@ -765,6 +943,7 @@ export async function authenticate(
     throw error;
   }
   if (!matches) {
+    recordFailedSignIn(database, user.id);
     return { kind: "refused", reason: "wrong-password" };
   }
 

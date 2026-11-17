@@ -1740,3 +1740,30 @@ button.danger:hover:not(:disabled) {
     flex-basis: 100%;
   }
 }
+
+/* Two-step setup: the QR code beside the key and link, stacked on a narrow screen. */
+.tfa-setup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+.tfa-setup > .stack {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.qr-image {
+  flex: none;
+  width: 184px;
+  height: 184px;
+  border-radius: 8px;
+  border: 1px solid var(--nl-edge);
+}
+
+.status-dot.locked {
+  color: rgb(var(--nl-warning));
+}
+
+.status-dot.locked::before {
+  background: rgb(var(--nl-warning));
+}

@@ -120,6 +120,7 @@ import {
   countEnabledAdmins,
   createUser,
   DEFAULT_ROLE,
+  deleteUser,
   disableUser,
   DISPLAY_NAME_LIMIT,
   DISPLAY_NAME_REFUSAL,
@@ -131,12 +132,16 @@ import {
   InvalidEmailError,
   InvalidRoleError,
   InvalidUsernameError,
+  isLocked,
   isOperator,
+  lockUser,
   pageUsers,
   PROJECT_CREATOR_ROLE,
   revokeUserTokens,
   setAdmin,
   setProjectCreator,
+  unlockUser,
+  updateUserProfile,
   UsernameTakenError,
   WeakPasswordError,
   type UserRecord,
@@ -438,7 +443,8 @@ function keyRows(keys: KeyStore): { keys: TeamAdminKey[]; total: number } {
 function namedAccount(context: MethodContext, read: Record<string, unknown>): UserRecord {
   const username = requiredText(read, "username", USERNAME_LIMIT);
   const user = findUser(context.options.database, username);
-  if (user === undefined) {
+  // A deleted account is a name kept for history, not one anything here can change.
+  if (user === undefined || user.deletedAt !== undefined) {
     throw new MethodError("not-found", "there is no account of that name on this server");
   }
   return user;
@@ -1050,6 +1056,81 @@ export function adminMethods(): TeamMethod[] {
         detail: "two-step sign-in reset by an admin",
       });
       return { user: adminUserBody(user) };
+    }),
+    administeredWrite(TEAM_METHODS.adminUsersDelete, (read, context, repeat) => {
+      const username = requiredText(read, "username", USERNAME_LIMIT);
+      const found = findUser(context.options.database, username);
+      if (found !== undefined && found.deletedAt !== undefined && repeat.already !== undefined) {
+        return { deleted: { id: found.id, username: found.username } };
+      }
+      const user = namedAccount(context, read);
+      if (user.id === context.user.id) {
+        throw new MethodError("refused", "an operator cannot delete their own account; ask another operator");
+      }
+      refuseIfLastOperator(context, user, `nlteam user enable ${user.username}`);
+      deleteUser(context.options.database, user.username);
+      recordDecision(context.options.database, {
+        username: context.user.username,
+        resource: `account:${user.username}`,
+        allowed: true,
+        detail: "account deleted by an admin",
+      });
+      const deleted = { id: user.id, username: user.username };
+      announceUser(context, { kind: "user-deleted", ...deleted });
+      return { deleted };
+    }),
+    administeredWrite(TEAM_METHODS.adminUsersLock, (read, context, repeat) => {
+      const user = namedAccount(context, read);
+      const minutes = read["minutes"];
+      if (minutes !== undefined && (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes < 1 || minutes > 525_600)) {
+        throw new MethodError("bad-params", "minutes has to be a whole number from 1 to 525600, or left out for a lock with no end");
+      }
+      if (repeat.already !== undefined) {
+        return { user: adminUserBody(user) };
+      }
+      if (user.id === context.user.id) {
+        throw new MethodError("refused", "an operator cannot lock their own account");
+      }
+      const until = minutes === undefined ? undefined : Date.now() + minutes * 60_000;
+      const body = adminUserBody(lockUser(context.options.database, user.username, until));
+      announceUser(context, { kind: "user-locked", user: body });
+      return { user: body };
+    }),
+    administeredWrite(TEAM_METHODS.adminUsersUnlock, (read, context, repeat) => {
+      const user = namedAccount(context, read);
+      if (repeat.already !== undefined || (!isLocked(user) && user.lockedUntil === undefined)) {
+        return { user: adminUserBody(user) };
+      }
+      const body = adminUserBody(unlockUser(context.options.database, user.username));
+      announceUser(context, { kind: "user-unlocked", user: body });
+      return { user: body };
+    }),
+    administeredWrite(TEAM_METHODS.adminUsersUpdate, (read, context) => {
+      const user = namedAccount(context, read);
+      const displayName = optionalText(read, "displayName", DISPLAY_NAME_LIMIT, DISPLAY_NAME_REFUSAL);
+      if (read["displayName"] !== undefined && displayName === undefined) {
+        throw new MethodError("bad-params", "displayName has to be a non-empty string");
+      }
+      // An empty address takes the one the account had away.
+      const email = read["email"] === undefined ? undefined : (optionalText(read, "email", EMAIL_LIMIT, EMAIL_REFUSAL) ?? "");
+      if (email !== undefined && email !== "" && !/^[^\s@]+@[^\s@]+$/.test(email)) {
+        throw new MethodError("bad-params", "that is not an email address");
+      }
+      let changed: UserRecord;
+      try {
+        changed = updateUserProfile(context.options.database, user.username, {
+          ...(displayName === undefined ? {} : { displayName }),
+          ...(email === undefined ? {} : { email }),
+        });
+      } catch (error) {
+        if (error instanceof InvalidDisplayNameError || error instanceof InvalidEmailError) {
+          throw new MethodError("bad-params", error.message);
+        }
+        throw error;
+      }
+      const body = adminUserBody(changed);
+      announceUser(context, { kind: "user-updated", user: body });
+      return { user: body };
     }),
     administered(TEAM_METHODS.adminPoliciesList, (_params: unknown, context: MethodContext) => ({
       templates: listPolicyTemplates(context.options.database),

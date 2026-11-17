@@ -94,6 +94,9 @@ describe("migrate", () => {
       // ⚠ These lines track whichever migration is last: a new one appended to
       // the list is a new thing to undo here, and the failure when it is
       // forgotten is this test rather than a server in the field.
+      database.exec("ALTER TABLE users DROP COLUMN deleted_at");
+      database.exec("ALTER TABLE users DROP COLUMN failed_signins");
+      database.exec("ALTER TABLE users DROP COLUMN locked_until");
       database.exec("DROP TABLE studio_configs");
       database.exec("DROP TABLE account_policies");
       database.exec("DROP TABLE policy_templates");
