@@ -161,6 +161,8 @@ export function ProjectPage(props: {
       .then((answer) => {
         setMissing(false);
         setProject(answer.project);
+        // The address may name the project by name; its topics are by id.
+        connection.nameProject(projectId, answer.project.id);
       })
       .catch((caught: unknown) => {
         // A project one has no place in is answered as one that is not there; both read as 404.

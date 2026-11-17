@@ -27,6 +27,9 @@ export type ConnectionState =
   | { readonly kind: "open"; readonly hello: TeamHelloFrame }
   | { readonly kind: "closed"; readonly reason: string; readonly signedOut: boolean };
 
+/** The prefix a project's topics start with; what follows, up to a `/`, is the project. */
+const PROJECT_PREFIX = "project:";
+
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -36,7 +39,10 @@ export class TeamConnection {
   private ws: WebSocket | undefined;
   private next = 1;
   private readonly pending = new Map<number, Pending>();
+  /** Listeners by the topic as it was asked for, which may name a project by its address. */
   private readonly topics = new Map<string, Set<(payload: unknown) => void>>();
+  /** What a project's address stands for: its id, which is what the server's topics are named by. */
+  private readonly projectIds = new Map<string, string>();
   private readonly stateListeners = new Set<(state: ConnectionState) => void>();
   private current: ConnectionState = { kind: "connecting" };
   private retry: number | undefined;
@@ -78,13 +84,21 @@ export class TeamConnection {
     });
   }
 
-  /** Hear about a topic. Subscribes on the first listener and again after every reconnect. */
+  /**
+   * Hear about a topic. Subscribes on the first listener and again after every reconnect.
+   *
+   * A project's topics are named by its id, while a page's address may name the project by its
+   * address; a topic asked for by address is subscribed under the id once {@link nameProject} has
+   * said what it is, and moved there if that is said later.
+   */
   subscribe(topic: string, listener: (payload: unknown) => void): () => void {
     let listeners = this.topics.get(topic);
     if (listeners === undefined) {
+      const wire = this.wire(topic);
+      const heard = this.held(wire);
       listeners = new Set();
       this.topics.set(topic, listeners);
-      this.sendSubscribe(topic);
+      if (!heard) this.sendSubscribe(wire);
     }
     listeners.add(listener);
     return () => {
@@ -92,16 +106,51 @@ export class TeamConnection {
       held?.delete(listener);
       if (held !== undefined && held.size === 0) {
         this.topics.delete(topic);
-        if (this.current.kind === "open") {
-          this.ws?.send(JSON.stringify({ t: "unsubscribe", id: this.next++, topic }));
-        }
+        const wire = this.wire(topic);
+        if (!this.held(wire)) this.sendUnsubscribe(wire);
       }
     };
+  }
+
+  /** Say which project an address stands for, so its topics are heard under the project's id. */
+  nameProject(address: string, id: string): void {
+    if (address === id || this.projectIds.get(address) === id) return;
+    const before = this.wires();
+    this.projectIds.set(address, id);
+    const after = this.wires();
+    for (const wire of before) if (!after.has(wire)) this.sendUnsubscribe(wire);
+    for (const wire of after) if (!before.has(wire)) this.sendSubscribe(wire);
+  }
+
+  /** The topic as the server names it. */
+  private wire(topic: string): string {
+    if (!topic.startsWith(PROJECT_PREFIX)) return topic;
+    const rest = topic.slice(PROJECT_PREFIX.length);
+    const separator = rest.indexOf("/");
+    const project = separator === -1 ? rest : rest.slice(0, separator);
+    const id = this.projectIds.get(project);
+    return id === undefined ? topic : PROJECT_PREFIX + id + (separator === -1 ? "" : rest.slice(separator));
+  }
+
+  /** Every topic subscribed at the server, each once. */
+  private wires(): Set<string> {
+    return new Set([...this.topics.keys()].map((topic) => this.wire(topic)));
+  }
+
+  private held(wire: string): boolean {
+    for (const topic of this.topics.keys()) if (this.wire(topic) === wire) return true;
+    return false;
   }
 
   private sendSubscribe(topic: string): void {
     if (this.current.kind === "open") {
       this.ws?.send(JSON.stringify({ t: "subscribe", id: this.next++, topic }));
+    }
+  }
+
+  private sendUnsubscribe(topic: string): void {
+    if (this.current.kind === "open") {
+      this.ws?.send(JSON.stringify({ t: "unsubscribe", id: this.next++, topic }));
     }
   }
 
@@ -125,8 +174,8 @@ export class TeamConnection {
         case "hello":
           this.attempts = 0;
           this.setState({ kind: "open", hello: frame });
-          for (const topic of this.topics.keys()) {
-            this.sendSubscribe(topic);
+          for (const wire of this.wires()) {
+            this.sendSubscribe(wire);
           }
           return;
         case "result":
@@ -138,8 +187,9 @@ export class TeamConnection {
           this.pending.delete(frame.id);
           return;
         case "event":
-          for (const listener of this.topics.get(frame.topic) ?? []) {
-            listener(frame.payload);
+          for (const [topic, listeners] of this.topics) {
+            if (this.wire(topic) !== frame.topic) continue;
+            for (const listener of listeners) listener(frame.payload);
           }
           return;
         case "bye":
