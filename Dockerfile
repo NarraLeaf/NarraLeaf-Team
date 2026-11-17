@@ -28,6 +28,15 @@ COPY tsconfig.json ./
 COPY protocol ./protocol
 COPY scripts ./scripts
 COPY src ./src
+# The kernel that applies edits to team projects, vendored from NarraLeaf
+# Studio and bundled into the server; and the web console with the two trees
+# it imports (the shared design tokens and the project reader). `npm run build`
+# bundles all of them, so a directory missing here is a build that cannot
+# resolve an import.
+COPY studio-kernel ./studio-kernel
+COPY web ./web
+COPY design-tokens ./design-tokens
+COPY project-view ./project-view
 RUN npm run build
 
 # The binaries, fetched here rather than on first start: a container that
@@ -65,6 +74,9 @@ WORKDIR /opt/nlteam/app
 COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/dist ./dist
 COPY --from=build /src/package.json ./package.json
+# The bundle carries NarraLeaf Studio's kernel, which is MPL-2.0 rather than
+# MIT: its notice, which says so and where its source is, goes with it.
+COPY --from=build /src/studio-kernel/NOTICE.md ./studio-kernel/NOTICE.md
 # Readable by the account that will run it. The archive is unpacked as root in
 # the stage above, and GNU tar run by root keeps the ownership and the mode the
 # upstream tarball carries - loreserver's arrives as 0700 owned by whichever
@@ -82,7 +94,7 @@ RUN ln -s /opt/nlteam/app/dist/nlteam.js /usr/local/bin/nlteam \
 # The source label is not decoration: the registry uses it to attach the
 # package to this repository, which is what puts a readme and a licence on the
 # package page rather than a bare image name.
-LABEL org.opencontainers.image.source="https://github.com/NarraLeaf/NarraLeaf-Team"       org.opencontainers.image.description="Self-hosted project server for teams using NarraLeaf Studio"       org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.source="https://github.com/NarraLeaf/NarraLeaf-Team"       org.opencontainers.image.description="Self-hosted project server for teams using NarraLeaf Studio"       org.opencontainers.image.licenses="MIT AND MPL-2.0"
 
 USER node
 VOLUME ["/var/lib/nlteam"]
