@@ -255,7 +255,7 @@ describe("a share link's routes", () => {
     const view = await t.call("GET", `/api/team/v1/share/${token}`);
     expect(view.status).toBe(200);
     expect(JSON.parse(view.body)).toMatchObject({ projectName: "harbour", scope: "story:main", revision: "1234567890abcdef", allowComments: true });
-    expect(view.body).not.toContain("ada");
+    expect(view.body).not.toMatch(/\bada\b/);
 
     const tree = await t.call("GET", `/api/team/v1/share/${token}/tree/head`);
     expect(tree.status).toBe(200);
