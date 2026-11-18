@@ -236,7 +236,7 @@ describe("parseArgs, the ports and identity from the environment", () => {
       parseArgs(["up", "--root", "/srv/team"], {
         NLTEAM_ISSUER: "team.example.com",
         NLTEAM_AUDIENCE: "lore",
-        NLTEAM_AUTH_ORIGIN: "team.example.com:41402",
+        NLTEAM_AUTH_ORIGIN: "team.example.com:54080",
         NLTEAM_ENV: "staging",
         NLTEAM_IDP: "example",
         NLTEAM_TOKEN_LIFETIME: "5m",
@@ -253,7 +253,7 @@ describe("parseArgs, the ports and identity from the environment", () => {
       overrides: {
         issuer: "team.example.com",
         audience: "lore",
-        authOrigin: "team.example.com:41402",
+        authOrigin: "team.example.com:54080",
         env: "staging",
         idp: "example",
         signInTokenLifetimeSeconds: 300,
@@ -446,9 +446,9 @@ describe("parseArgs, the identity commands", () => {
       target: { kind: "root", root: "/srv/team" },
       kid: "nEQBz",
     });
-    expect(parseArgs(["key", "retire", "nEQBz", "--server", "team.example.lan:41402"])).toEqual({
+    expect(parseArgs(["key", "retire", "nEQBz", "--server", "team.example.lan:54080"])).toEqual({
       kind: "key-retire",
-      target: { kind: "server", server: "team.example.lan:41402" },
+      target: { kind: "server", server: "team.example.lan:54080" },
       kid: "nEQBz",
     });
     // Retiring is what ends a key's life, so a command line naming two keys is
@@ -607,10 +607,10 @@ describe("parseArgs, the project commands", () => {
         "--repository",
         "ABC",
         "--server",
-        "team.example.lan:41402",
+        "team.example.lan:54080",
       ]),
     ).toMatchObject({
-      target: { kind: "server", server: "team.example.lan:41402" },
+      target: { kind: "server", server: "team.example.lan:54080" },
       repository: "ABC",
     });
     // Whatever was typed, unchecked and unfolded. What a repository id may be is
@@ -656,14 +656,14 @@ describe("parseArgs, naming a server rather than a storage root", () => {
   it("takes an address on the line, in the one spelling it is filed under", () => {
     expect(parseArgs(["project", "list", "--server", "Team.Example.LAN"])).toEqual({
       kind: "project-list",
-      target: { kind: "server", server: "team.example.lan:41402" },
+      target: { kind: "server", server: "team.example.lan:54080" },
     });
   });
 
   it("lets NLTEAM_SERVER stand in for the flag, as every other variable does", () => {
-    expect(parseArgs(["project", "list"], { NLTEAM_SERVER: "team.example.lan:41402" })).toEqual({
+    expect(parseArgs(["project", "list"], { NLTEAM_SERVER: "team.example.lan:54080" })).toEqual({
       kind: "project-list",
-      target: { kind: "server", server: "team.example.lan:41402" },
+      target: { kind: "server", server: "team.example.lan:54080" },
     });
   });
 
@@ -673,16 +673,16 @@ describe("parseArgs, naming a server rather than a storage root", () => {
     // typed just now, and a variable is what a container was configured with.
     expect(
       parseArgs(["project", "list", "--root", "/srv/team"], {
-        NLTEAM_SERVER: "team.example.lan:41402",
+        NLTEAM_SERVER: "team.example.lan:54080",
       }),
     ).toEqual({ kind: "project-list", target: { kind: "root", root: "/srv/team" } });
     expect(
-      parseArgs(["project", "list", "--server", "team.example.lan:41402"], {
+      parseArgs(["project", "list", "--server", "team.example.lan:54080"], {
         NLTEAM_ROOT: "/srv/team",
       }),
     ).toEqual({
       kind: "project-list",
-      target: { kind: "server", server: "team.example.lan:41402" },
+      target: { kind: "server", server: "team.example.lan:54080" },
     });
   });
 
@@ -694,7 +694,7 @@ describe("parseArgs, naming a server rather than a storage root", () => {
       messageFor2(
         parseArgs(["project", "list"], {
           NLTEAM_ROOT: "/srv/team",
-          NLTEAM_SERVER: "team.example.lan:41402",
+          NLTEAM_SERVER: "team.example.lan:54080",
         }),
       ),
     ).toContain("both set");
@@ -724,32 +724,32 @@ describe("parseArgs, naming a server rather than a storage root", () => {
 
 describe("parseArgs, login and logout", () => {
   it("takes an address and the account to sign in as", () => {
-    expect(parseArgs(["login", "team.example.lan:41402", "ada"])).toEqual({
+    expect(parseArgs(["login", "team.example.lan:54080", "ada"])).toEqual({
       kind: "login",
-      server: "team.example.lan:41402",
+      server: "team.example.lan:54080",
       username: "ada",
       fingerprint: undefined,
     });
     // The address a person is actually given, scheme and all.
-    expect(parseArgs(["login", "nlteam://team.example.lan:41402", "ada"])).toMatchObject({
-      server: "team.example.lan:41402",
+    expect(parseArgs(["login", "nlteam://team.example.lan:54080", "ada"])).toMatchObject({
+      server: "team.example.lan:54080",
     });
   });
 
   it("takes the authority to expect, on the line or in the environment", () => {
     expect(
-      parseArgs(["login", "team.example.lan:41402", "ada", "--fingerprint", "AB:CD"]),
+      parseArgs(["login", "team.example.lan:54080", "ada", "--fingerprint", "AB:CD"]),
     ).toMatchObject({ fingerprint: "AB:CD" });
     // The deployment that most needs to name a fingerprint is the one that
     // composes no command line at all.
     expect(
-      parseArgs(["login", "team.example.lan:41402", "ada"], { NLTEAM_FINGERPRINT: "AB:CD" }),
+      parseArgs(["login", "team.example.lan:54080", "ada"], { NLTEAM_FINGERPRINT: "AB:CD" }),
     ).toMatchObject({ fingerprint: "AB:CD" });
   });
 
   it("says which half of the command line is missing", () => {
     expect(messageFor(["login"])).toContain("address of a server");
-    expect(messageFor(["login", "team.example.lan:41402"])).toContain("username");
+    expect(messageFor(["login", "team.example.lan:54080"])).toContain("username");
     expect(messageFor(["logout"])).toContain("address of a server");
   });
 
@@ -761,7 +761,7 @@ describe("parseArgs, login and logout", () => {
   it("forgets one server by address, in the same spelling login filed it under", () => {
     expect(parseArgs(["logout", "TEAM.example.lan"])).toEqual({
       kind: "logout",
-      server: "team.example.lan:41402",
+      server: "team.example.lan:54080",
     });
   });
 });
@@ -781,9 +781,9 @@ describe("parseArgs, status and audit", () => {
     expect(
       parseArgs(["status", "--root", "/srv/team", "--health-port", "9000"], nothing),
     ).toMatchObject({ healthPort: 9000 });
-    expect(parseArgs(["status", "--server", "team.example.lan:41402"], nothing)).toEqual({
+    expect(parseArgs(["status", "--server", "team.example.lan:54080"], nothing)).toEqual({
       kind: "status",
-      target: { kind: "server", server: "team.example.lan:41402" },
+      target: { kind: "server", server: "team.example.lan:54080" },
       healthPort: DEFAULT_PORTS.healthPort,
     });
   });
@@ -792,7 +792,7 @@ describe("parseArgs, status and audit", () => {
     const message = messageFor([
       "status",
       "--server",
-      "team.example.lan:41402",
+      "team.example.lan:54080",
       "--health-port",
       "9000",
     ]);
@@ -810,12 +810,12 @@ describe("parseArgs, status and audit", () => {
     });
     expect(
       parseArgs(
-        ["audit", "--server", "team.example.lan:41402", "--limit", "5", "--refused"],
+        ["audit", "--server", "team.example.lan:54080", "--limit", "5", "--refused"],
         nothing,
       ),
     ).toEqual({
       kind: "audit",
-      target: { kind: "server", server: "team.example.lan:41402" },
+      target: { kind: "server", server: "team.example.lan:54080" },
       limit: 5,
       refused: true,
     });

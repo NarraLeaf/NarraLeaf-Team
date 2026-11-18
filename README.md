@@ -78,7 +78,7 @@ services:
     environment:
       NLTEAM_HOSTNAME: team.example.com
     ports:
-      - "41402:41402"
+      - "54080:54080"
       - "41337:41337/tcp"
       - "41337:41337/udp"
     volumes:
@@ -156,7 +156,7 @@ printf '%s' 'the first password' | nlteam init ada --root /srv/team
 nlteam status --root /srv/team
 ```
 
-Two ports must be reachable from an author's machine: **41402**, where people
+Two ports must be reachable from an author's machine: **54080**, where people
 sign in, and **41337**, where project data is served. The remaining listeners are
 between programs on the server machine and are bound to the loopback.
 
@@ -164,7 +164,7 @@ between programs on the server machine and are bound to the loopback.
 
 Three things, and Studio asks the server for everything else:
 
-- **The address**, which is a host and a port: `nlteam://team.example.com:41402`.
+- **The address**, which is a host and a port: `nlteam://team.example.com:54080`.
   `status` and the startup log write it as an `https://` URL on their `sign in`
   line, and Studio does not take that spelling.
 - **An account**, created by `nlteam user create` or from Studio.
@@ -209,9 +209,9 @@ Most commands take `--root <path>`, the directory the server keeps its files in,
 which requires a terminal on the machine it runs on. `login` is the alternative:
 
 ```sh
-printf '%s' 'the password' | nlteam login team.example.com:41402 ada
-nlteam user list --server team.example.com:41402
-nlteam settings set token.sign_in_lifetime_seconds 7d --server team.example.com:41402
+printf '%s' 'the password' | nlteam login team.example.com:54080 ada
+nlteam user list --server team.example.com:54080
+nlteam settings set token.sign_in_lifetime_seconds 7d --server team.example.com:54080
 ```
 
 `login` exchanges a password for a token over TLS, pins the certificate authority

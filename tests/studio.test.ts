@@ -65,7 +65,7 @@ const FINGERPRINT = "3D:38:9F:E6";
 const DISCOVERY: DiscoveryDocument = {
   protocol: 2,
   name: "127.0.0.1",
-  auth: { required: true, url: "https://127.0.0.1:41402" },
+  auth: { required: true, url: "https://127.0.0.1:54080" },
   data: { url: "lore://127.0.0.1:41337" },
   policy: { publishLineage: "merge" },
   capabilities: ["projects", "project-detail", "members"],
@@ -389,7 +389,7 @@ describe("signing in with a password", () => {
     expect(claimsOf(answer.body["token"] as string)).toEqual(claimsOf(minted.token));
     // Named as well as compared, because these two are what a client acts on.
     const claims = decodeToken(answer.body["token"] as string).claims as TokenClaims;
-    expect(claims.aud).toContain("https://127.0.0.1:41402");
+    expect(claims.aud).toContain("https://127.0.0.1:54080");
     expect(claims.authority_sha256).toBe(FINGERPRINT);
   });
 

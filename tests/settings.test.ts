@@ -384,7 +384,7 @@ describe("the deployment identity a token's audience depends on", () => {
       identityConfig({
         issuer: "team.example.com",
         audience: "lore",
-        authOrigin: "team.example.com:41402",
+        authOrigin: "team.example.com:54080",
         env: "staging",
         idp: "example",
         teamPort: 41500,
@@ -397,7 +397,7 @@ describe("the deployment identity a token's audience depends on", () => {
     expect(storedIdentity(connection)).toEqual({
       issuer: "team.example.com",
       audience: "lore",
-      authOrigin: "team.example.com:41402",
+      authOrigin: "team.example.com:54080",
       env: "staging",
       idp: "example",
       teamPort: 41500,

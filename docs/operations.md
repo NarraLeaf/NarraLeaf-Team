@@ -23,7 +23,7 @@ services:
     environment:
       NLTEAM_HOSTNAME: team.example.com
     ports:
-      - "41402:41402"
+      - "54080:54080"
       - "41337:41337/tcp"
       - "41337:41337/udp"
     volumes:
@@ -46,7 +46,7 @@ given as an argument appears in the process list and in the shell history.
 
 `status` prints the other two things that reach the people who will use the
 server: the address and the certificate fingerprint. The address is a host and a
-port, `nlteam://team.example.com:41402`; `status` writes it as an `https://` URL
+port, `nlteam://team.example.com:54080`; `status` writes it as an `https://` URL
 on its `sign in` line, and Studio does not take that spelling. Accounts, projects
 and administration are managed from NarraLeaf Studio.
 
@@ -67,7 +67,7 @@ the signing keys, the certificate authority and the repository store. Backing up
 that volume backs up the server. Losing it means every machine that trusted this
 server has to be told to trust its replacement.
 
-**Two published ports.** 41402 carries sign-in and the session Studio holds.
+**Two published ports.** 54080 carries sign-in and the session Studio holds.
 41337 carries project data, and is one number with two listeners: gRPC over TCP
 and QUIC over UDP. Publish both. A client whose connection settles on QUIC waits
 rather than falling back. Team's own HTTP listener and the version-control health
@@ -175,14 +175,14 @@ stopping it on the way out.
 | 41337 | Version-control data | gRPC over TCP, QUIC over UDP | Yes. Studio opens a project through it |
 | 41339 | Version-control health check | HTTP | No |
 | 41400 | Team's signing keys and health | HTTP/1.1 | No |
-| 41402 | Sign-in, the discovery document, and the API Studio uses | gRPC over TLS, with HTTP/1.1 | Yes. People sign in here |
+| 54080 | Sign-in, the discovery document, and the API Studio uses | gRPC over TLS, with HTTP/1.1 | Yes. People sign in here |
 
-Only 41337 and 41402 belong on a network a collaborator reaches. `up` binds the
+Only 41337 and 54080 belong on a network a collaborator reaches. `up` binds the
 other two to the loopback, so they are unreachable from another machine whatever
 a firewall allows.
 
 41400 carries two documents and nothing else: the public halves of the signing
-keys, and whether the process is answering. Both are served on 41402 as well, and
+keys, and whether the process is answering. Both are served on 54080 as well, and
 that is where an operator reads them.
 
 Each port is moved by an option: `--data-port`, `--health-port`, `--team-port`
@@ -244,7 +244,7 @@ variable.
 
 ## Sign-in
 
-A Studio installation signs in over TLS on port 41402, by calling two methods:
+A Studio installation signs in over TLS on port 54080, by calling two methods:
 
 ```
 epic_urc.UrcAuthApi/ExchangeExternalTokenForUserToken       signing in
@@ -266,7 +266,7 @@ do to each. The version-control server refuses a token that arrives without it.
 
 ## The web console
 
-`nlteam up` serves a web console at `https://<host>:41402/console/`, on the same
+`nlteam up` serves a web console at `https://<host>:54080/console/`, on the same
 port and certificate as everything else. People sign in with the same account
 and password they would give Studio; the browser keeps a session cookie for up
 to thirty days (seven unused), and `nlteam user disable` or
@@ -285,7 +285,7 @@ to type at `/console/device` from any device. Each signed-in Studio is a device
 its owner can sign out from the console, and `nlteam user revoke-tokens` signs
 out all of them. The password sign-in stays for Studio builds that predate this.
 
-A link of the form `narraleaf://team/connect?server=https://<host>:41402` opens
+A link of the form `narraleaf://team/connect?server=https://<host>:54080` opens
 Studio's Add Server dialog with the address filled in.
 
 A browser has to trust the certificate the way Studio does. With Team's own
@@ -359,7 +359,7 @@ have `openssl` on it.
 A token's `aud` is the list of remotes the client is willing to send that token
 to. It will send it to nothing else. Two addresses must be present:
 
-- Team's endpoint, `https://host:41402`, where the client signs in.
+- Team's endpoint, `https://host:54080`, where the client signs in.
 - The version-control data port, `lore://host:41337`, where the work happens.
 
 Without the second, a client signs in, stores the token, and then fails every
@@ -415,7 +415,7 @@ store or a telemetry endpoint over HTTPS would need the public roots restored.
 
 ### The server address
 
-One address is what an author is given. `nlteam://team.example.com:41402` names
+One address is what an author is given. `nlteam://team.example.com:54080` names
 the endpoint, and the document served there provides the rest. It is answered
 over HTTP/1.1 on the same TLS listener that carries gRPC:
 
@@ -428,7 +428,7 @@ GET /.well-known/nlteam
   "protocol": 2,
   "name": "Winterlight",
   "policy": { "publishLineage": true },
-  "auth": { "required": true, "url": "https://team.example.com:41402" },
+  "auth": { "required": true, "url": "https://team.example.com:54080" },
   "data": { "url": "lore://team.example.com:41337" },
   "capabilities": ["session", "comments", "clients", "live", "overlay", "admin"],
   "authority": { "sha256": "3D:38:9F:E6:..." },
@@ -472,10 +472,10 @@ way. `nlteam login` signs in to a server, after which the command takes
 machine:
 
 ```sh
-nlteam login team.example.com:41402 ada < password.txt
-nlteam user list --server team.example.com:41402
-nlteam settings set token.sign_in_lifetime_seconds 7d --server team.example.com:41402
-nlteam logout team.example.com:41402
+nlteam login team.example.com:54080 ada < password.txt
+nlteam user list --server team.example.com:54080
+nlteam settings set token.sign_in_lifetime_seconds 7d --server team.example.com:54080
+nlteam logout team.example.com:54080
 ```
 
 `NLTEAM_SERVER` stands in for the flag, as `NLTEAM_ROOT` does for `--root`. A
@@ -568,7 +568,7 @@ paths and stops at the number of entries asked for.
 
 ```sh
 nlteam status --root /srv/team
-nlteam status --server team.example.com:41402
+nlteam status --server team.example.com:54080
 ```
 
 ```
@@ -580,7 +580,7 @@ loreserver 0.8.6, answering
   size          4.2 GiB
 
 reachable at
-  sign in       https://team.example.com:41402
+  sign in       https://team.example.com:54080
   data          lore://team.example.com:41337
   fingerprint   AB:CD:EF:...
   loopback      41339 health, 41400 jwks
@@ -616,7 +616,7 @@ with the reason.
 
 ```sh
 nlteam audit --root /srv/team
-nlteam audit --refused --limit 200 --server team.example.com:41402
+nlteam audit --refused --limit 200 --server team.example.com:54080
 ```
 
 ```
@@ -670,10 +670,10 @@ issued for the account, together with the server's address.
 The same commands take `--server` in place of `--root`:
 
 ```sh
-nlteam user create bob --server team.example.com:41402 < password.txt
-nlteam user list --server team.example.com:41402
-nlteam user disable bob --server team.example.com:41402
-nlteam user enable bob --server team.example.com:41402
+nlteam user create bob --server team.example.com:54080 < password.txt
+nlteam user list --server team.example.com:54080
+nlteam user disable bob --server team.example.com:54080
+nlteam user enable bob --server team.example.com:54080
 ```
 
 Over the protocol, `--role` is `admin` or the default and nothing else. A third
@@ -692,7 +692,7 @@ signs in.
 
 ```sh
 printf '%s' "$PASSWORD" | nlteam token mint ada --root /srv/team
-nlteam token mint ada --server team.example.com:41402
+nlteam token mint ada --server team.example.com:54080
 ```
 
 The token goes to standard output on its own; what is in it goes to standard
@@ -810,7 +810,7 @@ reports the command that will. `disable --root` will.
 
 ```sh
 nlteam settings set server.collaboration closed --root /srv/team
-nlteam settings set server.collaboration open --server team.example.com:41402
+nlteam settings set server.collaboration open --server team.example.com:54080
 ```
 
 `open` is the value a deployment that has not been told otherwise has. `closed`
@@ -852,8 +852,8 @@ not been retired is published in the JWKS, so a rotation invalidates nothing:
 ```sh
 nlteam key rotate --root /srv/team
 nlteam key list --root /srv/team
-nlteam key rotate --server team.example.com:41402
-nlteam key list --server team.example.com:41402
+nlteam key rotate --server team.example.com:54080
+nlteam key list --server team.example.com:54080
 ```
 
 Rotating over the protocol rotates the store the running server holds, so the next
@@ -869,7 +869,7 @@ lifetime after it stops signing.
 
 ```sh
 nlteam key retire nEQBz... --root /srv/team
-nlteam key retire nEQBz... --server team.example.com:41402
+nlteam key retire nEQBz... --server team.example.com:54080
 ```
 
 The key stops being published, and **every token it signed is refused from that
@@ -904,8 +904,8 @@ A project is one repository plus Team's record of it.
 ```sh
 nlteam project create harbour --root /srv/team --as ada --description "..."
 nlteam project list --root /srv/team
-nlteam project create harbour --server team.example.com:41402 --description "..."
-nlteam project list --server team.example.com:41402
+nlteam project create harbour --server team.example.com:54080 --description "..."
+nlteam project list --server team.example.com:54080
 nlteam project create harbour --repository 19c0d42... --root /srv/team --as ada
 ```
 
@@ -1010,8 +1010,8 @@ and add somebody else to the group.
 ```sh
 nlteam user grant-admin bob --root /srv/team
 nlteam user revoke-admin bob --root /srv/team
-nlteam user grant-admin bob --server team.example.com:41402
-nlteam user revoke-admin bob --server team.example.com:41402
+nlteam user grant-admin bob --server team.example.com:54080
+nlteam user revoke-admin bob --server team.example.com:54080
 ```
 
 `nlteam init` puts the first account in it.

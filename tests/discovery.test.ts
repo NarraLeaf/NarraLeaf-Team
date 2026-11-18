@@ -27,7 +27,7 @@ const temporaryRoot = useTemporaryRoots("nlteam-discovery-");
 const DOCUMENT: DiscoveryDocument = {
     protocol: 2,
     name: "team.example.lan",
-    auth: { required: true, url: "https://team.example.lan:41402" },
+    auth: { required: true, url: "https://team.example.lan:54080" },
     data: { url: "lore://team.example.lan:41337" },
     policy: { publishLineage: "merge" },
     capabilities: ["projects", "project-detail", "members"],

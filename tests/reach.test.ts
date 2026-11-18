@@ -82,7 +82,7 @@ describe("canReach", () => {
   });
 
   it("answers false for a name that does not resolve", async () => {
-    await expect(canReach("https://nlteam-reach-test.invalid:41402", 1000)).resolves.toBe(false);
+    await expect(canReach("https://nlteam-reach-test.invalid:54080", 1000)).resolves.toBe(false);
   });
 
   it("takes an IPv6 literal as a URL writes it", async () => {
@@ -96,9 +96,9 @@ describe("canReach", () => {
 
 describe("unreachableNotice", () => {
   it("names the address, the symptom and both remedies", () => {
-    const notice = unreachableNotice("https://team.example.com:41402");
+    const notice = unreachableNotice("https://team.example.com:54080");
 
-    expect(notice).toContain("https://team.example.com:41402");
+    expect(notice).toContain("https://team.example.com:54080");
     expect(notice).toContain("rebac");
     expect(notice).toContain("127.0.0.1 team.example.com");
     expect(notice).toContain("team.example.com:127.0.0.1");

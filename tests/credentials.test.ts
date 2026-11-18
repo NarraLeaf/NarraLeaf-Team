@@ -95,25 +95,25 @@ describe("the credential file", () => {
 
   it("holds several servers at once and forgets one of them", async () => {
     const directory = await temporaryRoot();
-    await rememberServer(directory, credential("one.example.lan:41402"));
-    await rememberServer(directory, credential("two.example.lan:41402", { account: "bob" }));
+    await rememberServer(directory, credential("one.example.lan:54080"));
+    await rememberServer(directory, credential("two.example.lan:54080", { account: "bob" }));
 
     expect([...(await readCredentials(directory)).keys()]).toEqual([
-      "one.example.lan:41402",
-      "two.example.lan:41402",
+      "one.example.lan:54080",
+      "two.example.lan:54080",
     ]);
 
-    expect(await forgetServer(directory, "one.example.lan:41402")).toBe(true);
-    expect([...(await readCredentials(directory)).keys()]).toEqual(["two.example.lan:41402"]);
+    expect(await forgetServer(directory, "one.example.lan:54080")).toBe(true);
+    expect([...(await readCredentials(directory)).keys()]).toEqual(["two.example.lan:54080"]);
     // Twice is not a mistake: there is simply nothing left to forget.
-    expect(await forgetServer(directory, "one.example.lan:41402")).toBe(false);
+    expect(await forgetServer(directory, "one.example.lan:54080")).toBe(false);
   });
 
   it.skipIf(process.platform === "win32")(
     "is readable by nobody but its owner, and so is the directory",
     async () => {
       const directory = join(await temporaryRoot(), "fresh");
-      await rememberServer(directory, credential("one.example.lan:41402"));
+      await rememberServer(directory, credential("one.example.lan:54080"));
 
       expect((await stat(credentialsPath(directory))).mode & 0o777).toBe(0o600);
       expect((await stat(directory)).mode & 0o777).toBe(0o700);
@@ -122,15 +122,15 @@ describe("the credential file", () => {
 
   it("drops one entry it cannot read rather than every entry beside it", async () => {
     const directory = await temporaryRoot();
-    await rememberServer(directory, credential("good.example.lan:41402"));
+    await rememberServer(directory, credential("good.example.lan:54080"));
     const path = credentialsPath(directory);
     const stored = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-    (stored["servers"] as Record<string, unknown>)["odd.example.lan:41402"] = { token: 7 };
+    (stored["servers"] as Record<string, unknown>)["odd.example.lan:54080"] = { token: 7 };
     await writeFile(path, JSON.stringify(stored), "utf8");
 
     const read = await readCredentials(directory);
 
-    expect([...read.keys()]).toEqual(["good.example.lan:41402"]);
+    expect([...read.keys()]).toEqual(["good.example.lan:54080"]);
   });
 
   it("refuses a file written by a later nlteam, rather than reading half of it", async () => {
@@ -149,18 +149,18 @@ describe("a server address", () => {
   it("has one spelling, whichever was typed", () => {
     // Two spellings of one server would be one server filed as two, and the
     // second of them would be a machine nobody is signed in to.
-    expect(parseServerAddress("Team.Example.LAN:41402")).toBe("team.example.lan:41402");
-    expect(parseServerAddress("  team.example.lan:41402  ")).toBe("team.example.lan:41402");
-    expect(parseServerAddress("nlteam://team.example.lan:41402")).toBe("team.example.lan:41402");
+    expect(parseServerAddress("Team.Example.LAN:54080")).toBe("team.example.lan:54080");
+    expect(parseServerAddress("  team.example.lan:54080  ")).toBe("team.example.lan:54080");
+    expect(parseServerAddress("nlteam://team.example.lan:54080")).toBe("team.example.lan:54080");
   });
 
   it("fills in the port a Team server listens on when none was written", () => {
-    expect(parseServerAddress("team.example.lan")).toBe("team.example.lan:41402");
+    expect(parseServerAddress("team.example.lan")).toBe("team.example.lan:54080");
   });
 
   it("brackets an IPv6 address however it arrived", () => {
     expect(parseServerAddress("[::1]:9000")).toBe("[::1]:9000");
-    expect(parseServerAddress("::1")).toBe("[::1]:41402");
+    expect(parseServerAddress("::1")).toBe("[::1]:54080");
   });
 
   it("refuses what is not a host and a port, saying which part was wrong", () => {
@@ -168,6 +168,6 @@ describe("a server address", () => {
     expect(() => parseServerAddress("team.example.lan/projects")).toThrow(/nothing after it/);
     expect(() => parseServerAddress("team.example.lan:0")).toThrow(/port number/);
     expect(() => parseServerAddress("team.example.lan:http")).toThrow(/port number/);
-    expect(() => parseServerAddress(":41402")).toThrow(/no host/);
+    expect(() => parseServerAddress(":54080")).toThrow(/no host/);
   });
 });

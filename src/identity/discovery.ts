@@ -58,7 +58,7 @@ export interface DiscoveryDocument {
      * something nobody can issue.
      */
     readonly required: boolean;
-    /** Where a token is presented, e.g. `https://team.example.lan:41402`. */
+    /** Where a token is presented, e.g. `https://team.example.lan:54080`. */
     readonly url: string;
   };
   readonly data: {

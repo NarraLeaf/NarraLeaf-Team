@@ -19,7 +19,7 @@ export interface IdentityConfig {
   readonly audience: string;
   /**
    * Host and optional port of the endpoint Studio authenticates against,
-   * without a scheme, for example `team.example.com:41402`.
+   * without a scheme, for example `team.example.com:54080`.
    *
    * Studio refuses to use a token whose `aud` does not name the endpoint it is
    * talking to, so this value reaches the token as well as the configuration.
@@ -94,7 +94,7 @@ export const DEFAULT_IDENTITY: IdentityConfig = {
   // The TLS listener on this machine, so the default configuration is
   // consistent with itself. A deployment other people reach names its own host
   // with --auth-origin, and its certificate is given that name with --hostname.
-  authOrigin: "127.0.0.1:41402",
+  authOrigin: "127.0.0.1:54080",
   env: "local",
   idp: "narraleaf-team",
   // Both are defaults, and a Team server reads what it mints with out of its database
@@ -103,7 +103,7 @@ export const DEFAULT_IDENTITY: IdentityConfig = {
   signInTokenLifetimeSeconds: 30 * 24 * 60 * 60,
   repositoryTokenLifetimeSeconds: 15 * 60,
   teamPort: 41400,
-  authTlsPort: 41402,
+  authTlsPort: 54080,
   dataPort: DEFAULT_PORTS.dataPort,
   hostnames: [],
 };
@@ -201,7 +201,7 @@ export function dataRemoteUrl(host: string, dataPort: number): string {
  *
  * There are two such addresses, and it is the second that is easy to forget:
  *
- *   - Team's auth endpoint, `https://host:41402`, where the client signs in.
+ *   - Team's auth endpoint, `https://host:54080`, where the client signs in.
  *   - loreserver's data port, `lore://host:41337`, which is where the work
  *     happens — cloning, committing, pushing. A token naming only the first
  *     signs in successfully and then fails every repository operation with
@@ -259,8 +259,8 @@ export function jwksUrl(teamPort: number, host = "127.0.0.1"): string {
  *   - **loreserver itself** connects to it to ask about a caller.
  *   - **Every client** is handed it when it connects, and looks its stored
  *     session up under that address. A client that signed in at
- *     `https://team.example.com:41402` and is then told the sign-in lives at
- *     `https://127.0.0.1:41402` finds no session and refuses every repository
+ *     `https://team.example.com:54080` and is then told the sign-in lives at
+ *     `https://127.0.0.1:54080` finds no session and refuses every repository
  *     call with `connecting to remote: No token stored` — after a sign-in that
  *     succeeded, which names neither this setting nor the address.
  *

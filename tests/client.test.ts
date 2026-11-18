@@ -440,7 +440,7 @@ describe("nlteam logout", () => {
   it("says so and changes nothing where there was nothing signed in", async () => {
     await credentialDirectory();
 
-    const { code, out, err } = await invoke(["logout", "team.example.lan:41402"]);
+    const { code, out, err } = await invoke(["logout", "team.example.lan:54080"]);
 
     expect(err).toBe("");
     expect(code).toBe(0);
@@ -772,7 +772,7 @@ describe("user create", () => {
       "create",
       "bob",
       "--server",
-      "team.example.lan:41402",
+      "team.example.lan:54080",
       "--role",
       "authors",
     ]);
@@ -785,7 +785,7 @@ describe("user create", () => {
       "create",
       "builder",
       "--server",
-      "team.example.lan:41402",
+      "team.example.lan:54080",
       "--service-account",
     ]);
     expect(mark.code).toBe(2);
@@ -948,7 +948,7 @@ describe("token mint", () => {
       "mint",
       "bob",
       "--server",
-      "team.example.lan:41402",
+      "team.example.lan:54080",
       "--data-port",
       "41500",
     ]);
@@ -1024,7 +1024,7 @@ describe("settings", () => {
       "token.lifetime",
       "7d",
       "--server",
-      "team.example.lan:41402",
+      "team.example.lan:54080",
     ]);
 
     expect(code).toBe(2);
@@ -1140,7 +1140,7 @@ describe("status", () => {
     const { code, err } = await invoke([
       "status",
       "--server",
-      "team.example.lan:41402",
+      "team.example.lan:54080",
       "--health-port",
       "41339",
     ]);
@@ -1450,7 +1450,7 @@ describe("project create", () => {
       "create",
       "harbour",
       "--server",
-      "team.example.lan:41402",
+      "team.example.lan:54080",
       "--as",
       "ada",
     ]);
@@ -1471,7 +1471,7 @@ describe("project create", () => {
       "create",
       "harbour",
       "--server",
-      "team.example.lan:41402",
+      "team.example.lan:54080",
       "--repository",
       newProjectId(),
     ]);

@@ -19,7 +19,7 @@ connection whose certificate was compared.
 An author is handed one address, `nlteam://host:port`, and nothing else. That is
 not where anything is served, it names a deployment, and reading the discovery
 document is what turns it into the URLs a client actually uses. The default port
-is `41402`.
+is `54080`.
 
 That address resolves to a TLS listener bound on every interface. It speaks
 HTTP/1.1 for the three things a client needs, the discovery document, the
@@ -41,7 +41,7 @@ served as JSON, is never cached, and answers `GET` and `HEAD`.
 {
   "protocol": 2,
   "name": "team.example.lan",
-  "auth": { "required": true, "url": "https://team.example.lan:41402" },
+  "auth": { "required": true, "url": "https://team.example.lan:54080" },
   "data": { "url": "lore://team.example.lan:41337" },
   "capabilities": ["session", "comments", "clients", "live", "overlay", "admin", "password-sign-in", "project-history"],
   "authority": { "sha256": "3D:38:…" },

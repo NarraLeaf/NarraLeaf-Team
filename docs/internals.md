@@ -109,7 +109,7 @@ ucs.auth.RebacApi/CreateResource            a repository now exists
 ucs.auth.RebacApi/DeleteResource            a repository is gone
 ```
 
-They are served on one listener, 41402, over TLS. A client reaches it and so
+They are served on one listener, 54080, over TLS. A client reaches it and so
 does the `loreserver` Team supervises, which is given Team's own certificate
 authority and verifies against it. There was a second listener carrying the same
 methods in plain HTTP/2 on the loopback, for a `loreserver` that could not be

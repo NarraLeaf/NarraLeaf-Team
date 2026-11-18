@@ -83,7 +83,7 @@ anything left on the list once the row has gone.
 
 ### One listener, one certificate, one fingerprint
 
-Everything a client says to this server arrives on port 41402 behind one
+Everything a client says to this server arrives on port 54080 behind one
 certificate: the discovery document, the sign-in route, the socket upgrade, the
 blob addresses and the gRPC authorization service the version-control server
 calls. The certificate is issued by an authority this server generated for itself
@@ -359,7 +359,7 @@ version-control server verifies against the same JWKS. Everyone signs in again.
 
 ```sh
 nlteam key retire <kid> --root /srv/team
-nlteam key retire <kid> --server team.example.com:41402
+nlteam key retire <kid> --server team.example.com:54080
 ```
 
 The key that is signing is refused on both paths. Rotate first, then retire the

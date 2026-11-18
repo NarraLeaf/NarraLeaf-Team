@@ -4777,7 +4777,7 @@ describe("a server closed to collaboration", () => {
     return discoveryDocument({
       database: team.database,
       host: "127.0.0.1",
-      auth: { required: true, url: "https://127.0.0.1:41402" },
+      auth: { required: true, url: "https://127.0.0.1:54080" },
       data: { url: "lore://127.0.0.1:41337" },
       // The socket's own function, which is what src/up.ts hands it. What a
       // client reads before it connects and what it is told after have to be one

@@ -1267,7 +1267,7 @@ function parseLogin(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation
   const [server, username, extra] = tokens.positionals;
   if (server === undefined) {
     return error(
-      "login needs the address of a server, for example team.example.lan:41402, and the " +
+      "login needs the address of a server, for example team.example.lan:54080, and the " +
         "username to sign in as",
     );
   }

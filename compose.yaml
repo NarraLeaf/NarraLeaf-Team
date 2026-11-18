@@ -44,7 +44,7 @@ services:
 
     ports:
       # Where people sign in and where Studio holds its session.
-      - "41402:41402"
+      - "54080:54080"
       # Where a project's data actually moves. One number, two listeners: gRPC
       # over TCP and QUIC over UDP. Publish both or a client whose connection
       # settles on QUIC will hang rather than fall back.

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### _Changes_
+
+- **The sign-in port is 54080 by default, not 41402.** It is still the one port
+  that carries sign-in, the web console and the session Studio holds, so the
+  console is now at `https://<host>:54080/console/`. A server started without
+  `--auth-tls-port` moves to it on upgrade, and every address an author saved
+  names the old one: keep `--auth-tls-port 41402` (or `NLTEAM_AUTH_TLS_PORT`)
+  to stay where it was, or hand authors the new address. `compose.yaml`
+  publishes 54080; a deployment that copied the old file publishes 41402 and
+  needs the same change.
+
 ### _Fixes_
 
 - **No keychain dialog on macOS.** Team kept the key for its own Lore sessions

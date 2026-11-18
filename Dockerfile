@@ -104,7 +104,7 @@ VOLUME ["/var/lib/nlteam"]
 # inside. 41337 is one number carrying two listeners, gRPC over TCP and QUIC
 # over UDP, and a deployment that publishes only the TCP half works until
 # somebody has a connection where QUIC wins.
-EXPOSE 41402/tcp 41337/tcp 41337/udp
+EXPOSE 54080/tcp 41337/tcp 41337/udp
 
 # loreserver's own health check, not Team's. Team's `/health` answers `{"ok":
 # true}` unconditionally - it says this process is running, which the container

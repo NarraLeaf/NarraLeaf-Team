@@ -283,7 +283,7 @@ const MAXIMUM_PORT = 65_535;
 /**
  * The scheme the one address an author is given is written with.
  *
- * Accepted and dropped rather than required. `nlteam://team.example.lan:41402`
+ * Accepted and dropped rather than required. `nlteam://team.example.lan:54080`
  * is what an operator pastes into a chat window, and refusing the string they
  * already have in order to demand the same string with four characters removed
  * would be pedantry with a cost.
@@ -301,7 +301,7 @@ const SCHEME = "nlteam://";
 export function parseServerAddress(text: string): string {
   const trimmed = text.trim();
   if (trimmed === "") {
-    return fail("a server address is a host and a port, for example team.example.lan:41402");
+    return fail("a server address is a host and a port, for example team.example.lan:54080");
   }
   const withoutScheme = trimmed.toLowerCase().startsWith(SCHEME)
     ? trimmed.slice(SCHEME.length)

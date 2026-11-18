@@ -150,7 +150,7 @@ describe("renderConfig, with identity switched on", () => {
     jwksUrl: "http://127.0.0.1:41400/.well-known/jwks.json",
     // Whatever `callbackUrl` answers; renderConfig writes it as given. On a
     // server with no --hostname that is the loopback.
-    callbackUrl: "https://127.0.0.1:41402",
+    callbackUrl: "https://127.0.0.1:54080",
   };
 
   it("writes both blocks, because one on its own fails as a client bug", () => {
@@ -168,7 +168,7 @@ describe("renderConfig, with identity switched on", () => {
       ].join("\n"),
     );
     expect(toml).toContain(
-      ["[environment.endpoint]", 'auth_url = "https://127.0.0.1:41402"'].join("\n"),
+      ["[environment.endpoint]", 'auth_url = "https://127.0.0.1:54080"'].join("\n"),
     );
   });
 
@@ -227,7 +227,7 @@ describe("writeInstance", () => {
       issuer: "narraleaf-team",
       audience: ["loreserver"],
       jwksUrl: "http://127.0.0.1:41400/.well-known/jwks.json",
-      callbackUrl: "https://127.0.0.1:41402",
+      callbackUrl: "https://127.0.0.1:54080",
     });
     expect(await readFile(layout.configPath, "utf8")).toContain('jwt_audience = ["loreserver"]');
 

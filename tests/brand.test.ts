@@ -48,7 +48,7 @@ async function serve(options: { empty?: boolean } = {}) {
     discoveryDocument({
       database,
       host: "team.example",
-      auth: { required: true, url: "https://team.example:41402" },
+      auth: { required: true, url: "https://team.example:54080" },
       data: { url: "lore://team.example:41337" },
       capabilities: () => [],
       authority: { sha256: "x" },
@@ -93,7 +93,7 @@ describe("a team's brand", () => {
     const got = await team.ask("GET", url);
     expect(got.status).toBe(200);
     expect(got.headers["content-type"]).toBe("image/png");
-    expect(team.discovery().brand?.logoUrl).toBe(`https://team.example:41402${url}`);
+    expect(team.discovery().brand?.logoUrl).toBe(`https://team.example:54080${url}`);
   });
 
   it("takes a sign-in picture from an operator, and says where it goes", async () => {

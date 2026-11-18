@@ -43,7 +43,7 @@ describe("the audience of a minted token", () => {
   });
 
   it("names the auth endpoint, so a client will sign in", () => {
-    const config = identityConfig({ authOrigin: "team.example.com:41402" });
+    const config = identityConfig({ authOrigin: "team.example.com:54080" });
     const auth = authUrl(config);
 
     // Both spellings: the client's own message about a mismatch has been seen
@@ -53,7 +53,7 @@ describe("the audience of a minted token", () => {
   });
 
   it("names the data remote, which is where the work actually happens", () => {
-    const config = identityConfig({ authOrigin: "team.example.com:41402", dataPort: 41337 });
+    const config = identityConfig({ authOrigin: "team.example.com:54080", dataPort: 41337 });
     const audience = tokenAudience(config);
 
     // Without these the client signs in, stores the token, and then fails every
@@ -67,7 +67,7 @@ describe("the audience of a minted token", () => {
 
   it("names the data remote for every host the operator supplied", () => {
     const config = identityConfig({
-      authOrigin: "team.example.com:41402",
+      authOrigin: "team.example.com:54080",
       hostnames: ["team.example.com", "team.internal", "10.0.0.7"],
       dataPort: 41337,
     });
@@ -84,7 +84,7 @@ describe("the audience of a minted token", () => {
   });
 
   it("follows the data port it was configured with", () => {
-    const config = identityConfig({ authOrigin: "team.example.com:41402", dataPort: 42_000 });
+    const config = identityConfig({ authOrigin: "team.example.com:54080", dataPort: 42_000 });
 
     expect(tokenAudience(config)).toContain("lore://team.example.com:42000");
     expect(tokenAudience(config)).not.toContain("lore://team.example.com:41337");
@@ -96,12 +96,12 @@ describe("the audience of a minted token", () => {
     const audience = tokenAudience(identityConfig());
 
     expect(audience).toContain("lore://127.0.0.1:41337");
-    expect(audience).toContain("https://127.0.0.1:41402");
+    expect(audience).toContain("https://127.0.0.1:54080");
   });
 
   it("repeats nothing, because a repeated audience says nothing extra", () => {
     const config = identityConfig({
-      authOrigin: "team.example.com:41402",
+      authOrigin: "team.example.com:54080",
       // The auth origin's own host named again, which an operator will do.
       hostnames: ["team.example.com", "team.example.com"],
     });
@@ -111,7 +111,7 @@ describe("the audience of a minted token", () => {
   });
 
   it("brackets an IPv6 host in the forms that are URLs, and not in the one that is not", () => {
-    const config = identityConfig({ authOrigin: "[::1]:41402", dataPort: 41337 });
+    const config = identityConfig({ authOrigin: "[::1]:54080", dataPort: 41337 });
     const audience = tokenAudience(config);
 
     expect(audience).toContain("lore://[::1]:41337");
@@ -124,17 +124,17 @@ describe("the hosts an audience is written for", () => {
   it("is the auth origin's host, plus everything --hostname named", () => {
     expect(
       audienceHosts(
-        identityConfig({ authOrigin: "team.example.com:41402", hostnames: ["team.internal"] }),
+        identityConfig({ authOrigin: "team.example.com:54080", hostnames: ["team.internal"] }),
       ),
     ).toEqual(["team.example.com", "team.internal"]);
   });
 
   it("takes the host out of an origin however the origin is written", () => {
-    expect(hostOf("team.example.com:41402")).toBe("team.example.com");
+    expect(hostOf("team.example.com:54080")).toBe("team.example.com");
     expect(hostOf("team.example.com")).toBe("team.example.com");
-    expect(hostOf("127.0.0.1:41402")).toBe("127.0.0.1");
+    expect(hostOf("127.0.0.1:54080")).toBe("127.0.0.1");
     // The brackets are what tell an address's colons from the port's.
-    expect(hostOf("[::1]:41402")).toBe("[::1]");
+    expect(hostOf("[::1]:54080")).toBe("[::1]");
     expect(hostOf("[2001:db8::2]")).toBe("[2001:db8::2]");
   });
 
@@ -177,12 +177,12 @@ describe("the auth origin nobody named", () => {
   it("is the first host the operator said people would use", () => {
     const config = identityConfig({ hostnames: ["team.example.com", "192.168.1.10"] });
 
-    expect(config.authOrigin).toBe("team.example.com:41402");
-    expect(authUrl(config)).toBe("https://team.example.com:41402");
+    expect(config.authOrigin).toBe("team.example.com:54080");
+    expect(authUrl(config)).toBe("https://team.example.com:54080");
   });
 
   it("is the loopback when there is no host, which is the whole truth about that server", () => {
-    expect(identityConfig().authOrigin).toBe("127.0.0.1:41402");
+    expect(identityConfig().authOrigin).toBe("127.0.0.1:54080");
   });
 
   it("gives way to an origin that was named, which may not be a hostname at all", () => {
@@ -226,7 +226,7 @@ describe("the address loreserver calls back at", () => {
       expect(callbackUrl(config)).toBe(authUrl(config));
     }
     expect(callbackUrl(identityConfig({ hostnames: ["team.example.com"] }))).toBe(
-      "https://team.example.com:41402",
+      "https://team.example.com:54080",
     );
   });
 

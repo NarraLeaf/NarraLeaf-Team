@@ -56,7 +56,7 @@ const PASSWORD = "a password nobody guesses";
 const DISCOVERY: DiscoveryDocument = {
   protocol: 1,
   name: "127.0.0.1",
-  auth: { required: true, url: "https://127.0.0.1:41402" },
+  auth: { required: true, url: "https://127.0.0.1:54080" },
   data: { url: "lore://127.0.0.1:41337" },
   policy: { publishLineage: "merge" },
   capabilities: [],
