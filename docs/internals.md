@@ -56,10 +56,10 @@ Only on the change, never on the interval. This is not an error, nothing waits
 on it and no screen turns red, what it prevents is a reader that has never once
 worked being indistinguishable from one whose first clone is still running.
 
-### The two variables the library reads
+### The variables the library reads
 
-Both are settled in `src/lore/environment.ts`, once, before the command that
-reads anything starts its reader. Neither may be decided lazily: they are read
+All are settled in `src/lore/environment.ts`, once, before the command that
+reads anything starts its reader. None may be decided lazily: they are read
 by native code on connections Team does not schedule.
 
 `SSL_CERT_FILE` names `<root>/tls/ca.crt`, so that the client trusts this
@@ -82,6 +82,15 @@ authorized to access repository"**, before Team is asked whether the caller may
 have it, which is why such a server has nothing in its authorization log at all.
 A store of Team's own holds one identity, so there is nothing else to select. It
 also keeps Team out of the store an operator's own Studio is using.
+
+`LORE_AUTH_STORE` is set to `fallback` alongside it. Left unset, lorelib keeps
+the key it seals sessions with in the platform's secret store; on macOS that is
+the login keychain item `com.epicgames.urc`, shared with every Lore client on
+the machine and rewritten on every sign-in. A server process the keychain does
+not recognise then waits on a system dialog, answers no calls until somebody
+clicks it, and Studio reports the server offline after its call timeout. With
+`fallback` the key is the file `<root>/credentials/sec-lore_encryption_key`.
+An operator who named their own `LORE_AUTH_PATH` keeps their key store too.
 
 An operator who set either variable themselves is left alone.
 

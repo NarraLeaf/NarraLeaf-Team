@@ -22,6 +22,8 @@ import { describe, expect, it } from "vitest";
 import {
   CREDENTIALS_VARIABLE,
   credentialsDir,
+  FILE_KEY_STORE,
+  KEY_STORE_VARIABLE,
   prepareLoreEnvironment,
   TRUST_ANCHOR_VARIABLE,
 } from "../src/lore/environment.js";
@@ -60,6 +62,31 @@ describe("the environment the version control library is given", () => {
     // And it exists, because the library is handed the name and does not make
     // the directory itself.
     expect((await stat(credentialsDir(root))).isDirectory()).toBe(true);
+  });
+
+  it("keeps the session key in that store rather than the platform's secret store", async () => {
+    // Left to itself lorelib keeps the key in the macOS login keychain and
+    // rewrites it on every sign-in. A server process the keychain does not
+    // recognise then waits on a system dialog nobody is watching, and every
+    // Studio call behind it times out as "offline".
+    const root = await temporaryRoot();
+    await withAuthority(root);
+    const env: NodeJS.ProcessEnv = {};
+
+    prepareLoreEnvironment(root, env);
+
+    expect(env[KEY_STORE_VARIABLE]).toBe(FILE_KEY_STORE);
+  });
+
+  it("keeps an operator's key store when they named one", async () => {
+    const root = await temporaryRoot();
+    await withAuthority(root);
+    const env: NodeJS.ProcessEnv = { [KEY_STORE_VARIABLE]: "keyring" };
+
+    prepareLoreEnvironment(root, env);
+
+    expect(env[KEY_STORE_VARIABLE]).toBe("keyring");
+    expect(env[CREDENTIALS_VARIABLE]).toBe(credentialsDir(root));
   });
 
   it("trusts this server's own authority, which no trust store on earth holds", async () => {
@@ -115,6 +142,9 @@ describe("the environment the version control library is given", () => {
 
     expect(env[TRUST_ANCHOR_VARIABLE]).toBe("/etc/ssl/theirs.pem");
     expect(env[CREDENTIALS_VARIABLE]).toBe("/var/lib/lore");
+    // Their store may hold sessions sealed with a key in the platform's secret
+    // store; moving the key would make every one of them unreadable.
+    expect(env[KEY_STORE_VARIABLE]).toBeUndefined();
     expect(prepared.trustAnchor).toBeUndefined();
     expect(prepared.credentials).toBeUndefined();
     await expect(stat(credentialsDir(root))).rejects.toThrow();

@@ -1,9 +1,9 @@
 /**
- * The two environment variables the version control library reads, decided
+ * The environment variables the version control library reads, decided
  * once, before anything asks it for anything.
  *
- * Both are process-wide and both are read by native code Team does not
- * control, so neither can be decided lazily by whichever code path happens to
+ * All are process-wide and all are read by native code Team does not
+ * control, so none can be decided lazily by whichever code path happens to
  * reach Lore first. They are settled here, from one function, called once by
  * whichever command reads a repository, and nothing below this layer touches
  * `process.env` again.
@@ -45,6 +45,13 @@
  * select. It also stops Team writing into the store an operator's own Studio is
  * using, which it had no business being in.
  *
+ * The key those sessions are sealed with moves into the same directory. Left
+ * in the platform's secret store, it is the one piece still shared with every
+ * Lore client on the machine, and on macOS each sign-in rewrites the keychain
+ * item: Team's process is stopped by a system dialog that no one running a
+ * server is watching, and every Studio call waiting on it times out and reads
+ * as the server being offline.
+ *
  * ## The trust anchor
  *
  * A `loreserver` told to demand a token sends its clients to Team's https
@@ -77,10 +84,26 @@ export const TRUST_ANCHOR_VARIABLE = "SSL_CERT_FILE";
  * The directory Lore keeps its sessions in.
  *
  * Measured: given this, lorelib writes `tokens.toml` and `tokens.toml.lock`
- * into it and reads nothing from the machine-wide store. `LORE_AUTH_STORE`,
- * which reads like the same thing, was given a directory and had no effect.
+ * into it and reads nothing from the machine-wide store.
  */
 export const CREDENTIALS_VARIABLE = "LORE_AUTH_PATH";
+
+/**
+ * Where Lore keeps the key it encrypts those sessions with.
+ *
+ * This is not a directory. Its one useful value is {@link FILE_KEY_STORE}; left
+ * unset, lorelib keeps the key in the platform's secret store — on macOS the
+ * login keychain item `com.epicgames.urc`, shared with every other Lore client
+ * on the machine — and writes it back on every sign-in. A process the keychain
+ * does not recognise is stopped by a system dialog on each of those writes, and
+ * a server stopped by a dialog answers no calls until somebody clicks it.
+ * Measured on lorelib 0.8.6: with {@link FILE_KEY_STORE} the key is written to
+ * `sec-lore_encryption_key` beside the sessions and the keychain is never read.
+ */
+export const KEY_STORE_VARIABLE = "LORE_AUTH_STORE";
+
+/** The value of {@link KEY_STORE_VARIABLE} that keeps the key in a file. */
+export const FILE_KEY_STORE = "fallback";
 
 /** Where one storage root keeps the sessions Team has signed in with. */
 export function credentialsDir(root: string): string {
@@ -104,7 +127,7 @@ export interface LoreEnvironment {
 }
 
 /**
- * Settle both variables for this process.
+ * Settle these variables for this process.
  *
  * Idempotent, and safe to call from more than one command: a value already in
  * the environment — Team's own from an earlier call, or an operator's — is
@@ -163,8 +186,15 @@ function store(root: string, env: NodeJS.ProcessEnv): string | undefined {
   }
   const directory = credentialsDir(root);
   // 0700, for the reason the keys directory is: what lands in here is a live
-  // session on every repository this server holds.
+  // session on every repository this server holds, and with the key below, the
+  // key that opens them.
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   env[CREDENTIALS_VARIABLE] = directory;
+  // Only alongside a store Team chose. An operator who named a store of their
+  // own may hold sessions sealed with a key in the platform's secret store, and
+  // moving the key out from under them would make every one unreadable.
+  if (!named(env, KEY_STORE_VARIABLE)) {
+    env[KEY_STORE_VARIABLE] = FILE_KEY_STORE;
+  }
   return directory;
 }

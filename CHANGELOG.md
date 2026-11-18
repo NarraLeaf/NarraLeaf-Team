@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### _Fixes_
+
+- **No keychain dialog on macOS.** Team kept the key for its own Lore sessions
+  in the login keychain and rewrote it on every sign-in, so a server whose
+  process the keychain did not recognise stopped at a system dialog and Studio
+  read it as offline. The key now sits in `<root>/credentials` beside the
+  sessions. An operator who set `LORE_AUTH_PATH` or `LORE_AUTH_STORE` keeps
+  their own.
+
 ## [1.0.0]
 
 Team holds a team project's current state, gives each project its own members
