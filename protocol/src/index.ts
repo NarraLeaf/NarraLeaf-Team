@@ -2497,8 +2497,12 @@ export const TEAM_METHODS = {
   /** Say something to everybody in one. Kept by nobody. */
   liveSay: "live.say",
   /**
-   * Where a project's documents stand: the last applied seq, the last saved
-   * version, the kernel this server applies with. Loads the authority.
+   * Agree the kernel for one project on this connection (the caller says its
+   * `kernel`; one that does not is refused), and where the project's documents
+   * stand: the last applied seq, the last saved version, the kernel this server
+   * applies with, whether the two are `compatible`, and the `session` agreed on.
+   * Until a compatible answer, the project's other document methods are refused
+   * and its doc topic delivers nothing to this connection. Loads the authority.
    */
   docHead: "doc.head",
   /** The applied edits after a seq, oldest first, a page at a time. */

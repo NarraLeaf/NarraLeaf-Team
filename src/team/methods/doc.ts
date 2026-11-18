@@ -65,13 +65,17 @@ export function docMethods(): TeamMethod[] {
         const read = paramsObject(params);
         const projectId = visibleProject(context, read);
         const authorities = authoritiesOf(context);
+        const compatible = agreeKernel(context, projectId, read["kernel"]);
         if (!(await authorities.load(projectId))) {
+          context.connection.kernel.forget(projectId);
           throw new MethodError("not-found", "no such project");
         }
         const head = authorities.head(projectId);
         return {
           project: projectId,
           kernel: ProjectAuthority.kernelVersion,
+          compatible,
+          session: context.connection.id,
           seq: head.seq,
           ...(head.snapshot === undefined
             ? {}
@@ -89,6 +93,7 @@ export function docMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const projectId = visibleProject(context, read);
+        requireKernel(context, projectId);
         const after = read["after"];
         if (typeof after !== "number" || !Number.isInteger(after) || after < 0) {
           throw new MethodError("bad-params", "after has to be a whole number, zero or more");
@@ -106,6 +111,7 @@ export function docMethods(): TeamMethod[] {
       handle: async (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const projectId = visibleProject(context, read);
+        requireKernel(context, projectId);
         const base = await authoritiesOf(context).base(projectId);
         if (base === undefined) {
           throw new MethodError("not-found", "no such project");
@@ -157,6 +163,7 @@ export function docMethods(): TeamMethod[] {
       handle: async (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const projectId = visibleProject(context, read);
+        requireKernel(context, projectId);
         const path = requiredText(read, "path", ANCHOR_FIELD_LIMIT);
         const current = await authoritiesOf(context).current(projectId, path);
         if (current === undefined) {
@@ -228,6 +235,7 @@ export function docMethods(): TeamMethod[] {
       handle: async (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const projectId = editableProject(context, read);
+        requireKernel(context, projectId);
         const clientId = requiredText(read, "clientId", INSTANCE_FIELD_LIMIT);
         const document = read["document"];
         const op = read["op"];
@@ -313,6 +321,47 @@ export function docMethods(): TeamMethod[] {
       },
     },
   ];
+}
+
+/**
+ * Agree this server's kernel for one project on this connection, from what the caller says it
+ * applies edits with - or refuse a caller that does not say.
+ *
+ * Two kernels can apply the same operation differently, so a Studio on another one must not follow
+ * or edit the project (docs/architecture.md). A caller that says nothing is a Studio from before
+ * this was asked, whose version is unknown: refused, which such a Studio takes as being offline -
+ * it keeps editing its own copy and sends the difference once it is updated. One that says another
+ * version is answered, so it can tell its author why, and agrees nothing. Answers whether it agreed.
+ */
+function agreeKernel(context: MethodContext, projectId: string, said: unknown): boolean {
+  const ours = ProjectAuthority.kernelVersion;
+  if (said === undefined) {
+    context.connection.kernel.forget(projectId);
+    throw new MethodError(
+      "refused",
+      `this server applies edits with Studio kernel ${ours}; say which kernel this client applies them with (kernel) - a Studio that does not is too old to follow this project`,
+    );
+  }
+  if (typeof said !== "number" || !Number.isInteger(said) || said < 1) {
+    context.connection.kernel.forget(projectId);
+    throw new MethodError("bad-params", "kernel has to be a whole number, one or more");
+  }
+  if (said !== ours) {
+    context.connection.kernel.forget(projectId);
+    return false;
+  }
+  context.connection.kernel.agree(projectId);
+  return true;
+}
+
+/** Refuse a document read or edit on a connection that has not agreed this server's kernel for the project. */
+function requireKernel(context: MethodContext, projectId: string): void {
+  if (!context.connection.kernel.agreed(projectId)) {
+    throw new MethodError(
+      "refused",
+      `this connection has not agreed Studio kernel ${ProjectAuthority.kernelVersion} for that project; call doc.head with kernel first`,
+    );
+  }
 }
 
 /** Refuse a member whose role is below what the project's owners set for saving or restoring. */

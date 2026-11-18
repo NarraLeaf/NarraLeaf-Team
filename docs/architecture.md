@@ -132,7 +132,11 @@ carry it.
 project's documents are JSON Team hands to Studio's kernel; what an operation
 means, which documents it reaches and how a file is parsed are the kernel's.
 A Studio and a server on different kernels (`KERNEL_VERSION`) must not edit the
-same project.
+same project. The server enforces it per connection: `doc.head` is where a
+Studio says its kernel, and a connection that has not agreed this server's for a
+project is told none of its effects and may not read its base or send it an
+edit. A Studio that never says (one older than the question) is refused and
+falls back to editing offline.
 
 **Nothing an author was told happened is lost.** An applied edit is in the log
 before it is published, and a project is reopened from its last snapshot plus

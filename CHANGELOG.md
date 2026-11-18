@@ -1,5 +1,94 @@
 # Changelog
 
+## [1.0.0]
+
+Team holds a team project's current state, gives each project its own members
+and roles, and carries the work a team does around a project. A web console
+reads all of it in a browser.
+
+### _Projects held by the server_
+
+- **Team is the authority for a team project's documents.** Studio sends what it
+  means to change; Team applies it with the same kernel Studio edits with,
+  numbers the result, and tells every window that has the project open. A window
+  that was offline replays what it did on its next connection.
+
+- **Every connection agrees the kernel first.** A client names its kernel version
+  in `doc.head`. Until the two agree, that connection gets no document methods
+  and no document events, so a Studio built against a different kernel stays
+  offline instead of writing documents the other side reads differently. Studio
+  says which version each side has.
+
+- **A first follow keeps unsaved local work.** Before a window adopts the
+  server's version, Studio records what it had not saved in local history. If
+  that save fails, the window stays offline with the work intact.
+
+- **Versions, compare and restore.** Any two revisions compare; a restore puts a
+  project back to a revision and is itself a version. Work in a team project is
+  credited to the person who did it, and Team commits and pushes from its own
+  working copy.
+
+### _Access_
+
+- **Access is per project.** Each project has members, each an owner, editor,
+  reviewer or viewer. A project somebody has no role in is, to them, not there.
+  Presence, live rooms and events stay inside the project they belong to.
+
+- **Sign-in grew.** Studio signs in through the browser with OAuth. Two-step
+  sign-in, SSO, API tokens, reset links and account policies are on the server.
+
+- **Permission templates, asking for access, and who may make and remove
+  projects**, with the areas each editor may change.
+
+### _Working together_
+
+- **To-dos, review requests, milestones and approvals**, with kinds, labels,
+  priorities and the revision that finished each one. A viewer's to-dos stay
+  private.
+
+- **Activity, notifications, watches, reactions, chat and a discussion area**,
+  with email digests and push.
+
+- **Comments beside the line, with pictures; asset locks; where each asset is
+  used.**
+
+- **Builds, share links, stats, localization, a glossary, voice, a roadmap and
+  templates.**
+
+- **Webhooks**, with their deliveries recorded.
+
+### _Administration_
+
+- **Backups, storage quotas, archive, and audit filters.**
+
+- **Accounts can be deleted, locked and edited.**
+
+### _The web console (beta)_
+
+- **A signed-in console at the server's own address.** Projects as the server
+  holds them, their files, the workbench, to-dos, reviews, settings and
+  administration, in English, Chinese and Japanese, on a desktop or a phone.
+
+### _Upgrading from 0.1.0_
+
+`docker compose pull && docker compose up -d` with the image tag set to `1.0.0`.
+The database migrates on start. Operators own every project and every other
+account starts as an editor of it, so a server upgraded from 0.1.0 behaves as it
+did until somebody narrows a project.
+
+**Team documents sync only with a Studio that agrees the kernel** (kernel
+version 4). A Studio without that agreement cannot edit a team project's
+documents through this server.
+
+### _Known limits_
+
+- The web console is a beta.
+- Reading a project's files and versions does not wait for kernel agreement.
+  Only document edits and document events do.
+
+[docs/security.md](docs/security.md) records the access model and the accepted
+risks in full.
+
 ## [0.1.0]
 
 The first release of NarraLeaf Team.
