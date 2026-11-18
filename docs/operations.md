@@ -257,11 +257,9 @@ since the first token was issued receives nothing.
 
 The second is called before a client opens a repository's data connection, and
 names the resources it wants. Team refuses the whole request unless every
-resource is a project of this server that the caller's account may still reach.
-A disabled account, or one whose tokens have been revoked, is stopped here,
-before a data connection is opened. Every account on a server reaches every
-project on it, so what this refuses is a resource that is not a project of this
-server, or a caller Team no longer admits.
+resource is a project of this server in which the caller still has a role that
+may open the repository. A disabled account, a revoked token, or a role without
+repository access is stopped here, before a data connection is opened.
 
 Both tokens carry a `resources` claim naming the projects and what the bearer may
 do to each. The version-control server refuses a token that arrives without it.
@@ -279,8 +277,8 @@ The page is built into `dist/console` by `npm run build` (or
 `/console/` with a 503 saying so. `NLTEAM_CONSOLE_ROOT` points the server at
 another directory, for working on the page.
 
-Studio signs in through the console too: a server that announces `oauth` (every
-0.2 server does) is offered "Sign in with browser", which opens
+Studio signs in through the console too: a server that announces `oauth` is
+offered "Sign in with browser", which opens
 `/oauth/authorize`, has the person sign in and approve the device, and returns
 to Studio. Where Studio's machine has no browser, the device flow shows a code
 to type at `/console/device` from any device. Each signed-in Studio is a device

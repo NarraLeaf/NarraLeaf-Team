@@ -165,7 +165,7 @@ because what it answers is a cookie and its only client is a browser.
 
 ### A console session
 
-Built in 0.2 (src/identity/websessions.ts). The cookie is
+The console session is implemented in `src/identity/websessions.ts`. The cookie is
 `__Host-nlteam=…; Secure; HttpOnly; SameSite=Lax; Path=/`: a page's script cannot
 read it, and the `__Host-` prefix makes a browser refuse it unless it is Secure,
 host-only and on `/`. The database holds the SHA-256 of the cookie, never the
@@ -187,7 +187,7 @@ does.
 
 ### Studio signs in through the browser
 
-Built in 0.2 (src/identity/oauth.ts, src/web/oauth.ts). Team is an OAuth 2.0
+The OAuth flow is implemented in `src/identity/oauth.ts` and `src/web/oauth.ts`. Team is an OAuth 2.0
 authorization server for one public client, `narraleaf-studio`: authorization
 code with PKCE (S256 only) to a loopback redirect by IP on any port (RFC 8252;
 `localhost` and anything not loopback are refused), and the device flow
@@ -206,10 +206,10 @@ both holders. Codes, refresh tokens and device codes are stored as SHA-256
 hashes. Codes live five minutes and are deleted on the first redemption attempt,
 right or wrong.
 
-### Decided for 0.2: what the web console adds
+### What the web console adds
 
-The session and the cross-site rules are built (above). The rest is recorded so
-the implementation is held to it.
+The session and the cross-site rules are built (above). The rest is the model
+the console is held to.
 - **Raw file reads.** Files are served out of Team's checkout to members of the
   project only, by a path normalised and then looked up in the revision's tree.
   Types outside a short list are served as attachments, SVG and HTML under

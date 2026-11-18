@@ -6,7 +6,7 @@
 
 # NarraLeaf-Team
 
-> This project is currently in the early stages of development.
+Current release: `1.0.0`.
 
 NarraLeaf Team is a self-hosted project server for teams working in NarraLeaf
 Studio. One organization runs one server, on its own network or in a container
@@ -14,9 +14,10 @@ it controls. There is no hosted service and no account to register.
 
 Team holds the projects a team works on together, issues the identity Studio
 signs in with, and answers the permission question behind every access to a
-project's repository. It has no interface of its own: authors reach it from
-Studio, and whoever runs it administers it with the `nlteam` commands, from a
-terminal on the server or from any machine that has signed in to it.
+project's repository. Authors reach it from Studio, and Team also serves its own
+web console for projects, reviews, collaboration and administration. Whoever
+runs it can use that console or the `nlteam` commands, from a terminal on the
+server or from any machine that has signed in to it.
 
 ## Features
 
@@ -26,15 +27,25 @@ terminal on the server or from any machine that has signed in to it.
 - **Accounts and tokens.** Every account is made by an operator. Studio exchanges
   a password for a token, and presents that token on every connection. Disabling
   an account, or revoking its tokens, takes effect on the next call.
-- **Access decisions.** Every repository access is checked against the account
-  that asked, and the outcome is recorded. An account that has been disabled or
-  revoked is stopped before a data connection is opened.
-- **Coordination.** Comments anchored to a scene, a row or an asset; who else has
-  a project open; live sessions and the data attached to them. All of it over one
-  authenticated connection.
-- **Management.** Accounts, settings, signing keys and the audit record are
-  managed over the same connection Studio uses, so a server is administered from
-  anywhere its operator has signed in from.
+- **Access decisions.** Every project has members with a role: owner, editor,
+  reviewer or viewer. Editors can be limited to story, characters, assets, UI,
+  localization or config. Every repository access is checked against the account
+  that asked, and the outcome is recorded.
+- **Team documents and versions.** The server is the authority for a team
+  project's current documents. Studio sends intent, Team applies it with the
+  same kernel Studio edits with, numbers the result, and lets an offline window
+  replay its work on reconnect. Any two revisions compare; restoring one is
+  another version.
+- **Collaboration and production.** Comments beside lines and assets, to-dos,
+  reviews, approvals, asset locks, discussions, notifications, builds, share
+  links, localization, glossary, voice, roadmaps, templates and webhooks.
+- **A web console.** Projects as the server holds them, files, versions,
+  comments, reviews, to-dos and administration in English, Chinese and Japanese,
+  on a desktop or a phone. The console is a beta.
+- **Management.** Accounts, policies, settings, signing keys, storage,
+  backups, archive and the audit record are managed over the same authenticated
+  connection Studio uses, so a server is administered from anywhere its operator
+  has signed in from.
 - **One directory.** Everything a server owns lives under one path: the accounts,
   the projects, the signing keys, the certificate authority and the repository
   store. Back up that directory and the server is backed up.

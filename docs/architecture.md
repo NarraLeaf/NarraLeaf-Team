@@ -172,11 +172,10 @@ The work itself is not in it. That is in the repositories, on the content plane.
 Presence, rooms and the per-topic sequence counters are not in it either: they
 are lost on restart and rebuilt by whoever reconnects.
 
-## Decided for 0.2: the web console
+## The web console
 
-Recorded here before the code exists, so that what is built can be held to it
-and a later change has to change this section first. The plan, with what was
-measured behind it, is [refactor-plan.zh.md](refactor-plan.zh.md).
+This section records the decisions the web console is held to. The plan, with
+what was measured behind it, is [refactor-plan.zh.md](refactor-plan.zh.md).
 
 **A third host.** Studio edits, the command line scripts and rescues, and a
 web console served by the server itself looks, comments and administers. The
