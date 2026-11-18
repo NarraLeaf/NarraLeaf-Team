@@ -417,7 +417,7 @@ export async function up(
             async (path) => tree.read(path),
           )),
           revision: tree.revision,
-        })),
+        }), { clone: true }),
       commit: async (projectId, files, message, blobs, keep) => {
         const options = await projects.workingCopyOptions(projectId);
         if (options === undefined) {

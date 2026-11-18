@@ -22,6 +22,7 @@ import {
   type TeamTodo,
   type TeamTodoKind,
   type TeamTodoStatus,
+  type TeamTodosEvent,
 } from "@narraleaf/team-protocol";
 
 import type { ConsoleAccount } from "./api";
@@ -256,6 +257,7 @@ export function Todos({
   project,
   members,
   assetPreview,
+  privateOnly,
 }: {
   connection: TeamConnection;
   open: boolean;
@@ -264,6 +266,8 @@ export function Todos({
   members?: readonly { username: string; displayName: string }[];
   /** Draws the asset that answered an asset request, where the project's files are at hand. */
   assetPreview?: (asset: string) => ReactNode;
+  /** The account may add only private to-dos here: it is a viewer of the project. */
+  privateOnly?: boolean;
 }) {
   const [todos, setTodos] = useState<readonly TeamTodo[] | undefined>(undefined);
   const [only, setOnly] = useState<TeamTodoKind | "all">("all");
@@ -294,8 +298,18 @@ export function Todos({
   useEffect(() => {
     if (!open || (project === undefined && account.id === undefined)) return undefined;
     load();
-    const topic = project === undefined ? accountTodosTopic(account.id ?? "") : projectTodosTopic(project);
-    return connection.subscribe(topic, () => load());
+    if (project === undefined) return connection.subscribe(accountTodosTopic(account.id ?? ""), () => load());
+    const stopProject = connection.subscribe(projectTodosTopic(project), () => load());
+    if (account.id === undefined) return stopProject;
+    // The account's own private to-dos here are never on the project's topic, only on its own.
+    const stopOwn = connection.subscribe(accountTodosTopic(account.id), (payload) => {
+      const event = payload as TeamTodosEvent;
+      if (event.kind === "todo-removed" || event.todo.project === project) load();
+    });
+    return () => {
+      stopProject();
+      stopOwn();
+    };
   }, [open, load, connection, project, account.id]);
 
   const create = (fields: Record<string, unknown>) => connection.call("todos.create", fields);
@@ -482,6 +496,7 @@ export function Todos({
     <div className="todos">
       {error !== undefined ? <Flash error={error} /> : null}
       <TodoComposer
+        privateOnly={privateOnly === true}
         project={project}
         members={members}
         milestones={milestones}

@@ -121,9 +121,10 @@ export class TeamHub {
   /**
    * Have every session of one account ask again what it may still hold.
    *
-   * For a change that takes something away from an account without touching its
-   * token — being taken out of a project — so that its subscriptions there are
-   * withdrawn now rather than at its next call.
+   * For a change that takes something away from an account — being taken out
+   * of a project, or disabled, deleted, demoted or having its tokens revoked by
+   * an operator — so that what it lost is withdrawn, or the session ended, now
+   * rather than at its next call or revalidation.
    */
   recheck(userId: string): void {
     for (const session of [...this.sessions]) {

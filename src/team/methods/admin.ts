@@ -654,6 +654,7 @@ export function adminMethods(): TeamMethod[] {
       refuseIfLastOperator(context, user, `nlteam user enable ${user.username}`);
       const body = adminUserBody(disableUser(context.options.database, user.username));
       announceUser(context, { kind: "user-disabled", user: body });
+      context.recheck?.(user.id);
       return { user: body };
     }),
     administeredWrite(TEAM_METHODS.adminUsersEnable, (read, context, repeat) => {
@@ -682,6 +683,7 @@ export function adminMethods(): TeamMethod[] {
       refuseIfLastOperator(context, user, `nlteam user grant-admin ${user.username}`);
       const body = adminUserBody(setAdmin(context.options.database, user.username, false));
       announceUser(context, { kind: "user-revoked-admin", user: body });
+      context.recheck?.(user.id);
       return { user: body };
     }),
     administeredWrite(TEAM_METHODS.adminUsersSetCreator, (read, context, repeat) => {
@@ -708,6 +710,7 @@ export function adminMethods(): TeamMethod[] {
       // a collision.
       const body = adminUserBody(revokeUserTokens(context.options.database, user.username));
       announceUser(context, { kind: "user-tokens-revoked", user: body });
+      context.recheck?.(user.id);
       return { user: body };
     }),
     administeredWrite(TEAM_METHODS.adminTokensMint, (read, context, repeat) => {
@@ -1077,6 +1080,7 @@ export function adminMethods(): TeamMethod[] {
       });
       const deleted = { id: user.id, username: user.username };
       announceUser(context, { kind: "user-deleted", ...deleted });
+      context.recheck?.(user.id);
       return { deleted };
     }),
     administeredWrite(TEAM_METHODS.adminUsersLock, (read, context, repeat) => {

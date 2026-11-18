@@ -262,7 +262,14 @@ export function ProjectPage(props: {
   const workbenchBody =
     tab === "todos" ? (
       <div className="wb-page">
-        <ProjectTodos account={account} connection={connection} open={open} projectId={projectId} tree={tree} />
+        <ProjectTodos
+          account={state.kind === "open" ? { ...account, id: state.hello.account.id } : account}
+          connection={connection}
+          open={open}
+          projectId={projectId}
+          tree={tree}
+          viewer={project?.role === "viewer"}
+        />
       </div>
     ) : treeError !== undefined ? (
       <Notice>{t("notReadYetLong")}</Notice>
@@ -574,8 +581,9 @@ function roleKey(role: TeamProjectRole): Phrase {
 
 /* ---------------------------------------------------------------- to-dos */
 
-function ProjectTodos(props: { account: ConsoleAccount; connection: TeamConnection; open: boolean; projectId: string; tree: Tree | undefined }) {
-  const { account, connection, open, projectId, tree } = props;
+/** `account.id` lets the board hear the account's own private to-dos here, which the project's topic never carries. */
+function ProjectTodos(props: { account: ConsoleAccount & { readonly id?: string }; connection: TeamConnection; open: boolean; projectId: string; tree: Tree | undefined; viewer: boolean }) {
+  const { account, connection, open, projectId, tree, viewer } = props;
   const register = useAssetRegister(projectId, tree);
   const byId = useMemo(() => new Map((register ?? []).map((asset) => [asset.id, asset])), [register]);
   const present = useMemo(() => new Set((tree?.files ?? []).map((file) => file.path)), [tree]);
@@ -606,7 +614,7 @@ function ProjectTodos(props: { account: ConsoleAccount; connection: TeamConnecti
       .then((answer) => setMembers(answer.members))
       .catch(() => undefined);
   }, [open, connection, projectId]);
-  return <Todos connection={connection} open={open} account={account} project={projectId} members={members} assetPreview={assetPreview} />;
+  return <Todos connection={connection} open={open} account={account} project={projectId} members={members} assetPreview={assetPreview} privateOnly={viewer} />;
 }
 
 /* ------------------------------------------------------------- overview */

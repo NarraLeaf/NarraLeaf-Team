@@ -16,10 +16,12 @@
  * same bandwidth to say the same thing later, and the point of this is that
  * nobody is waiting for any particular one of them.
  */
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 
 import { findProjectById } from "./registry.js";
 import { openRevisionTree, type RevisionTree } from "./read.js";
+import { ensureCheckout, readyMarkerPath } from "./cache.js";
 import type { WorkingCopyOptions } from "./workingCopy.js";
 import { knowsCommit, knowsCommitsOf, recordCommits } from "../collab/activity.js";
 import { emitWebhookEvent } from "../collab/webhooks.js";
@@ -189,11 +191,20 @@ export class ProjectReadings {
    * refusing: a person opening a story should not see "busy" because the
    * minute's refresh happened to be reading the same checkout. Undefined where
    * there is no checkout or no such revision.
+   *
+   * `clone` is for a caller that cannot settle for "not read yet": restoring a
+   * version. A project's first checkout is otherwise made by the next pass, up
+   * to a minute after the project's first version was saved (longer on a
+   * server with many projects, read one at a time), and a restore asked for in
+   * that window would be refused for a version that plainly exists. A page
+   * showing files is not given it, because nothing on screen should wait for a
+   * clone.
    */
   async revisionFiles<T>(
     projectId: string,
     revision: string,
     use: (tree: RevisionTree) => Promise<T>,
+    { clone = false }: { readonly clone?: boolean } = {},
   ): Promise<T | undefined> {
     const project = findProjectById(this.options.database, projectId);
     if (project === undefined) {
@@ -212,14 +223,19 @@ export class ProjectReadings {
       const { root, config } = this.options;
       this.keys ??= await KeyStore.open(identityLayout(root).keysDir).catch(() => undefined);
       const token = this.mint(projectId, project.createdBy);
-      tree = await openRevisionTree({
+      const reach = {
         root,
         projectId,
         projectName: project.name,
         remote: dataRemoteUrl(audienceHosts(config)[0] ?? "127.0.0.1", config.dataPort),
-        revision,
         ...(token === undefined ? {} : { token, authUrl: authUrl(config) }),
-      });
+      };
+      if (clone && !existsSync(readyMarkerPath(root, projectId))) {
+        // A clone that fails leaves nothing behind (see ensureCheckout), and
+        // the open below then answers undefined as it would have anyway.
+        await ensureCheckout(reach).catch(() => undefined);
+      }
+      tree = await openRevisionTree({ ...reach, revision });
       return tree === undefined ? undefined : await use(tree);
     } finally {
       await tree?.close();

@@ -5898,3 +5898,141 @@ describe("account policies", () => {
     expect((await ada.call(TEAM_METHODS.adminPoliciesSave, { name: "same", policy: {} })).code).toBe("bad-params");
   });
 });
+
+describe("presence and live rooms stay inside their project", () => {
+  /** ada's project, bob in it as an editor, and nora with an account and no role in it. */
+  async function withOutsider(): Promise<{ team: Harness; project: string; ada: Client; bob: Client; nora: Client }> {
+    const { team, project, ada, bob } = await withTwo();
+    const noraId = await account(team.database, "nora");
+    removeProjectMember(team.database, project, noraId);
+    return { team, project, ada, bob, nora: await team.connect(team.tokenFor("nora")) };
+  }
+
+  it("lists nobody on a project the caller cannot see, scoped or not", async () => {
+    const { project, ada, nora } = await withOutsider();
+    await ada.value(TEAM_METHODS.clientsAnnounce, { ...announcement("nomen", project), editing: "story-1" });
+    await nora.value(TEAM_METHODS.clientsAnnounce, announcement("the-imac"));
+
+    expect((await nora.value(TEAM_METHODS.clientsList, { project }))["clients"]).toEqual([]);
+    // Unscoped, nora still sees who is connected without a project - herself -
+    // and nothing of who has ada's project open or what they are editing.
+    const everyone = (await nora.value(TEAM_METHODS.clientsList, {}))["clients"] as { id: string }[];
+    expect(everyone.map((each) => each.id)).toEqual(["the-imac"]);
+    expect(((await ada.value(TEAM_METHODS.clientsList, {}))["clients"] as unknown[]).length).toBe(2);
+  });
+
+  it("will not let somebody outside the project listen to a room in it", async () => {
+    const { project, ada, nora } = await withOutsider();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1", rule: "code" });
+    const session = (opened["session"] as { id: string }).id;
+
+    // The four digits are enough to learn the room's id, and that is all they are enough for.
+    const found = await nora.value(TEAM_METHODS.liveByCode, { code: opened["code"] });
+    expect((found["session"] as { id: string }).id).toBe(session);
+    expect((await nora.send("subscribe", { topic: `live:${session}` })).code).toBe("not-found");
+  });
+
+  it("takes a removed member out of the room's topic and out of the room", async () => {
+    const { team, project, ada, bob } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("the-imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
+    const session = (opened["session"] as { id: string }).id;
+    await bob.value(TEAM_METHODS.liveJoin, { session });
+    expect((await bob.send("subscribe", { topic: `live:${session}` })).code).toBeUndefined();
+
+    await ada.value(TEAM_METHODS.projectsMembersRemove, { project, username: "bob" });
+    await bob.until(() =>
+      bob.events.some(
+        (event) => (event.payload as { kind?: string; topic?: string }).kind === "subscription-withdrawn" &&
+          (event.payload as { topic?: string }).topic === `live:${session}`,
+      ),
+    );
+    const room = (await ada.value(TEAM_METHODS.liveList, { project }))["sessions"] as {
+      members: { instance: string }[];
+    }[];
+    expect(room[0]?.members.map((member) => member.instance)).toEqual(["nomen"]);
+    expect(((await ada.value(TEAM_METHODS.clientsList, { project }))["clients"] as unknown[]).length).toBe(1);
+    void team;
+  });
+});
+
+describe("a viewer watches a live room and does not take part in it", () => {
+  /** ada's room on her project, open to walk in, with bob announced on it as a viewer. */
+  async function withViewer(): Promise<{ team: Harness; project: string; session: string; ada: Client; bob: Client }> {
+    const { team, project, ada, bob } = await withTwo();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "viewer" });
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("the-imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
+    return { team, project, session: (opened["session"] as { id: string }).id, ada, bob };
+  }
+
+  it("refuses a viewer opening, joining, asking into or speaking in a room", async () => {
+    const { project, session, bob } = await withViewer();
+    expect((await bob.call(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.liveJoin, { session })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.liveRequestJoin, { session })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.liveSay, { session, payload: { op: "set" } })).code).toBe("refused");
+  });
+
+  it("still lets a viewer see the room and listen to it", async () => {
+    const { project, session, bob } = await withViewer();
+    const listed = (await bob.value(TEAM_METHODS.liveList, { project }))["sessions"] as { id: string }[];
+    expect(listed.map((one) => one.id)).toEqual([session]);
+    expect((await bob.send("subscribe", { topic: `live:${session}` })).code).toBeUndefined();
+  });
+
+  it("takes a member made a viewer out of the room it is in", async () => {
+    const { project, ada, bob } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("the-imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
+    const session = (opened["session"] as { id: string }).id;
+    await bob.value(TEAM_METHODS.liveJoin, { session });
+
+    await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", role: "viewer" });
+    const members = async () =>
+      (((await ada.value(TEAM_METHODS.liveList, { project }))["sessions"] as { members: { instance: string }[] }[])[0]?.members ?? [])
+        .map((member) => member.instance);
+    expect(await members()).toEqual(["nomen"]);
+    expect((await bob.call(TEAM_METHODS.liveSay, { session, payload: null })).code).toBe("refused");
+    // Still on the project, as a viewer is: the instance stays where the room went.
+    expect(((await ada.value(TEAM_METHODS.clientsList, { project }))["clients"] as unknown[]).length).toBe(2);
+  });
+});
+
+describe("an operator taking an account's access away ends what it has open", () => {
+  it("says goodbye to a disabled account at once, not at its next call", async () => {
+    const { ada, bob } = await administered();
+    await ada.value(TEAM_METHODS.adminUsersDisable, { username: "bob" });
+    await bob.until(() => bob.byes.length > 0);
+    expect(bob.byes[0]?.code).toBe("unauthenticated");
+  });
+
+  it("says goodbye to an account whose tokens were revoked", async () => {
+    const { ada, bob } = await administered();
+    await ada.value(TEAM_METHODS.adminUsersRevokeTokens, { username: "bob" });
+    await bob.until(() => bob.byes.length > 0);
+    expect(bob.byes[0]?.code).toBe("unauthenticated");
+  });
+
+  it("takes the admin topics back from an operator who is one no longer", async () => {
+    const team = await harness();
+    await account(team.database, "ada", { groups: [ADMIN_ROLE] });
+    await account(team.database, "cy", { groups: [ADMIN_ROLE] });
+    const ada = await team.connect(team.tokenFor("ada"));
+    const cy = await team.connect(team.tokenFor("cy"));
+    expect((await cy.send("subscribe", { topic: "admin/users" })).code).toBeUndefined();
+
+    await ada.value(TEAM_METHODS.adminUsersRevokeAdmin, { username: "cy" });
+    await cy.until(() =>
+      cy.events.some(
+        (event) => (event.payload as { kind?: string; topic?: string }).kind === "subscription-withdrawn" &&
+          (event.payload as { topic?: string }).topic === "admin/users",
+      ),
+    );
+    expect(cy.byes).toEqual([]);
+  });
+});

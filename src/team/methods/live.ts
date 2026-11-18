@@ -33,6 +33,7 @@ import {
   type TeamMethod,
   projectVisible,
 } from "../methods.js";
+import { projectRole } from "../../projects/members.js";
 import {
   LiveJoinNeedsAskingError,
   NoSuchLiveSessionError,
@@ -58,6 +59,17 @@ function project(context: MethodContext, params: Record<string, unknown>): strin
     throw new MethodError("not-found", "there is no project of that id on this server");
   }
   return id;
+}
+
+/**
+ * Refuse a viewer: what is said in a room is edits to the project's documents,
+ * which the other members apply, and a viewer reads a project without changing
+ * it. Watching a room — listing it, holding its topic — stays open to them.
+ */
+function refuseViewer(context: MethodContext, projectId: string): void {
+  if (projectRole(context.options.database, projectId, context.user) === "viewer") {
+    throw new MethodError("refused", "a viewer of this project may watch its live sessions and does not take part in them");
+  }
 }
 
 /**
@@ -148,6 +160,7 @@ export function liveMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const id = project(context, read);
+        refuseViewer(context, id);
         const instance = callingInstance(context, id);
         // The one thing a room may not be opened without. The people in one
         // apply each other's operations to a document, which means nothing
@@ -201,7 +214,9 @@ export function liveMethods(): TeamMethod[] {
         const id = code === undefined
           ? requiredText(read, "session", ID_LIMIT)
           : byCode(context.presence, code);
-        const instance = callingInstance(context, room(context.presence, id).project);
+        const projectId = room(context.presence, id).project;
+        refuseViewer(context, projectId);
+        const instance = callingInstance(context, projectId);
         try {
           return { session: context.presence.join(instance, id, code) };
         } catch (error) {
@@ -261,7 +276,9 @@ export function liveMethods(): TeamMethod[] {
       capability: "live",
       handle: (params: unknown, context: MethodContext) => {
         const id = requiredText(paramsObject(params), "session", ID_LIMIT);
-        const instance = callingInstance(context, room(context.presence, id).project);
+        const projectId = room(context.presence, id).project;
+        refuseViewer(context, projectId);
+        const instance = callingInstance(context, projectId);
         try {
           // The room as it stands, which is what the asker is waiting to see change.
           return { session: context.presence.request(instance, id) };
@@ -339,7 +356,12 @@ export function liveMethods(): TeamMethod[] {
       handle: (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
         const id = requiredText(read, "session", ID_LIMIT);
-        const instance = callingInstance(context, room(context.presence, id).project);
+        const projectId = room(context.presence, id).project;
+        // Asked again on every message rather than trusted from the join: a member
+        // made a viewer since is taken out at the next recheck, and this covers the
+        // moment in between.
+        refuseViewer(context, projectId);
+        const instance = callingInstance(context, projectId);
         // Membership rather than mere subscription, and the two really differ: a
         // client may subscribe to a room's topic to watch it, and speaking in
         // one is something only the people in it do.

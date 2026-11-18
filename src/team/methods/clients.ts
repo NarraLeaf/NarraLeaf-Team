@@ -107,14 +107,29 @@ export function clientMethods(): TeamMethod[] {
       capability: "clients",
       handle: (params: unknown, context: MethodContext) => {
         const project = optionalText(paramsObject(params), "project", ID_LIMIT);
-        // Not checked here, unlike the announcement: asking about a project that
+        // Not refused here, unlike the announcement: asking about a project that
         // is not on this server is a question with an honest answer - nobody -
         // and a client polling one that was just taken off should be told that
         // rather than handed a refusal it has to interpret.
+        //
+        // ⚠ But nobody is also the answer for a project the caller has no role
+        // in, and for every such project in the unscoped list. An instance says
+        // who has the project open and which document they are in, which is
+        // exactly what the project's own clients topic keeps from outsiders.
+        // An instance on no project says only that somebody is connected, and
+        // stays in the list.
+        const seen = new Map<string, boolean>();
+        const visible = (id: string): boolean => {
+          let answer = seen.get(id);
+          if (answer === undefined) {
+            answer = projectVisible(context, id);
+            seen.set(id, answer);
+          }
+          return answer;
+        };
+        const listed = project === undefined ? context.presence.clients() : context.presence.clients(project);
         return {
-          clients: project === undefined
-            ? context.presence.clients()
-            : context.presence.clients(project),
+          clients: listed.filter((client) => client.project === undefined || visible(client.project)),
         };
       },
     },

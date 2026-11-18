@@ -180,6 +180,19 @@ export interface TodoInput {
   readonly priority?: TeamTodoPriority;
 }
 
+/**
+ * Refuse a viewer showing a to-do to a project. A viewer reads a project and
+ * does not write in it - no comments, no chat, no reviews - and a to-do the
+ * whole project sees, perhaps given to somebody, is writing in it. A private
+ * to-do in the project stays theirs to keep, and one given to them they may
+ * still move along.
+ */
+function refuseViewerShowing(database: DatabaseSync, actor: UserRecord, projectId: string | undefined): void {
+  if (projectId !== undefined && projectRole(database, projectId, actor) === "viewer") {
+    throw new TodoRefusal("refused", "a viewer reads this project and does not show to-dos to it; keep it private");
+  }
+}
+
 /** Check that a to-do's shape holds together, for the caller making it so. */
 function checkShape(
   database: DatabaseSync,
@@ -238,6 +251,7 @@ export function createTodo(database: DatabaseSync, actor: UserRecord, input: Tod
   const locale = input.locale ?? undefined;
   const milestoneId = input.milestoneId ?? undefined;
   checkShape(database, actor, { projectId, assigneeId, visibility, anchored: anchor !== undefined, kind, locale, milestoneId });
+  if (visibility === "project") refuseViewerShowing(database, actor, projectId);
   const status = input.status ?? "open";
   const id = randomUUID();
   database
@@ -307,6 +321,9 @@ export function updateTodo(database: DatabaseSync, actor: UserRecord, id: string
   const milestoneId =
     input.milestoneId === undefined ? (next.projectId === current.projectId ? current.milestoneId : undefined) : (input.milestoneId ?? undefined);
   checkShape(database, actor, { ...next, anchored: next.anchor !== undefined, kind, locale, milestoneId });
+  if (next.visibility === "project" && (current.visibility !== "project" || next.projectId !== current.projectId)) {
+    refuseViewerShowing(database, actor, next.projectId);
+  }
   const status = input.status ?? current.status;
   const doneAt = status === "done" ? (current.doneAt ?? now) : null;
   if (input.doneRevision !== undefined && (input.status !== "done" || next.projectId === undefined)) {

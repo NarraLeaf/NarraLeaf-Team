@@ -436,7 +436,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `clients.announce` | `clients` | Say which installation this is, and what it has open. Announcing an id one already holds is ordinary, it is how a reconnect keeps its place, and an id held by another account is a `conflict`. With a project, `editing` may name the document being edited in anchor terms (`story:<id>`, `ui:<id>`); the instance then carries `editing` and `editingSince` (kept while the same document is announced again), so another client opening that document can say who is in it. A hint, never a lock: nothing is refused because of it. |
 | `clients.withdraw` | `clients` | Take one window's presence back. |
 | `clients.list` | `clients` | Which installations are connected, optionally on one project. |
-| `live.list` | `live` | The live sessions open on one project. |
+| `live.list` | `live` | The live sessions open on one project. A viewer of the project may list rooms and hold a room's topic to watch it; opening, joining, asking to join and speaking are `refused` to them, and a member made a viewer is taken out of the rooms it is in. |
 | `live.open` | `live` | Open one, and be its first member. |
 | `live.join` | `live` | Join one somebody else opened. |
 | `live.leave` | `live` | Leave one. The last one out closes it. |
