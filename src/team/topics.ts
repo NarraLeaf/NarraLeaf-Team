@@ -99,6 +99,11 @@ export function projectOfTopic(topic: string): string | undefined {
   return separator === -1 ? rest : rest.slice(0, separator);
 }
 
+/** The live session a `live:{session}` topic is about, or undefined for any other topic. */
+export function liveSessionOfTopic(topic: string): string | undefined {
+  return topic.startsWith(LIVE_PREFIX) ? topic.slice(LIVE_PREFIX.length) : undefined;
+}
+
 /** Whether `topic` is one of this server's own, whoever is asking for it. */
 export function isAdminTopic(topic: string): boolean {
   return topic.startsWith(ADMIN_PREFIX);
@@ -163,8 +168,16 @@ export function judgeTopic(
     //
     // A build with no live sessions has no presence to ask, and a topic naming
     // one is then a topic nobody publishes on.
+    //
+    // ⚠ Existence alone is not enough, though: every operation said in a room
+    // goes out on this topic, and a room's id travels further than its project
+    // does - `live.byCode` answers it to anybody holding four digits, and
+    // somebody taken out of the project still remembers it. So the room's
+    // project is judged as a project topic would be, and a room in a project
+    // the caller cannot see reads as one that is not there.
     const id = topic.slice(LIVE_PREFIX.length);
-    if (presence?.liveSession(id) === undefined) {
+    const session = presence?.liveSession(id);
+    if (session === undefined || !maySeeProject(database, session.project, user)) {
       return { kind: "unknown", detail: "there is no live session of that id on this server" };
     }
     return { kind: "allowed" };

@@ -50,8 +50,8 @@ import {
   type TeamServerFrame,
 } from "./protocol.js";
 import { findProjectById } from "../projects/registry.js";
-import { maySeeProject } from "../projects/members.js";
-import { isAdminTopic, judgeTopic, projectOfTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
+import { maySeeProject, projectRole } from "../projects/members.js";
+import { isAdminTopic, judgeTopic, liveSessionOfTopic, projectOfTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
 import { CLOSE, type WebSocketConnection } from "./websocket.js";
 
 /**
@@ -408,7 +408,7 @@ export class TeamSession implements HubSession {
       this.fail(id, "refused", verdict.detail);
       return;
     }
-    const topicProject = projectOfTopic(frame.topic);
+    const topicProject = this.projectBehind(frame.topic);
     const gated =
       this.limits?.projects !== undefined && topicProject !== undefined && !this.limits.projects.includes(topicProject)
         ? "this API token does not reach that project"
@@ -489,16 +489,22 @@ export class TeamSession implements HubSession {
    * nothing it had not just been told.
    */
   private withdrawProjects(user: UserRecord): void {
+    const database = this.options.service.database;
+    // A member made a viewer keeps the project and its instance there, and is
+    // taken out of that project's rooms: a viewer watches a room and does not take
+    // part in one, which `live.join` and `live.say` refuse too. Before the
+    // operator test below because the role is what this asks about, and the same
+    // test the live methods make.
+    for (const instance of this.options.presence.instancesOf(this.id)) {
+      if (instance.project !== undefined && projectRole(database, instance.project, user) === "viewer") {
+        this.options.presence.leaveRooms(instance.id, instance.project);
+      }
+    }
     if (isOperator(user.groups)) {
       return;
     }
-    const database = this.options.service.database;
     const judged = new Map<string, boolean>();
-    for (const topic of [...this.topics]) {
-      const projectId = projectOfTopic(topic);
-      if (projectId === undefined) {
-        continue;
-      }
+    const lostOn = (projectId: string): boolean => {
       let lost = judged.get(projectId);
       if (lost === undefined) {
         lost =
@@ -506,10 +512,36 @@ export class TeamSession implements HubSession {
           !maySeeProject(database, projectId, user);
         judged.set(projectId, lost);
       }
-      if (lost) {
+      return lost;
+    };
+    for (const topic of [...this.topics]) {
+      // A live room's topic counts as its project's: what is said there is that
+      // project's documents, and judgeTopic let it in on those terms.
+      const projectId = this.projectBehind(topic);
+      if (projectId !== undefined && lostOn(projectId)) {
         this.withdraw(topic, "this account no longer has a role in that project");
       }
     }
+    // And whatever this connection announced on such a project goes with it.
+    // An instance is what a live room counts as a member and what `live.say`
+    // asks after, so one left standing would keep somebody in a room - still
+    // speaking into it - after the project they were in it for was taken away.
+    for (const instance of this.options.presence.instancesOf(this.id)) {
+      if (instance.project !== undefined && lostOn(instance.project)) {
+        this.options.presence.withdraw(this.id, instance.project);
+      }
+    }
+  }
+
+  /**
+   * The project a topic is about: a project topic's own, or a live room's.
+   *
+   * A room that has closed has no project to name, and its topic has nothing
+   * left on it to hear.
+   */
+  private projectBehind(topic: string): string | undefined {
+    const session = liveSessionOfTopic(topic);
+    return session === undefined ? projectOfTopic(topic) : this.options.presence.liveSession(session)?.project;
   }
 
   /** Drop one topic and tell this session alone, without moving its sequence. */

@@ -313,7 +313,7 @@ export class TeamPresence {
     return undefined;
   }
 
-  /** Everything announced on one connection, for a log line rather than a decision. */
+  /** Everything announced on one connection: for a log line, and for taking back what a lost project leaves behind. */
   instancesOf(connection: string): TeamClientInstance[] {
     const held = this.byConnection.get(connection);
     if (held === undefined) {
@@ -650,6 +650,26 @@ export class TeamPresence {
       return;
     }
     this.part(session, instanceId);
+  }
+
+  /**
+   * Take one instance out of every room of one project, and drop whatever it was
+   * still asking to be let into there - for an account that may no longer take
+   * part in that project's rooms (made a viewer of it), not for one that lost the
+   * project, which withdraws the whole instance.
+   *
+   * A request dropped this way is answered no, so whoever asked stops waiting.
+   */
+  leaveRooms(instanceId: string, project: string): void {
+    for (const session of [...this.sessions.values()]) {
+      if (session.project !== project) {
+        continue;
+      }
+      if (session.requests.delete(instanceId)) {
+        this.publish(projectLiveTopic(project), { kind: "live-refused", session: session.id, instance: instanceId });
+      }
+      this.part(session, instanceId);
+    }
   }
 
   /**
