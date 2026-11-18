@@ -19,6 +19,7 @@
  * server's own host for the name. The comment on migration 3 in ./database.ts
  * says why nothing writes those defaults in.
  */
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import { DEFAULT_IDENTITY, type IdentityConfig } from "./config.js";
@@ -101,6 +102,107 @@ export function isPublishLineageRule(value: string): value is PublishLineageRule
   return PUBLISH_LINEAGE_RULES.some((rule) => rule === value.trim());
 }
 
+/** The key that says who may make a project on this server. */
+export const PROJECT_CREATE_KEY = "project.create_by";
+
+/**
+ * Who may make a project: every account (`everyone`, a small team's default), the operators and
+ * the accounts they have let make projects (`creators`, see `PROJECT_CREATOR_GROUP`), or the
+ * operators alone (`admins`), for a server where projects are set up for people rather than by them.
+ */
+export const PROJECT_CREATORS = ["everyone", "creators", "admins"] as const;
+export type ProjectCreators = (typeof PROJECT_CREATORS)[number];
+export const DEFAULT_PROJECT_CREATORS: ProjectCreators = "everyone";
+
+export class InvalidProjectCreatorsError extends Error {
+  constructor(value: string) {
+    super(`${PROJECT_CREATE_KEY} cannot be "${value}". It is one of ${PROJECT_CREATORS.join(" or ")}.`);
+    this.name = "InvalidProjectCreatorsError";
+  }
+}
+
+export function isProjectCreators(value: string): value is ProjectCreators {
+  return PROJECT_CREATORS.some((word) => word === value.trim());
+}
+
+/** The key that says who may take a project off this server. */
+export const PROJECT_DELETE_KEY = "project.delete_by";
+
+/**
+ * Who may take a project off the list: any of its owners (`owners`, the default), or the operators
+ * alone (`admins`), for a server where a project outlives whoever set it up.
+ */
+export const PROJECT_DELETERS = ["owners", "admins"] as const;
+export type ProjectDeleters = (typeof PROJECT_DELETERS)[number];
+export const DEFAULT_PROJECT_DELETERS: ProjectDeleters = "owners";
+
+export class InvalidProjectDeletersError extends Error {
+  constructor(value: string) {
+    super(`${PROJECT_DELETE_KEY} cannot be "${value}". It is one of ${PROJECT_DELETERS.join(" or ")}.`);
+    this.name = "InvalidProjectDeletersError";
+  }
+}
+
+export function isProjectDeleters(value: string): value is ProjectDeleters {
+  return PROJECT_DELETERS.some((word) => word === value.trim());
+}
+
+/** The key that says what everybody else is given in a project they did not make. */
+export const PROJECT_ACCESS_KEY = "project.default_access";
+
+/**
+ * What an account is given in a project it was not put in by hand — every other
+ * account when a project is made, and every project when an account is made:
+ * an editor of all of it (`editor`, a small team's default and how Team behaved
+ * before this setting), a viewer (`viewer`), or nothing (`none`), so that people
+ * join a project by being added or by asking. The maker of a project owns it
+ * whatever this says. Changing it changes nobody's place in a project made already.
+ */
+export const PROJECT_ACCESSES = ["editor", "viewer", "none"] as const;
+export type ProjectAccess = (typeof PROJECT_ACCESSES)[number];
+export const DEFAULT_PROJECT_ACCESS: ProjectAccess = "editor";
+
+export class InvalidProjectAccessError extends Error {
+  constructor(value: string) {
+    super(`${PROJECT_ACCESS_KEY} cannot be "${value}". It is one of ${PROJECT_ACCESSES.join(" or ")}.`);
+    this.name = "InvalidProjectAccessError";
+  }
+}
+
+export function isProjectAccess(value: string): value is ProjectAccess {
+  return PROJECT_ACCESSES.some((word) => word === value.trim());
+}
+
+/** The key that says how long a team project's applied edits are kept once a version holds them. */
+export const DOCUMENT_RETENTION_KEY = "documents.retain_days";
+
+/**
+ * Days. Past this, a Studio that has been away starts again from the last saved version, and an
+ * offline edit based on something older comes back as a conflict, because what it collides with
+ * can no longer be checked.
+ */
+export const DEFAULT_DOCUMENT_RETENTION_DAYS = 30;
+export const MINIMUM_DOCUMENT_RETENTION_DAYS = 1;
+export const MAXIMUM_DOCUMENT_RETENTION_DAYS = 3650;
+
+export class InvalidDocumentRetentionError extends Error {
+  constructor(value: string) {
+    super(
+      `${DOCUMENT_RETENTION_KEY} is a whole number of days from ${MINIMUM_DOCUMENT_RETENTION_DAYS} ` +
+        `to ${MAXIMUM_DOCUMENT_RETENTION_DAYS}, not "${value}".`,
+    );
+    this.name = "InvalidDocumentRetentionError";
+  }
+}
+
+/** The days a value names, or undefined for one that is not a whole number in range. */
+export function readRetentionDays(value: string): number | undefined {
+  const text = value.trim().replace(/d$/i, "");
+  if (!/^\d+$/.test(text)) return undefined;
+  const days = Number(text);
+  return days >= MINIMUM_DOCUMENT_RETENTION_DAYS && days <= MAXIMUM_DOCUMENT_RETENTION_DAYS ? days : undefined;
+}
+
 /** The key that says whether this deployment is a collaboration server at all. */
 export const COLLABORATION_KEY = "server.collaboration";
 
@@ -170,6 +272,10 @@ export const SETTING_KEYS = [
   SERVER_NAME_KEY,
   COLLABORATION_KEY,
   PUBLISH_LINEAGE_KEY,
+  PROJECT_CREATE_KEY,
+  PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
+  DOCUMENT_RETENTION_KEY,
   SIGN_IN_LIFETIME_KEY,
   REPOSITORY_LIFETIME_KEY,
 ] as const;
@@ -212,7 +318,11 @@ export type SettingChange =
   | { readonly key: LifetimeKey; readonly seconds: number }
   | { readonly key: typeof SERVER_NAME_KEY; readonly name: string }
   | { readonly key: typeof PUBLISH_LINEAGE_KEY; readonly rule: PublishLineageRule }
-  | { readonly key: typeof COLLABORATION_KEY; readonly mode: CollaborationMode };
+  | { readonly key: typeof COLLABORATION_KEY; readonly mode: CollaborationMode }
+  | { readonly key: typeof PROJECT_CREATE_KEY; readonly creators: ProjectCreators }
+  | { readonly key: typeof PROJECT_DELETE_KEY; readonly deleters: ProjectDeleters }
+  | { readonly key: typeof PROJECT_ACCESS_KEY; readonly access: ProjectAccess }
+  | { readonly key: typeof DOCUMENT_RETENTION_KEY; readonly days: number };
 
 /**
  * The one thing about the repository lifetime that is not obvious from its
@@ -299,13 +409,13 @@ function withinRange(seconds: number): boolean {
 }
 
 /** The stored text of one setting, or undefined when there is no row. */
-function readSetting(database: DatabaseSync, key: string): string | undefined {
+export function readSetting(database: DatabaseSync, key: string): string | undefined {
   const row = database.prepare("SELECT value FROM settings WHERE key = ?").get(key);
   return row === undefined ? undefined : textColumn(row, "value");
 }
 
 /** Put one setting in the table, over whatever was there. */
-function writeSetting(database: DatabaseSync, key: string, value: string, at = Date.now()): void {
+export function writeSetting(database: DatabaseSync, key: string, value: string, at = Date.now()): void {
   database
     .prepare(
       `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
@@ -432,6 +542,58 @@ export function setCollaboration(database: DatabaseSync, mode: string): Collabor
   const stored = mode.trim() as CollaborationMode;
   writeSetting(database, COLLABORATION_KEY, stored);
   return stored;
+}
+
+/** Who may make a project, as it stands now. An unreadable value is the default. */
+export function storedProjectCreators(database: DatabaseSync): ProjectCreators {
+  const stored = readSetting(database, PROJECT_CREATE_KEY);
+  return stored !== undefined && isProjectCreators(stored) ? (stored.trim() as ProjectCreators) : DEFAULT_PROJECT_CREATORS;
+}
+
+export function setProjectCreators(database: DatabaseSync, value: string): ProjectCreators {
+  if (!isProjectCreators(value)) throw new InvalidProjectCreatorsError(value);
+  const stored = value.trim() as ProjectCreators;
+  writeSetting(database, PROJECT_CREATE_KEY, stored);
+  return stored;
+}
+
+/** Who may take a project off the list, as it stands now. An unreadable value is the default. */
+export function storedProjectDeleters(database: DatabaseSync): ProjectDeleters {
+  const stored = readSetting(database, PROJECT_DELETE_KEY);
+  return stored !== undefined && isProjectDeleters(stored) ? (stored.trim() as ProjectDeleters) : DEFAULT_PROJECT_DELETERS;
+}
+
+export function setProjectDeleters(database: DatabaseSync, value: string): ProjectDeleters {
+  if (!isProjectDeleters(value)) throw new InvalidProjectDeletersError(value);
+  const stored = value.trim() as ProjectDeleters;
+  writeSetting(database, PROJECT_DELETE_KEY, stored);
+  return stored;
+}
+
+/** What everybody else is given in a new project, as it stands now. An unreadable value is the default. */
+export function storedProjectAccess(database: DatabaseSync): ProjectAccess {
+  const stored = readSetting(database, PROJECT_ACCESS_KEY);
+  return stored !== undefined && isProjectAccess(stored) ? (stored.trim() as ProjectAccess) : DEFAULT_PROJECT_ACCESS;
+}
+
+export function setProjectAccess(database: DatabaseSync, value: string): ProjectAccess {
+  if (!isProjectAccess(value)) throw new InvalidProjectAccessError(value);
+  const stored = value.trim() as ProjectAccess;
+  writeSetting(database, PROJECT_ACCESS_KEY, stored);
+  return stored;
+}
+
+/** How many days applied edits are kept once saved, as it stands now. */
+export function storedRetentionDays(database: DatabaseSync): number {
+  const stored = readSetting(database, DOCUMENT_RETENTION_KEY);
+  return (stored === undefined ? undefined : readRetentionDays(stored)) ?? DEFAULT_DOCUMENT_RETENTION_DAYS;
+}
+
+export function setRetentionDays(database: DatabaseSync, value: string): number {
+  const days = readRetentionDays(value);
+  if (days === undefined) throw new InvalidDocumentRetentionError(value);
+  writeSetting(database, DOCUMENT_RETENTION_KEY, String(days));
+  return days;
 }
 
 /** The two lifetimes as they stand: stored where set, default where not. */
@@ -726,4 +888,180 @@ export function persistIdentity(database: DatabaseSync, config: IdentityConfig):
       writeSetting(database, key, value, now);
     }
   });
+}
+
+/* ------------------------------------------------------------------ brand */
+
+/** The team's accent colour, as `#rrggbb`. */
+export const BRAND_ACCENT_KEY = "brand.accent";
+/** The team's logo: the file name under brand/ in the storage root (`<sha256>.<ext>`). */
+export const BRAND_LOGO_KEY = "brand.logo";
+
+/** How a team looks: an accent colour and a logo, either absent until somebody chooses. */
+export interface Brand {
+  readonly accent?: string;
+  readonly logo?: string;
+}
+
+const ACCENT_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+/** Whether a string is an accent colour this server stores. */
+export function isAccent(value: string): boolean {
+  return ACCENT_PATTERN.test(value);
+}
+
+export function storedBrand(database: DatabaseSync): Brand {
+  const accent = readSetting(database, BRAND_ACCENT_KEY);
+  const logo = readSetting(database, BRAND_LOGO_KEY);
+  return {
+    ...(accent !== undefined && isAccent(accent) ? { accent: accent.toLowerCase() } : {}),
+    ...(logo !== undefined && /^[0-9a-f]{64}\.(png|jpg|webp)$/.test(logo) ? { logo } : {}),
+  };
+}
+
+/** Set or clear (`null`) the accent colour. */
+export function setBrandAccent(database: DatabaseSync, accent: string | null): void {
+  if (accent === null) {
+    database.prepare("DELETE FROM settings WHERE key = ?").run(BRAND_ACCENT_KEY);
+    return;
+  }
+  if (!isAccent(accent)) {
+    throw new Error(`"${accent}" is not a colour; an accent is written #rrggbb`);
+  }
+  writeSetting(database, BRAND_ACCENT_KEY, accent.toLowerCase());
+}
+
+/** Set or clear (`null`) the logo file name. */
+export function setBrandLogo(database: DatabaseSync, logo: string | null): void {
+  if (logo === null) {
+    database.prepare("DELETE FROM settings WHERE key = ?").run(BRAND_LOGO_KEY);
+    return;
+  }
+  writeSetting(database, BRAND_LOGO_KEY, logo);
+}
+
+/* ------------------------------------------------------------- sign-in look */
+
+/** The picture on the console's sign-in page: the file name under brand/ (`<sha256>.<ext>`). */
+export const BRAND_SIGNIN_IMAGE_KEY = "brand.signinImage";
+/** Where that picture goes: behind a centred form, or beside it on the left or right. */
+export const BRAND_SIGNIN_LAYOUT_KEY = "brand.signinLayout";
+
+export type SigninLayout = "center" | "left" | "right";
+
+export function isSigninLayout(value: string): value is SigninLayout {
+  return value === "center" || value === "left" || value === "right";
+}
+
+/** The sign-in page's picture and where it goes; without a picture the form is centred whatever is stored. */
+export interface SigninLook {
+  readonly image?: string;
+  readonly layout: SigninLayout;
+}
+
+export function storedSigninLook(database: DatabaseSync): SigninLook {
+  const image = readSetting(database, BRAND_SIGNIN_IMAGE_KEY);
+  const layout = readSetting(database, BRAND_SIGNIN_LAYOUT_KEY);
+  return {
+    ...(image !== undefined && /^[0-9a-f]{64}\.(png|jpg|webp)$/.test(image) ? { image } : {}),
+    layout: layout !== undefined && isSigninLayout(layout) ? layout : "center",
+  };
+}
+
+/** Set or clear (`null`) the sign-in picture's file name. */
+export function setSigninImage(database: DatabaseSync, image: string | null): void {
+  if (image === null) {
+    database.prepare("DELETE FROM settings WHERE key = ?").run(BRAND_SIGNIN_IMAGE_KEY);
+    return;
+  }
+  writeSetting(database, BRAND_SIGNIN_IMAGE_KEY, image);
+}
+
+export function setSigninLayout(database: DatabaseSync, layout: string): SigninLayout {
+  if (!isSigninLayout(layout)) {
+    throw new Error(`"${layout}" is not a sign-in layout; it is center, left or right`);
+  }
+  writeSetting(database, BRAND_SIGNIN_LAYOUT_KEY, layout);
+  return layout;
+}
+
+/* -------------------------------------------------------------- watermark */
+
+/** Whether every console page carries the viewer's name across it. Off until an operator turns it on. */
+export const WATERMARK_ENABLED_KEY = "watermark.enabled";
+/** Extra words drawn with the name, such as the team's or "confidential". */
+export const WATERMARK_TEXT_KEY = "watermark.text";
+
+/** The longest extra text a watermark carries. */
+export const WATERMARK_TEXT_LIMIT = 64;
+
+export interface Watermark {
+  readonly enabled: boolean;
+  readonly text?: string;
+}
+
+export function storedWatermark(database: DatabaseSync): Watermark {
+  const enabled = readSetting(database, WATERMARK_ENABLED_KEY) === "1";
+  const text = readSetting(database, WATERMARK_TEXT_KEY);
+  return { enabled, ...(text === undefined || text === "" ? {} : { text }) };
+}
+
+/** Change either half; the one left undefined stays as it is. An empty text clears it. */
+export function setWatermark(database: DatabaseSync, change: { enabled?: boolean; text?: string }): Watermark {
+  if (change.text !== undefined && [...change.text].length > WATERMARK_TEXT_LIMIT) {
+    throw new Error(`a watermark's text is at most ${WATERMARK_TEXT_LIMIT} characters`);
+  }
+  inTransaction(database, () => {
+    if (change.enabled !== undefined) {
+      writeSetting(database, WATERMARK_ENABLED_KEY, change.enabled ? "1" : "0");
+    }
+    if (change.text !== undefined) {
+      if (change.text.trim() === "") {
+        database.prepare("DELETE FROM settings WHERE key = ?").run(WATERMARK_TEXT_KEY);
+      } else {
+        writeSetting(database, WATERMARK_TEXT_KEY, change.text.trim());
+      }
+    }
+  });
+  return storedWatermark(database);
+}
+
+/* ------------------------------------------------------------- first setup */
+
+/**
+ * The code that lets a browser make this server's first account.
+ *
+ * `up` makes one while there are no accounts and prints it to the terminal it
+ * runs in, so only somebody who can read that terminal can claim the server -
+ * the same person who could have typed `nlteam init`. Kept as a hash, used
+ * once: the first account written removes it.
+ */
+export const SETUP_CODE_KEY = "setup.codeHash";
+
+const SETUP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function setupHash(code: string): string {
+  return createHash("sha256").update(code.replace(/[^A-Z0-9]/gi, "").toUpperCase()).digest("hex");
+}
+
+/** A fresh code, stored as its hash in place of any earlier one. Shown as XXXX-XXXX. */
+export function issueSetupCode(database: DatabaseSync): string {
+  const bytes = randomBytes(8);
+  let code = "";
+  for (const byte of bytes) code += SETUP_ALPHABET[byte % SETUP_ALPHABET.length];
+  writeSetting(database, SETUP_CODE_KEY, setupHash(code));
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
+/** Whether a code typed into the browser is the one `up` printed. */
+export function setupCodeMatches(database: DatabaseSync, code: string): boolean {
+  const stored = readSetting(database, SETUP_CODE_KEY);
+  if (stored === undefined) return false;
+  const given = Buffer.from(setupHash(code), "hex");
+  const held = Buffer.from(stored, "hex");
+  return given.length === held.length && timingSafeEqual(given, held);
+}
+
+export function clearSetupCode(database: DatabaseSync): void {
+  database.prepare("DELETE FROM settings WHERE key = ?").run(SETUP_CODE_KEY);
 }

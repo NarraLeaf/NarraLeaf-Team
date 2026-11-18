@@ -54,10 +54,30 @@
  * rather than written a second time, so that what a username may be and what
  * happens to a disabled account are answered in one place for both.
  */
-import { pageDecisions } from "../../identity/audit.js";
+import { pageDecisions, recordDecision } from "../../identity/audit.js";
+import { createBackup, listBackups, pruneBackups } from "../../backup.js";
+import { buildLimitBytes, storageView } from "../../collab/builds.js";
+import { createPasswordReset } from "../../identity/resets.js";
+import { removeTotp } from "../../identity/totp.js";
+import { listProjects } from "../../projects/registry.js";
+import {
+  accountPolicyView,
+  deletePolicyTemplate,
+  findPolicyTemplate,
+  listPolicyTemplates,
+  parsePolicy,
+  POLICY_DESCRIPTION_LIMIT,
+  POLICY_NAME_LIMIT,
+  PolicyRefusal,
+  policyLabels,
+  savePolicyTemplate,
+  setAccountPolicy,
+  type PolicyAssignment,
+} from "../../identity/accountPolicy.js";
 import { adminUserBody } from "../../identity/answers.js";
 import { SigningKeyRetirementError, type KeyStore } from "../../identity/keys.js";
 import { defaultPasswordHasher } from "../../identity/passwords.js";
+import { plainAddress, sendMail, smtpSettings } from "../../collab/smtp.js";
 import {
   COLLABORATION_KEY,
   InvalidCollaborationModeError,
@@ -66,7 +86,29 @@ import {
   InvalidSettingError,
   isLifetimeKey,
   PUBLISH_LINEAGE_KEY,
+  PROJECT_CREATE_KEY,
+  PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
+  DOCUMENT_RETENTION_KEY,
+  setProjectCreators,
+  setProjectDeleters,
+  setProjectAccess,
+  setRetentionDays,
+  storedRetentionDays,
+  InvalidProjectCreatorsError,
+  InvalidProjectDeletersError,
+  InvalidProjectAccessError,
+  InvalidDocumentRetentionError,
   SERVER_NAME_KEY,
+  isAccent,
+  setBrandAccent,
+  isSigninLayout,
+  setSigninLayout,
+  setWatermark,
+  storedSigninLook,
+  storedWatermark,
+  WATERMARK_TEXT_LIMIT,
+  storedBrand,
   setCollaboration,
   setPublishLineage,
   setServerName,
@@ -78,6 +120,7 @@ import {
   countEnabledAdmins,
   createUser,
   DEFAULT_ROLE,
+  deleteUser,
   disableUser,
   DISPLAY_NAME_LIMIT,
   DISPLAY_NAME_REFUSAL,
@@ -89,10 +132,16 @@ import {
   InvalidEmailError,
   InvalidRoleError,
   InvalidUsernameError,
+  isLocked,
   isOperator,
+  lockUser,
   pageUsers,
+  PROJECT_CREATOR_ROLE,
   revokeUserTokens,
   setAdmin,
+  setProjectCreator,
+  unlockUser,
+  updateUserProfile,
   UsernameTakenError,
   WeakPasswordError,
   type UserRecord,
@@ -105,6 +154,16 @@ import {
 } from "../../identity/writes.js";
 import { readDuration } from "../../duration.js";
 import { settingKeyOf, settingRows } from "../../view.js";
+import {
+  BACKUP_EVERY_HOURS,
+  BACKUP_KEEP,
+  InvalidPolicyError,
+  policyNamed,
+  policyNumber,
+  PUBLIC_URL,
+  readPolicy,
+  setPolicy,
+} from "../../identity/policy.js";
 import {
   boundedCount,
   flag,
@@ -384,7 +443,8 @@ function keyRows(keys: KeyStore): { keys: TeamAdminKey[]; total: number } {
 function namedAccount(context: MethodContext, read: Record<string, unknown>): UserRecord {
   const username = requiredText(read, "username", USERNAME_LIMIT);
   const user = findUser(context.options.database, username);
-  if (user === undefined) {
+  // A deleted account is a name kept for history, not one anything here can change.
+  if (user === undefined || user.deletedAt !== undefined) {
     throw new MethodError("not-found", "there is no account of that name on this server");
   }
   return user;
@@ -476,6 +536,21 @@ function mintedBefore(note: RecordedWrite): TeamAdminMintedToken | undefined {
   return { username: kept.username, expiresAt: kept.expiresAt };
 }
 
+/** One backup at a time per process: two would race for the same moment's name. */
+let backupRunning = false;
+
+const POLICY_ID_LIMIT = 64;
+
+/** Run a policy change, turning a refusal of the policy itself into a refusal of the call. */
+function policied<T>(work: () => T): T {
+  try {
+    return work();
+  } catch (error) {
+    if (error instanceof PolicyRefusal) throw new MethodError("bad-params", error.message);
+    throw error;
+  }
+}
+
 export function adminMethods(): TeamMethod[] {
   return [
     administered(TEAM_METHODS.adminUsersList, (params: unknown, context: MethodContext) => {
@@ -489,7 +564,13 @@ export function adminMethods(): TeamMethod[] {
         // Composed by the builder every answer carrying an account uses, so
         // that the record a change hands back and the record a list carries
         // cannot come to differ by a field.
-        users: page.users.map((user) => adminUserBody(user)),
+        users: (() => {
+          const labels = policyLabels(context.options.database);
+          return page.users.map((user) => {
+            const policy = labels.get(user.id);
+            return policy === undefined ? adminUserBody(user) : { ...adminUserBody(user), policy };
+          });
+        })(),
         // Opaque to the caller: `<createdAt>:<id>` as this server wrote it,
         // passed straight back. Absent when no page follows this one.
         ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
@@ -573,6 +654,7 @@ export function adminMethods(): TeamMethod[] {
       refuseIfLastOperator(context, user, `nlteam user enable ${user.username}`);
       const body = adminUserBody(disableUser(context.options.database, user.username));
       announceUser(context, { kind: "user-disabled", user: body });
+      context.recheck?.(user.id);
       return { user: body };
     }),
     administeredWrite(TEAM_METHODS.adminUsersEnable, (read, context, repeat) => {
@@ -601,6 +683,20 @@ export function adminMethods(): TeamMethod[] {
       refuseIfLastOperator(context, user, `nlteam user grant-admin ${user.username}`);
       const body = adminUserBody(setAdmin(context.options.database, user.username, false));
       announceUser(context, { kind: "user-revoked-admin", user: body });
+      context.recheck?.(user.id);
+      return { user: body };
+    }),
+    administeredWrite(TEAM_METHODS.adminUsersSetCreator, (read, context, repeat) => {
+      const user = namedAccount(context, read);
+      const creator = read["creator"];
+      if (typeof creator !== "boolean") {
+        throw new MethodError("bad-params", "creator has to be true or false");
+      }
+      if (repeat.already !== undefined || user.groups.includes(PROJECT_CREATOR_ROLE) === creator) {
+        return { user: adminUserBody(user) };
+      }
+      const body = adminUserBody(setProjectCreator(context.options.database, user.username, creator));
+      announceUser(context, { kind: "user-creator-set", user: body });
       return { user: body };
     }),
     administeredWrite(TEAM_METHODS.adminUsersRevokeTokens, (read, context, repeat) => {
@@ -614,6 +710,7 @@ export function adminMethods(): TeamMethod[] {
       // a collision.
       const body = adminUserBody(revokeUserTokens(context.options.database, user.username));
       announceUser(context, { kind: "user-tokens-revoked", user: body });
+      context.recheck?.(user.id);
       return { user: body };
     }),
     administeredWrite(TEAM_METHODS.adminTokensMint, (read, context, repeat) => {
@@ -689,6 +786,21 @@ export function adminMethods(): TeamMethod[] {
       if (before === undefined) {
         throw new MethodError("not-found", `this server has no setting called ${label}`);
       }
+      const policy = policyNamed(before.label);
+      if (policy !== undefined) {
+        if (repeat.already !== undefined) return { setting: before };
+        try {
+          const raw = read["value"];
+          if (typeof raw !== "string" || Buffer.byteLength(raw, "utf-8") > SETTING_VALUE_LIMIT) throw new MethodError("bad-params", "value has to be a string");
+          setPolicy(context.options.database, policy.key, raw);
+        } catch (error) {
+          if (error instanceof InvalidPolicyError) throw new MethodError("bad-params", error.message);
+          throw error;
+        }
+        const changed = settingOf(context.options, label) as TeamAdminSetting;
+        if (changed.value !== before.value) context.publish(TOPIC_ADMIN_SETTINGS, { kind: "setting-changed", setting: changed } satisfies TeamAdminSettingsEvent);
+        return { setting: changed };
+      }
       const key = settingKeyOf(before.label);
       if (!before.editable || key === undefined) {
         // Refused rather than accepted and dropped. The identity settings and
@@ -717,6 +829,14 @@ export function adminMethods(): TeamMethod[] {
           // that "is that a rule" has one answer wherever the question arrives
           // from.
           setPublishLineage(context.options.database, value);
+        } else if (key === PROJECT_CREATE_KEY) {
+          setProjectCreators(context.options.database, value);
+        } else if (key === PROJECT_DELETE_KEY) {
+          setProjectDeleters(context.options.database, value);
+        } else if (key === PROJECT_ACCESS_KEY) {
+          setProjectAccess(context.options.database, value);
+        } else if (key === DOCUMENT_RETENTION_KEY) {
+          setRetentionDays(context.options.database, value);
         } else if (key === COLLABORATION_KEY) {
           // A word out of a closed set as well, checked where it is stored for
           // the same reason. This is the one row on this surface whose value
@@ -753,7 +873,11 @@ export function adminMethods(): TeamMethod[] {
           error instanceof InvalidServerNameError ||
           error instanceof InvalidSettingError ||
           error instanceof InvalidPublishLineageError ||
-          error instanceof InvalidCollaborationModeError
+          error instanceof InvalidCollaborationModeError ||
+          error instanceof InvalidProjectCreatorsError ||
+          error instanceof InvalidProjectDeletersError ||
+          error instanceof InvalidProjectAccessError ||
+          error instanceof InvalidDocumentRetentionError
         ) {
           // Every way a value can be the wrong value, answered as the caller's
           // rather than as this server's. One of these missing would reach the
@@ -874,15 +998,297 @@ export function adminMethods(): TeamMethod[] {
     administered(TEAM_METHODS.adminAuditList, (params: unknown, context: MethodContext) => {
       const read = paramsObject(params);
       const cursor = optionalText(read, "cursor", CURSOR_LIMIT);
+      const username = optionalText(read, "username", USERNAME_LIMIT);
+      const action = optionalText(read, "action", 120);
+      const outcome = optionalText(read, "outcome", 16);
+      if (outcome !== undefined && outcome !== "allowed" && outcome !== "refused") {
+        throw new MethodError("bad-params", "outcome is allowed or refused");
+      }
+      const moment = (name: string): number | undefined => {
+        const value = read[name];
+        if (value === undefined || value === null) return undefined;
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+          throw new MethodError("bad-params", `${name} is a time in milliseconds`);
+        }
+        return value;
+      };
+      const since = moment("since");
+      const until = moment("until");
       const page = pageDecisions(context.options.database, {
         limit: boundedCount(read, "limit", DEFAULT_AUDIT_PAGE, MAXIMUM_AUDIT_PAGE),
         ...(cursor === undefined ? {} : { before: cursor }),
+        ...(username === undefined ? {} : { username }),
+        ...(action === undefined ? {} : { action }),
+        ...(outcome === undefined ? {} : { allowed: outcome === "allowed" }),
+        ...(since === undefined ? {} : { since }),
+        ...(until === undefined ? {} : { until }),
       });
       return {
         // Newest first, because the order somebody looks for a refusal in is
         // backwards from now.
         decisions: page.decisions,
         ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
+      };
+    }),
+    administered(TEAM_METHODS.adminUsersResetLink, (params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      const user = namedAccount(context, paramsObject(params));
+      if (user.isServiceAccount || user.disabledAt !== undefined) {
+        throw new MethodError("refused", "a disabled or service account cannot be given a reset link");
+      }
+      const made = createPasswordReset(database, user.id, context.user.id);
+      const path = `/console/reset/${made.token}`;
+      const base = readPolicy(database, PUBLIC_URL).replace(/\/+$/, "");
+      recordDecision(database, {
+        username: context.user.username,
+        resource: `account:${user.username}`,
+        allowed: true,
+        detail: "password reset link made",
+      });
+      // The link is shown once, to the admin who asked; only its hash is kept.
+      return { path, ...(base === "" ? {} : { url: `${base}${path}` }), expiresAt: made.expiresAt };
+    }),
+    administered(TEAM_METHODS.adminUsersResetTwoFactor, (params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      const user = namedAccount(context, paramsObject(params));
+      removeTotp(database, user.id);
+      recordDecision(database, {
+        username: context.user.username,
+        resource: `account:${user.username}`,
+        allowed: true,
+        detail: "two-step sign-in reset by an admin",
+      });
+      return { user: adminUserBody(user) };
+    }),
+    administeredWrite(TEAM_METHODS.adminUsersDelete, (read, context, repeat) => {
+      const username = requiredText(read, "username", USERNAME_LIMIT);
+      const found = findUser(context.options.database, username);
+      if (found !== undefined && found.deletedAt !== undefined && repeat.already !== undefined) {
+        return { deleted: { id: found.id, username: found.username } };
+      }
+      const user = namedAccount(context, read);
+      if (user.id === context.user.id) {
+        throw new MethodError("refused", "an operator cannot delete their own account; ask another operator");
+      }
+      refuseIfLastOperator(context, user, `nlteam user enable ${user.username}`);
+      deleteUser(context.options.database, user.username);
+      recordDecision(context.options.database, {
+        username: context.user.username,
+        resource: `account:${user.username}`,
+        allowed: true,
+        detail: "account deleted by an admin",
+      });
+      const deleted = { id: user.id, username: user.username };
+      announceUser(context, { kind: "user-deleted", ...deleted });
+      context.recheck?.(user.id);
+      return { deleted };
+    }),
+    administeredWrite(TEAM_METHODS.adminUsersLock, (read, context, repeat) => {
+      const user = namedAccount(context, read);
+      const minutes = read["minutes"];
+      if (minutes !== undefined && (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes < 1 || minutes > 525_600)) {
+        throw new MethodError("bad-params", "minutes has to be a whole number from 1 to 525600, or left out for a lock with no end");
+      }
+      if (repeat.already !== undefined) {
+        return { user: adminUserBody(user) };
+      }
+      if (user.id === context.user.id) {
+        throw new MethodError("refused", "an operator cannot lock their own account");
+      }
+      const until = minutes === undefined ? undefined : Date.now() + minutes * 60_000;
+      const body = adminUserBody(lockUser(context.options.database, user.username, until));
+      announceUser(context, { kind: "user-locked", user: body });
+      return { user: body };
+    }),
+    administeredWrite(TEAM_METHODS.adminUsersUnlock, (read, context, repeat) => {
+      const user = namedAccount(context, read);
+      if (repeat.already !== undefined || (!isLocked(user) && user.lockedUntil === undefined)) {
+        return { user: adminUserBody(user) };
+      }
+      const body = adminUserBody(unlockUser(context.options.database, user.username));
+      announceUser(context, { kind: "user-unlocked", user: body });
+      return { user: body };
+    }),
+    administeredWrite(TEAM_METHODS.adminUsersUpdate, (read, context) => {
+      const user = namedAccount(context, read);
+      const displayName = optionalText(read, "displayName", DISPLAY_NAME_LIMIT, DISPLAY_NAME_REFUSAL);
+      if (read["displayName"] !== undefined && displayName === undefined) {
+        throw new MethodError("bad-params", "displayName has to be a non-empty string");
+      }
+      // An empty address takes the one the account had away.
+      const email = read["email"] === undefined ? undefined : (optionalText(read, "email", EMAIL_LIMIT, EMAIL_REFUSAL) ?? "");
+      if (email !== undefined && email !== "" && !/^[^\s@]+@[^\s@]+$/.test(email)) {
+        throw new MethodError("bad-params", "that is not an email address");
+      }
+      let changed: UserRecord;
+      try {
+        changed = updateUserProfile(context.options.database, user.username, {
+          ...(displayName === undefined ? {} : { displayName }),
+          ...(email === undefined ? {} : { email }),
+        });
+      } catch (error) {
+        if (error instanceof InvalidDisplayNameError || error instanceof InvalidEmailError) {
+          throw new MethodError("bad-params", error.message);
+        }
+        throw error;
+      }
+      const body = adminUserBody(changed);
+      announceUser(context, { kind: "user-updated", user: body });
+      return { user: body };
+    }),
+    administered(TEAM_METHODS.adminPoliciesList, (_params: unknown, context: MethodContext) => ({
+      templates: listPolicyTemplates(context.options.database),
+    })),
+    administered(TEAM_METHODS.adminPoliciesSave, (params: unknown, context: MethodContext) => {
+      const read = paramsObject(params);
+      const id = optionalText(read, "id", POLICY_ID_LIMIT);
+      const description = optionalText(read, "description", POLICY_DESCRIPTION_LIMIT);
+      const template = policied(() =>
+        savePolicyTemplate(context.options.database, {
+          ...(id === undefined ? {} : { id }),
+          name: requiredText(read, "name", POLICY_NAME_LIMIT),
+          ...(description === undefined ? {} : { description }),
+          policy: parsePolicy(read["policy"]),
+        }),
+      );
+      recordDecision(context.options.database, {
+        username: context.user.username,
+        resource: `policy:${template.name}`,
+        allowed: true,
+        detail: id === undefined ? "account policy template made" : `account policy template changed (${template.accounts} accounts follow it)`,
+      });
+      return { template };
+    }),
+    administered(TEAM_METHODS.adminPoliciesDelete, (params: unknown, context: MethodContext) => {
+      const id = requiredText(paramsObject(params), "id", POLICY_ID_LIMIT);
+      const template = findPolicyTemplate(context.options.database, id);
+      if (template !== undefined && deletePolicyTemplate(context.options.database, id)) {
+        recordDecision(context.options.database, {
+          username: context.user.username,
+          resource: `policy:${template.name}`,
+          allowed: true,
+          detail: "account policy template removed; its accounts keep its settings as their own",
+        });
+      }
+      return {};
+    }),
+    administered(TEAM_METHODS.adminUsersPolicy, (params: unknown, context: MethodContext) => {
+      const user = namedAccount(context, paramsObject(params));
+      return accountPolicyView(context.options.database, user.id);
+    }),
+    administered(TEAM_METHODS.adminUsersPolicySet, (params: unknown, context: MethodContext) => {
+      const read = paramsObject(params);
+      const raw = read["usernames"] ?? (read["username"] === undefined ? undefined : [read["username"]]);
+      if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAXIMUM_USER_PAGE || raw.some((name) => typeof name !== "string")) {
+        throw new MethodError("bad-params", "name the account in username, or several in usernames");
+      }
+      const users = (raw as string[]).map((username) => namedAccount(context, { username }));
+      const templateId = optionalText(read, "template", POLICY_ID_LIMIT);
+      let assignment: PolicyAssignment;
+      if (read["clear"] === true) {
+        assignment = null;
+      } else if (templateId !== undefined) {
+        assignment = { template: templateId };
+      } else if (read["policy"] !== undefined) {
+        assignment = { policy: policied(() => parsePolicy(read["policy"])) };
+      } else {
+        throw new MethodError("bad-params", "give a template, a policy, or clear: true");
+      }
+      for (const user of users) {
+        policied(() => setAccountPolicy(context.options.database, user.id, assignment, context.user.username));
+        recordDecision(context.options.database, {
+          username: context.user.username,
+          resource: `account:${user.username}`,
+          allowed: true,
+          detail: assignment === null ? "account policy cleared" : "template" in assignment ? "account policy template applied" : "account policy set",
+        });
+      }
+      return { policies: users.map((user) => ({ username: user.username, ...accountPolicyView(context.options.database, user.id) })) };
+    }),
+    administered(TEAM_METHODS.adminStorageList, (_params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      return {
+        buildLimitBytes: buildLimitBytes(database),
+        projects: listProjects(database).map((project) => ({
+          ...storageView(database, project.id),
+          name: project.name,
+          ...(project.title === undefined ? {} : { title: project.title }),
+          ...(project.archivedAt === undefined ? {} : { archivedAt: project.archivedAt }),
+        })),
+      };
+    }),
+    administered(TEAM_METHODS.adminBackupsList, async (_params: unknown, context: MethodContext) => ({
+      backups: await listBackups(context.options.root),
+      everyHours: policyNumber(context.options.database, BACKUP_EVERY_HOURS),
+      keep: policyNumber(context.options.database, BACKUP_KEEP),
+    })),
+    administered(TEAM_METHODS.adminBackupsCreate, async (_params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      const root = context.options.root;
+      if (backupRunning) {
+        throw new MethodError("conflict", "a backup is being taken already");
+      }
+      backupRunning = true;
+      try {
+        const made = await createBackup(root, database);
+        await pruneBackups(root, policyNumber(database, BACKUP_KEEP));
+        recordDecision(database, {
+          username: context.user.username,
+          resource: "server:backup",
+          allowed: true,
+          detail: `backup taken: ${made.name}`,
+        });
+        return { backup: made };
+      } finally {
+        backupRunning = false;
+      }
+    }),
+    administered(TEAM_METHODS.adminDocumentsStatus, (_params: unknown, context: MethodContext) => {
+      const database = context.options.database;
+      const authorities = context.options.authorities;
+      const loaded = new Map((authorities?.status() ?? []).map((entry) => [entry.projectId, entry]));
+      // Every project with a log or a saved version, held in memory or not: one that went quiet
+      // and was let go still has its log and its versions.
+      const rows = database
+        .prepare(
+          `SELECT p.id AS id, p.name AS name,
+                  (SELECT COUNT(*) FROM doc_effects e WHERE e.project_id = p.id) AS log_rows,
+                  (SELECT MAX(seq) FROM doc_effects e WHERE e.project_id = p.id) AS log_seq,
+                  s.seq AS snapshot_seq, s.at AS snapshot_at, s.pruned_through AS pruned_through,
+                  (SELECT COUNT(*) FROM doc_versions v WHERE v.project_id = p.id) AS versions
+             FROM projects p LEFT JOIN doc_snapshots s ON s.project_id = p.id
+            ORDER BY p.name`,
+        )
+        .all() as Array<{
+        id: string;
+        name: string;
+        log_rows: number;
+        log_seq: number | null;
+        snapshot_seq: number | null;
+        snapshot_at: number | null;
+        pruned_through: number | null;
+        versions: number;
+      }>;
+      return {
+        held: authorities !== undefined,
+        retainDays: storedRetentionDays(database),
+        projects: rows
+          .filter((row) => loaded.has(row.id) || row.log_rows > 0 || row.snapshot_seq !== null)
+          .map((row) => {
+            const held = loaded.get(row.id);
+            return {
+              project: row.id,
+              name: row.name,
+              loaded: held !== undefined,
+              seq: held?.seq ?? Math.max(row.log_seq ?? 0, row.snapshot_seq ?? 0),
+              savedSeq: held?.snapshotSeq ?? row.snapshot_seq ?? 0,
+              ...(row.snapshot_at === null ? {} : { savedAt: row.snapshot_at }),
+              logRows: row.log_rows,
+              prunedThrough: row.pruned_through ?? 0,
+              versions: row.versions,
+              ...(held === undefined ? {} : { lastEditAt: held.lastEditAt, owedFiles: held.owedFiles, unreadable: held.unreadable, documents: held.documents }),
+            };
+          }),
       };
     }),
     administered(TEAM_METHODS.adminServerStatus, (_params: unknown, context: MethodContext) =>
@@ -892,5 +1298,65 @@ export function adminMethods(): TeamMethod[] {
       // of" instead of implying it is live.
       serverStatus(context.options),
     ),
+    administered(TEAM_METHODS.adminBrandSet, (params: unknown, context: MethodContext) => {
+      // The accent alone: a logo is bytes, and bytes go over HTTP
+      // (PUT /api/console/v1/brand/logo), not in a frame.
+      const read = paramsObject(params);
+      const accent = read["accent"];
+      if (accent !== undefined) {
+        if (accent !== null && (typeof accent !== "string" || !isAccent(accent))) {
+          throw new MethodError("bad-params", "accent has to be a colour written #rrggbb, or null");
+        }
+        setBrandAccent(context.options.database, accent as string | null);
+      }
+      const layout = read["signinLayout"];
+      if (layout !== undefined) {
+        if (typeof layout !== "string" || !isSigninLayout(layout)) {
+          throw new MethodError("bad-params", "signinLayout is center, left or right");
+        }
+        setSigninLayout(context.options.database, layout);
+      }
+      const watermark = read["watermark"];
+      if (watermark !== undefined) {
+        if (typeof watermark !== "object" || watermark === null || Array.isArray(watermark)) {
+          throw new MethodError("bad-params", "watermark is an object of enabled and text");
+        }
+        const change = watermark as Record<string, unknown>;
+        if (change["enabled"] !== undefined && typeof change["enabled"] !== "boolean") {
+          throw new MethodError("bad-params", "watermark.enabled is true or false");
+        }
+        if (change["text"] !== undefined && (typeof change["text"] !== "string" || [...change["text"]].length > WATERMARK_TEXT_LIMIT)) {
+          throw new MethodError("bad-params", `watermark.text is at most ${WATERMARK_TEXT_LIMIT} characters`);
+        }
+        setWatermark(context.options.database, {
+          ...(change["enabled"] === undefined ? {} : { enabled: change["enabled"] as boolean }),
+          ...(change["text"] === undefined ? {} : { text: change["text"] as string }),
+        });
+      }
+      return {
+        brand: storedBrand(context.options.database),
+        signin: storedSigninLook(context.options.database),
+        watermark: storedWatermark(context.options.database),
+      };
+    }),
+    administered(TEAM_METHODS.adminEmailTest, async (params: unknown, context: MethodContext) => {
+      // One message through the relay the email.* policies name, to the operator by default, so a
+      // wrong port or password shows up here and not as a digest nobody received.
+      const read = paramsObject(params);
+      const relay = smtpSettings(context.options.database);
+      if (relay === undefined) throw new MethodError("unavailable", "set email.smtp_host and email.from first");
+      const to = plainAddress(optionalText(read, "to", 254) ?? context.user.email ?? "");
+      if (to === undefined) throw new MethodError("bad-params", "name an address to send to: this account has none");
+      try {
+        await sendMail(relay, {
+          to,
+          subject: "NarraLeaf Team：测试邮件 / test message",
+          text: `这封邮件来自 NarraLeaf Team 服务器，说明邮件设置可以用。\nThis message comes from your NarraLeaf Team server: its mail settings work.\n\n— ${context.account.username}`,
+        });
+      } catch (error) {
+        throw new MethodError("unavailable", error instanceof Error ? error.message : String(error));
+      }
+      return { to };
+    }),
   ];
 }

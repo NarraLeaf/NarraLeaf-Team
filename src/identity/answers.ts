@@ -16,7 +16,7 @@
  * group the account is in, and when its tokens were last refused.
  */
 import type { TeamAdminUser } from "../team/protocol.js";
-import { isOperator, type UserRecord } from "./users.js";
+import { isLocked, isOperator, type UserRecord } from "./users.js";
 
 export function adminUserBody(user: UserRecord): TeamAdminUser {
   return {
@@ -41,5 +41,6 @@ export function adminUserBody(user: UserRecord): TeamAdminUser {
     ...(user.tokensInvalidatedAt === undefined
       ? {}
       : { tokensInvalidatedAt: user.tokensInvalidatedAt }),
+    ...(user.lockedUntil !== undefined && isLocked(user) ? { lockedUntil: user.lockedUntil } : {}),
   };
 }

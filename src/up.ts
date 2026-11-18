@@ -5,7 +5,10 @@
  * Every step announces itself, because the first one can take a minute on a
  * slow connection and a silent program is indistinguishable from a stuck one.
  */
+import { Housekeeping } from "./identity/housekeeping.js";
+import { createServer, type IncomingMessage, type RequestListener, type Server } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
+import type { Duplex } from "node:stream";
 
 import type { WriteText } from "./cli.js";
 import type { GrpcServer } from "./grpc/server.js";
@@ -24,7 +27,8 @@ import { IdentityEndpoint } from "./identity/endpoint.js";
 import { discoveryDocument, type DiscoverySource } from "./identity/discovery.js";
 import { KeyStore } from "./identity/keys.js";
 import { identityLayout } from "./identity/layout.js";
-import { namedTokenLifetimes, persistIdentity } from "./identity/settings.js";
+import { storedRetentionDays, namedTokenLifetimes, persistIdentity } from "./identity/settings.js";
+import { issueSetupCode } from "./identity/settings.js";
 import { countUsers } from "./identity/users.js";
 import { prepareLoreEnvironment } from "./lore/environment.js";
 import {
@@ -35,6 +39,8 @@ import {
 import { waitForHealth, healthCheckUrl } from "./loreserver/health.js";
 import { verifyBinaryDigest, verifyBinaryVersion } from "./loreserver/identify.js";
 import { ensureInstalled } from "./loreserver/install.js";
+import { canReach, unreachableNotice } from "./loreserver/reach.js";
+import { loreserverTrustFile } from "./loreserver/trust.js";
 import {
   instanceLayout,
   writeInstance,
@@ -47,15 +53,24 @@ import { ProjectReadings } from "./projects/refresh.js";
 import { startAuthorizationService } from "./projects/service.js";
 import { TeamBlobStore } from "./team/blobs.js";
 import { createTeamSocket, type TeamSocket } from "./team/endpoint.js";
-import { projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
+import { ProjectAuthorities } from "./authority/manager.js";
+import { openProjectFiles } from "./authority/project.js";
+import { OwedBytesStore } from "./authority/owedBytes.js";
+import { loadProjectFiles } from "./authority/projectFiles.js";
+import { commitSnapshot } from "./projects/workingCopy.js";
+import { accountNotificationsTopic, projectDocTopic, projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
+import { digestJob } from "./collab/digest.js";
+import { backupJob, removePidFile, writePidFile } from "./backup.js";
+import { setNotificationAnnouncer } from "./collab/notifications.js";
 import type { RecordedDecision } from "./identity/audit.js";
 import { refuseUpgrade } from "./team/websocket.js";
-import { ensureCertificates, type TeamAuthority } from "./tls/authority.js";
+import { ensureCertificates } from "./tls/authority.js";
 import { readSuppliedCertificate, type SuppliedCertificate } from "./tls/supplied.js";
 import { trustCommandFor } from "./tls/trust.js";
 import { VERSION } from "./version.js";
 import type { TeamService } from "./team/service.js";
 import { webHandler } from "./web/router.js";
+import { consoleRoot } from "./web/console.js";
 
 export interface UpOptions extends LoreserverPorts {
   /** The storage root; everything Team writes goes underneath it. */
@@ -132,14 +147,16 @@ function describeError(error: unknown): string {
  * only for as long as Team is running it.
  *
  * The one thing it costs is that loreserver, while Team supervises it, trusts
- * Team's authority and no other. Everything a Team server-configured loreserver reaches
- * is on this machine — the JWKS over the loopback in plain HTTP, and this
- * endpoint — so there is nothing else for it to verify. A configuration that
+ * Team's authority and no other — plus, where an operator supplied a
+ * certificate, the chain in that file, since loreserver now reaches this
+ * endpoint by its public name and may be shown that certificate. Everything a
+ * Team-configured loreserver reaches is Team — the JWKS over the loopback in
+ * plain HTTP, and this endpoint — so there is nothing else for it to verify. A configuration that
  * gave it a remote store or a telemetry endpoint over https would need the
  * public roots back, and this is the line that would have to change.
  */
-function loreserverTrustAnchor(authority: TeamAuthority): Record<string, string> {
-  return { SSL_CERT_FILE: authority.layout.caCertPath };
+function loreserverTrustAnchor(trustFile: string): Record<string, string> {
+  return { SSL_CERT_FILE: trustFile };
 }
 
 /** What loreserver has to be told when identity is switched on. */
@@ -150,9 +167,10 @@ function loreserverAuth(config: IdentityConfig): LoreserverAuth {
     // what a token carries. A token is accepted when its `aud` array holds it.
     audience: [config.audience],
     jwksUrl: jwksUrl(config.teamPort),
-    // The loopback, not the address clients are given. loreserver is next door,
-    // and src/identity/config.ts says what sending it out of the building and
-    // back cost on the first deployment anybody outside could reach.
+    // The address clients are given, because loreserver hands this same value
+    // to every client as where its sign-in lives. src/identity/config.ts says
+    // why it cannot be the loopback, and src/loreserver/reach.ts covers the
+    // router that will not loop it back.
     callbackUrl: callbackUrl(config),
   };
 }
@@ -177,8 +195,10 @@ export async function up(
   let supervisor: Supervisor | undefined;
   let endpoint: IdentityEndpoint | undefined;
   let authorizationTls: GrpcServer | undefined;
+  let devConsole: Server | undefined;
   let database: DatabaseSync | undefined;
   let readings: ProjectReadings | undefined;
+  let projectAuthorities: ProjectAuthorities | undefined;
   /**
    * The sessions, once there are any.
    *
@@ -190,6 +210,8 @@ export async function up(
   let team: TeamSocket | undefined;
   /** Where a live session's files wait for the machines that are short of them. */
   let blobs: TeamBlobStore | undefined;
+  let housekeeping: Housekeeping | undefined;
+  let pidWritten = false;
 
   try {
     const artifact = resolveArtifact();
@@ -203,6 +225,9 @@ export async function up(
     // Identity comes up first: it is quick, and a port already taken is worth
     // discovering before a download rather than after one.
     database = await openMigratedDatabase(identity.databasePath);
+    // So `nlteam restore` can tell a server is running here and refuse.
+    await writePidFile(identity.root);
+    pidWritten = true;
     // What this server is being brought up as, written down before anything can
     // mint against it. A token's audience depends on the ports and the host
     // names, and a `nlteam token mint` run in another terminal has no command
@@ -262,11 +287,11 @@ export async function up(
       // reason `refused` above is - the socket and the reader are made further
       // down. It is what `projects.forget` does on the other path, in the same
       // order, so that a project going one way is a project going the other.
-      forgotten: (projectId: string) => {
+      forgotten: (projectId: string, audience: ReadonlySet<string>) => {
         readings?.forget(projectId);
         const gone = { kind: "project-forgotten", project: projectId } as const;
-        team?.hub.publish(TOPIC_PROJECTS, gone);
-        team?.hub.publish(projectTopic(projectId), gone);
+        team?.hub.publish(TOPIC_PROJECTS, gone, audience);
+        team?.hub.publish(projectTopic(projectId), gone, audience);
       },
       onError: (error: Error) => stderr(`nlteam: authorization service: ${error.message}\n`),
     };
@@ -301,7 +326,18 @@ export async function up(
     // what each one costs to get wrong. Deliberately not left to the reader's
     // first pass: a decision made inside a loop is a decision that has to win a
     // race, and the one it kept losing looked exactly like a permission error.
-    const lore = prepareLoreEnvironment(options.root);
+    //
+    // Both Lore clients on this machine — loreserver, and this process reading
+    // its own repositories — reach the sign-in endpoint by its public name (see
+    // callbackUrl), which is answered with the supplied certificate where one
+    // covers it. So both trust one file: Team's authority, plus that chain.
+    const trustFile = await loreserverTrustFile(
+      certificates.authority.layout.tlsDir,
+      certificates.authority.layout.caCertPath,
+      certificates.authority.pem,
+      supplied?.certPem,
+    );
+    const lore = prepareLoreEnvironment(options.root, process.env, trustFile);
     if (lore.credentials !== undefined) {
       stdout(`this server signs in to its own repositories through ${lore.credentials}\n`);
     }
@@ -341,6 +377,19 @@ export async function up(
     });
     readings = projects;
 
+    // Retention, webhook retries and the other jobs that run on the hour.
+    housekeeping = new Housekeeping(database);
+    // Daily and weekly digests: whoever is due when the hour comes round.
+    housekeeping.add(digestJob);
+    // Scheduled backups, when `backup.every_hours` asks for them.
+    housekeeping.add(backupJob(identity.root, (line) => stdout(`${line}\n`)));
+    housekeeping.start();
+    // Notifications written away from a request (a watched project's commit found by a refresh)
+    // reach the account's open sessions through the hub, once there is one.
+    setNotificationAnnouncer((accountId, notification) => {
+      team?.hub.publish(accountNotificationsTopic(accountId), { kind: "notification", notification }, new Set([accountId]));
+    });
+
     // Opened before the service below, because whether there is one is part of
     // what this server announces. Opening empties the directory: a file in it
     // belongs to a live session, live sessions are held in memory, and this
@@ -349,6 +398,59 @@ export async function up(
     blobs = blobStore;
     stdout(`live session files wait under ${identity.root}
 `);
+
+    // The project authorities: where team projects' documents live while
+    // people edit them, and what commits their history versions. Opened and
+    // snapshotted through the same working copies and tokens the reader uses.
+    const authorities = new ProjectAuthorities({
+      database,
+      // Read each pass, so an operator's change reaches the next one rather than the next start.
+      retainMs: () => (database === undefined ? undefined : storedRetentionDays(database) * 24 * 60 * 60_000),
+      open: async (projectId) => {
+        const options = await projects.workingCopyOptions(projectId);
+        return options === undefined ? undefined : openProjectFiles(options);
+      },
+      openAt: (projectId, revision) =>
+        projects.revisionFiles(projectId, revision, async (tree) => ({
+          ...(await loadProjectFiles(
+            tree.files.map((file) => file.path),
+            async (path) => tree.read(path),
+          )),
+          revision: tree.revision,
+        }), { clone: true }),
+      commit: async (projectId, files, message, blobs, keep) => {
+        const options = await projects.workingCopyOptions(projectId);
+        if (options === undefined) {
+          throw new Error("no such project");
+        }
+        return commitSnapshot({ ...options, removeMissing: true }, files, message, blobs, keep);
+      },
+      // Arrived bytes wait here for the next version, because the blob store is emptied on start.
+      keepBytes: new OwedBytesStore(options.root),
+      // An asset's file, once its author's Studio has finished putting it down here.
+      collectBytes: async (projectId, transferId) => {
+        const described = blobStore.describe(projectId, transferId);
+        if (described === undefined || !described.complete) {
+          return undefined;
+        }
+        const chunks: Buffer[] = [];
+        for await (const chunk of blobStore.read(projectId, transferId, 0)) {
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks);
+      },
+      publish: (projectId, event) => {
+        team?.hub.publish(projectDocTopic(projectId), event);
+      },
+      log: (line) => {
+        stdout(`${line}\n`);
+      },
+    });
+    authorities.start();
+    blobStore.onComplete((project, transfer) => {
+      void authorities.bytesArrived(project, transfer);
+    });
+    projectAuthorities = authorities;
 
     const studio: TeamService = {
       database,
@@ -371,6 +473,7 @@ export async function up(
       // writes, for the same reason.
       fingerprint: certificates.authority.fingerprint256,
       readings: projects,
+      authorities,
       log: (line) => {
         stdout(`${line}\n`);
       },
@@ -409,6 +512,20 @@ export async function up(
       version: VERSION,
     };
 
+    const pages = webHandler(() => discoveryDocument(discovery), {
+      identity: identityRoutes,
+      studio,
+      blobs: { store: blobStore, presence: socket.presence, service: studio },
+      console: { service: studio, root: consoleRoot(), publish: (topic, payload) => socket.hub.publish(topic, payload) },
+    });
+    const upgradeTeam = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+      if (team?.handleUpgrade(request, socket, head) === true) {
+        return;
+      }
+      // Still speaking HTTP at this point, so this is a status and a sentence
+      // rather than a dropped socket. See src/team/endpoint.ts.
+      refuseUpgrade(socket, 404, "nothing at that address accepts a WebSocket");
+    };
     authorizationTls = await startAuthorizationService({
       ...service,
       port: config.authTlsPort,
@@ -424,20 +541,10 @@ export async function up(
           ? {}
           : { forNames: { cert: supplied.certPem, key: supplied.keyPem } }),
       },
-      http1: webHandler(() => discoveryDocument(discovery), {
-        identity: identityRoutes,
-        studio,
-        blobs: { store: blobStore, presence: socket.presence, service: studio },
-      }),
-      upgrade: (request, socket, head) => {
-        if (team?.handleUpgrade(request, socket, head) === true) {
-          return;
-        }
-        // Still speaking HTTP at this point, so this is a status and a sentence
-        // rather than a dropped socket. See src/team/endpoint.ts.
-        refuseUpgrade(socket, 404, "nothing at that address accepts a WebSocket");
-      },
+      http1: pages,
+      upgrade: upgradeTeam,
     });
+    devConsole = await startDevConsole(process.env, pages, upgradeTeam, stdout);
     stdout(
       `auth endpoint on port ${config.authTlsPort} of every interface, over TLS, ` +
         `reached as ${authUrl(config)}\n`,
@@ -529,11 +636,17 @@ export async function up(
           .join(", ")}\n`,
       );
       stdout(
-        `loreserver asks about callers at ${auth.callbackUrl}, next door rather than\n` +
-          `      round by that address, and is given ${
-            certificates.authority.layout.caCertPath
-          }\n      as the only authority it trusts while Team runs it\n`,
+        `loreserver asks about callers at ${auth.callbackUrl}, the same address, and is given ${
+          certificates.authority.layout.caCertPath
+        }\n      as the only authority it trusts while Team runs it\n`,
       );
+      // Asked before loreserver starts, so a router that will not loop the
+      // public address back is a sentence now rather than a rebac failure on
+      // the first project create. A warning, not a refusal: the name may come
+      // to resolve (a DNS change, a hosts entry) without this process restarting.
+      if (!(await canReach(auth.callbackUrl))) {
+        stderr(unreachableNotice(auth.callbackUrl));
+      }
     }
 
     // Only a failure that ends supervision should cut the health wait short; a
@@ -548,7 +661,7 @@ export async function up(
       // See the note on loreserverTrustAnchor: without this, loreserver cannot
       // reach the https `auth_url` it was configured with, and every repository
       // access fails.
-      ...(auth === undefined ? {} : { env: loreserverTrustAnchor(certificates.authority) }),
+      ...(auth === undefined ? {} : { env: loreserverTrustAnchor(trustFile) }),
       onEvent: (event) => {
         switch (event.kind) {
           case "started":
@@ -591,7 +704,7 @@ export async function up(
 
     // Last, so that it is the thing left on the screen rather than something
     // scrolled away by a download.
-    printFirstAccountNotice(database, identity.root, stdout);
+    printFirstAccountNotice(database, identity.root, authUrl(config), stdout);
 
     stdout("press Ctrl-C to stop\n");
 
@@ -601,6 +714,9 @@ export async function up(
       whenAborted(options.signal).then(() => undefined),
     ]);
 
+    // While loreserver is still there to take it: whatever was edited since
+    // the last version is saved as one more. The log holds it either way.
+    await projectAuthorities?.stop().catch(() => undefined);
     await supervisor.stop();
 
     if (failure !== undefined) {
@@ -619,25 +735,35 @@ export async function up(
     stderr(`nlteam: ${describeError(error)}\n`);
     return 1;
   } finally {
+    // First, with a sentence: every Team socket is told the server is going and closed, so a
+    // client reconnects later rather than into a machine on its way down - and so no open socket
+    // is left for the listeners below to wait on.
+    team?.hub.closeAll("this server is shutting down");
     // Both servers hold a listening socket and the database a file handle; any
     // of them would keep the process alive after the work is over.
     if (endpoint !== undefined) {
       await endpoint.close();
     }
+    if (devConsole !== undefined) {
+      devConsole.closeAllConnections();
+      await new Promise<void>((resolve) => devConsole?.close(() => resolve()));
+    }
     if (authorizationTls !== undefined) {
       await authorizationTls.close();
     }
-    // It holds a timer and a reader that would go on reading repositories
-    // through a database that is about to be closed under it.
-    // Before the database closes, and with a sentence. A session that simply
-    // stopped answering is one whose client reconnects into a machine that is
-    // going down, and then does it again a second later.
-    team?.hub.closeAll("this server is shutting down");
+    // On the way out of a failure as well: stops the snapshot timer, and
+    // tries once more for anything unsaved (the log has it regardless).
+    await projectAuthorities?.stop().catch(() => undefined);
     // It holds a sweep timer and parked readers, each of which is a response
     // waiting for a byte that is not going to come now.
     blobs?.close();
+    housekeeping?.stop();
+    setNotificationAnnouncer(undefined);
+    // It holds a timer and a reader that would go on reading repositories
+    // through a database that is about to be closed under it.
     readings?.stop();
     database?.close();
+    if (pidWritten) await removePidFile(identity.root);
   }
 }
 
@@ -654,15 +780,56 @@ export async function up(
 function printFirstAccountNotice(
   database: DatabaseSync,
   root: string,
+  url: string,
   stdout: WriteText,
 ): void {
   if (countUsers(database) > 0) {
     return;
   }
+  // A fresh code on every start: one printed by an earlier run, scrolled away
+  // in some other terminal, should not stay good for ever.
+  const code = issueSetupCode(database);
   stdout("\n");
-  stdout("This server has no accounts. Make the first one, from another terminal:\n");
+  stdout("This server has no accounts. Set it up in a browser:\n");
+  stdout("\n");
+  stdout(`    ${url}/console/setup    setup code: ${code}\n`);
+  stdout("\n");
+  stdout("or make the first account from another terminal:\n");
   stdout("\n");
   stdout(`    nlteam init <username> --root ${root}\n`);
   stdout("\n");
-  stdout("It joins the admin group, and reads its password from standard input.\n");
+  stdout("Either way it joins the admin group.\n");
+}
+
+/**
+ * A plain-HTTP copy of the console on the loopback, for working on the page.
+ *
+ * Only when `NLTEAM_DEV_CONSOLE_PORT` names a port, and only on 127.0.0.1: a
+ * browser on this machine can then open the console without trusting this
+ * server's own certificate authority first. It serves exactly what the TLS
+ * listener serves - the same handler, the same socket - so nothing behaves
+ * differently there; browsers treat the loopback as a secure origin, so the
+ * session cookie still works.
+ */
+async function startDevConsole(
+  env: NodeJS.ProcessEnv,
+  pages: RequestListener,
+  upgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => void,
+  stdout: WriteText,
+): Promise<Server | undefined> {
+  const named = env["NLTEAM_DEV_CONSOLE_PORT"];
+  if (named === undefined || named === "") return undefined;
+  const port = Number(named);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    stdout(`NLTEAM_DEV_CONSOLE_PORT is not a port (${named}); no development console\n`);
+    return undefined;
+  }
+  const server = createServer(pages);
+  server.on("upgrade", upgrade);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => resolve());
+  });
+  stdout(`development console on http://127.0.0.1:${port}/console/ (loopback only, plain HTTP)\n`);
+  return server;
 }

@@ -76,19 +76,105 @@ describe("migrate", () => {
         )
         .run("9a1c0e2e", "ada", "Ada Lovelace", "scrypt$N=16384,r=8,p=1$c2FsdA==$aGFzaA==", 1);
 
-      // Put the file back to the version before the newest migration. That one
-      // adds the table a repeatable write with no row of its own is remembered
-      // in, so undoing it means dropping that table.
+      database
+        .prepare(
+          `INSERT INTO users (id, username, display_name, password_hash, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run("4f7b2d10", "bob", "Bob", "scrypt$N=16384,r=8,p=1$c2FsdA==$aGFzaA==", 2);
+      database
+        .prepare(
+          "INSERT INTO projects (id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run("0123456789abcdef0123456789abcdef", "harbour", "", "9a1c0e2e", 3);
+
+      // Put the file back three versions: OAuth grants, browser sessions and
+      // project members, so undoing them means dropping those tables. The two are replayed together, and the member
+      // backfill below is checked on the way.
       // ⚠ These lines track whichever migration is last: a new one appended to
       // the list is a new thing to undo here, and the failure when it is
       // forgotten is this test rather than a server in the field.
-      database.exec("DROP TABLE client_writes");
-      database.prepare("DELETE FROM schema_version WHERE version = ?").run(SCHEMA_VERSION);
-      expect(schemaVersion(database)).toBe(SCHEMA_VERSION - 1);
+      database.exec("ALTER TABLE users DROP COLUMN deleted_at");
+      database.exec("ALTER TABLE users DROP COLUMN failed_signins");
+      database.exec("ALTER TABLE users DROP COLUMN locked_until");
+      database.exec("DROP TABLE studio_configs");
+      database.exec("DROP TABLE account_policies");
+      database.exec("DROP TABLE policy_templates");
+      database.exec("DROP TABLE sso_subjects");
+      database.exec("ALTER TABLE projects DROP COLUMN title");
+      database.exec("ALTER TABLE projects DROP COLUMN archived_at");
+      database.exec("DROP TABLE api_tokens");
+      database.exec("DROP TABLE password_resets");
+      database.exec("DROP TABLE recovery_codes");
+      database.exec("DROP TABLE user_totp");
+      database.exec("DROP TABLE glossary");
+      database.exec("DROP TABLE voice_lines");
+      database.exec("DROP TABLE project_templates");
+      database.exec("ALTER TABLE todos DROP COLUMN milestone_id");
+      database.exec("DROP TABLE push_subscriptions");
+      database.exec("DROP TABLE notification_prefs");
+      database.exec("DROP TABLE watches");
+      database.exec("DROP TABLE watch_touched");
+      database.exec("DROP TABLE reactions");
+      database.exec("ALTER TABLE users DROP COLUMN timezone");
+      database.exec("ALTER TABLE users DROP COLUMN digest");
+      database.exec("ALTER TABLE users DROP COLUMN last_digest_at");
+      database.exec("ALTER TABLE users DROP COLUMN notify_hook");
+      database.exec("DROP TABLE builds");
+      database.exec("DROP TABLE attachments");
+      database.exec("DROP TABLE share_links");
+      database.exec("DROP TABLE approval_history");
+      database.exec("DROP TABLE approvals");
+      database.exec("DROP TABLE asset_locks");
+      database.exec("DROP TABLE saved_filters");
+      database.exec("ALTER TABLE todos DROP COLUMN labels");
+      database.exec("ALTER TABLE milestones DROP COLUMN due_at");
+      database.exec("ALTER TABLE milestones DROP COLUMN gate");
+      database.exec("DROP TABLE chat_messages");
+      database.exec("DROP TABLE doc_versions");
+      database.exec("ALTER TABLE activity DROP COLUMN count");
+      database.exec("ALTER TABLE projects DROP COLUMN save_role");
+      database.exec("ALTER TABLE projects DROP COLUMN restore_role");
+      database.exec("DROP TABLE doc_effects");
+      database.exec("DROP TABLE doc_snapshots");
+      database.exec("DROP TABLE reviews");
+      database.exec("DROP TABLE milestones");
+      database.exec("DROP TABLE webhook_deliveries");
+      database.exec("DROP TABLE webhooks");
+      database.exec("ALTER TABLE todos DROP COLUMN done_revision");
+      database.exec("DROP TABLE activity");
+      database.exec("DROP TABLE todos");
+      database.exec("DROP TABLE notifications");
+      database.exec("ALTER TABLE users DROP COLUMN avatar");
+      database.exec("ALTER TABLE users DROP COLUMN bio");
+      database.exec("DROP TABLE oauth_grants");
+      database.exec("DROP TABLE oauth_codes");
+      database.exec("DROP TABLE oauth_devices");
+      database.exec("DROP TABLE web_sessions");
+      database.exec("DROP TABLE access_requests");
+      database.exec("DROP TABLE project_members");
+      // Back to before project roles (migration 12), whatever came after.
+      database.prepare("DELETE FROM schema_version WHERE version >= ?").run(12);
+      expect(schemaVersion(database)).toBe(11);
 
       expect(migrate(database, path)).toBe(SCHEMA_VERSION);
 
-      // The table is back, which is the newest migration having replayed.
+      // The tables are back, which is migrations 12 onwards having replayed.
+      expect(tableNames(database)).toContain("web_sessions");
+      expect(tableNames(database)).toContain("oauth_grants");
+      expect(tableNames(database)).toContain("activity");
+      expect(tableNames(database)).toContain("project_members");
+      // And filled so that nobody's access changed: the creator owns the
+      // project, everybody else edits it.
+      expect(
+        database
+          .prepare("SELECT user_id, role FROM project_members ORDER BY user_id")
+          .all()
+          .map((row) => ({ ...row })),
+      ).toEqual([
+        { user_id: "4f7b2d10", role: "editor" },
+        { user_id: "9a1c0e2e", role: "owner" },
+      ]);
       expect(tableNames(database)).toContain("client_writes");
       // Still there, from the migrations before that one, which is what says
       // this replayed the last one alone rather than the whole list.
@@ -101,7 +187,10 @@ describe("migrate", () => {
       expect(tableNames(database)).not.toContain("project_grants");
       // The account is still there. A migration that took the file back to
       // something empty would pass every check about tables and lose a Team server.
-      expect(database.prepare("SELECT username FROM users").all()).toEqual([{ username: "ada" }]);
+      expect(database.prepare("SELECT username FROM users ORDER BY username").all()).toEqual([
+        { username: "ada" },
+        { username: "bob" },
+      ]);
     } finally {
       database.close();
     }

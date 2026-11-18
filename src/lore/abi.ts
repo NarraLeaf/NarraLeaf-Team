@@ -192,6 +192,22 @@ export const LORE_STRUCTS = {
     tokenType: "LoreString",
     authUrl: "LoreString",
   },
+  // The write side, which only the project authority's working copy uses (see
+  // src/projects/workingCopy.ts). Transcribed from Studio's ABI table, which is
+  // checked field by field against upstream's own snapshot.
+  LoreRepositoryFlushArgs: { unused: "int" },
+  LoreFileStageArgs: { paths: "LoreStringArray", caseChange: "uint32_t", scan: "uint8_t" },
+  LoreRevisionCommitArgs: {
+    message: "LoreString",
+    link: "LoreString",
+    linkPaths: "LoreStringArray",
+    linkMessages: "LoreStringArray",
+    layer: "LoreString",
+    layerPaths: "LoreStringArray",
+    layerMessages: "LoreStringArray",
+    stats: "uint8_t",
+  },
+  LoreBranchPushArgs: { branch: "LoreString", fastForwardMerge: "uint8_t" },
 
   // -- events ---------------------------------------------------------------
   LoreMetadataEventData: { key: "LoreString", value: "LoreMetadata" },
@@ -240,6 +256,28 @@ export const LORE_STRUCTS = {
     errorCode: "LoreErrorCode",
   },
   LoreRevisionTreeLoadedEventData: { handleId: "uint64_t" },
+  LoreRevisionCommitRevisionEventData: {
+    repository: "LoreRepositoryId",
+    branch: "LoreBranchId",
+    revision: "LoreHash",
+    revisionNumber: "uint64_t",
+    parent: "LoreHash",
+    parentOther: "LoreHash",
+  },
+  LoreBranchPushEventData: {
+    remote: "LoreString",
+    repository: "LoreRepositoryId",
+    branch: "LoreBranchId",
+    branchName: "LoreString",
+    remoteRevision: "LoreHash",
+    localRevision: "LoreHash",
+    remoteHistory: "uint64_t",
+    localHistory: "uint64_t",
+    flagAlreadyPushed: "uint8_t",
+    flagDefault: "uint8_t",
+    flagLink: "uint8_t",
+    flagLayer: "uint8_t",
+  },
   /**
    * One entry of a directory at a revision.
    *
@@ -275,7 +313,11 @@ export const LORE_EVENT_TAGS = {
   COMPLETE: 2,
   METADATA: 3,
   AUTH_IDENTITY: 10,
+  BRANCH_PUSH: 65,
+  /** A path a verb was given that it would not touch: outside the repository, or ignored. No payload read. */
+  PATH_IGNORE: 130,
   REPOSITORY_CLONE_END: 134,
+  REVISION_COMMIT_REVISION: 159,
   REVISION_HISTORY_ENTRY: 165,
   REVISION_SYNC_TARGET: 176,
   STORAGE_OPENED: 191,
@@ -356,6 +398,10 @@ export const LORE_VERBS = {
     args: "LoreRevisionTreeListChildrenArgs",
   },
   authLoginWithToken: { symbol: "lore_auth_login_with_token", args: "LoreAuthLoginWithTokenArgs" },
+  repositoryFlush: { symbol: "lore_repository_flush", args: "LoreRepositoryFlushArgs" },
+  fileStage: { symbol: "lore_file_stage", args: "LoreFileStageArgs" },
+  revisionCommit: { symbol: "lore_revision_commit", args: "LoreRevisionCommitArgs" },
+  branchPush: { symbol: "lore_branch_push", args: "LoreBranchPushArgs" },
 } as const satisfies Readonly<Record<string, { symbol: string; args: LoreStructName }>>;
 
 export type LoreVerbName = keyof typeof LORE_VERBS;

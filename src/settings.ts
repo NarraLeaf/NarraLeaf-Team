@@ -40,6 +40,18 @@ import {
   isSettingStored,
   lifetimeUnder,
   PUBLISH_LINEAGE_KEY,
+  PROJECT_CREATE_KEY,
+  PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
+  DOCUMENT_RETENTION_KEY,
+  storedProjectCreators,
+  storedProjectDeleters,
+  storedProjectAccess,
+  storedRetentionDays,
+  setProjectCreators,
+  setProjectDeleters,
+  setProjectAccess,
+  setRetentionDays,
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
   SERVER_NAME_KEY,
@@ -138,6 +150,14 @@ function settingValue(database: DatabaseSync, key: SettingKey): string {
       return storedCollaboration(database);
     case PUBLISH_LINEAGE_KEY:
       return storedPublishLineage(database);
+    case PROJECT_CREATE_KEY:
+      return storedProjectCreators(database);
+    case PROJECT_DELETE_KEY:
+      return storedProjectDeleters(database);
+    case PROJECT_ACCESS_KEY:
+      return storedProjectAccess(database);
+    case DOCUMENT_RETENTION_KEY:
+      return String(storedRetentionDays(database));
     case SIGN_IN_LIFETIME_KEY:
     case REPOSITORY_LIFETIME_KEY:
       // The duration in the words somebody would have typed, not the seconds
@@ -323,6 +343,22 @@ function renderSettingChange(
     );
     return;
   }
+  if (key === PROJECT_CREATE_KEY) {
+    stdout("The next project somebody asks to make is judged by this; projects already made stay as they are.\n");
+    return;
+  }
+  if (key === PROJECT_DELETE_KEY) {
+    stdout("The next project somebody asks to take off the list is judged by this.\n");
+    return;
+  }
+  if (key === PROJECT_ACCESS_KEY) {
+    stdout("Applies to the next project made and the next account made; nobody's place in a project made already changes.\n");
+    return;
+  }
+  if (key === DOCUMENT_RETENTION_KEY) {
+    stdout("Applied in the next pass over the projects this server holds, within a minute.\n");
+    return;
+  }
   if (key === PUBLISH_LINEAGE_KEY) {
     // Said because it is the one thing an operator would otherwise have to
     // find out by watching somebody publish: this is a rule Studio keeps, so
@@ -363,6 +399,14 @@ function writtenValue(database: DatabaseSync, change: SettingChange): string {
       return setCollaboration(database, change.mode);
     case PUBLISH_LINEAGE_KEY:
       return setPublishLineage(database, change.rule);
+    case PROJECT_CREATE_KEY:
+      return setProjectCreators(database, change.creators);
+    case PROJECT_DELETE_KEY:
+      return setProjectDeleters(database, change.deleters);
+    case PROJECT_ACCESS_KEY:
+      return setProjectAccess(database, change.access);
+    case DOCUMENT_RETENTION_KEY:
+      return String(setRetentionDays(database, String(change.days)));
     case SIGN_IN_LIFETIME_KEY:
     case REPOSITORY_LIFETIME_KEY:
       return describeDuration(
@@ -420,6 +464,14 @@ function sentValue(change: SettingChange): string {
       return change.mode;
     case PUBLISH_LINEAGE_KEY:
       return change.rule;
+    case PROJECT_CREATE_KEY:
+      return change.creators;
+    case PROJECT_DELETE_KEY:
+      return change.deleters;
+    case PROJECT_ACCESS_KEY:
+      return change.access;
+    case DOCUMENT_RETENTION_KEY:
+      return String(change.days);
     case SIGN_IN_LIFETIME_KEY:
     case REPOSITORY_LIFETIME_KEY:
       return String(change.seconds);

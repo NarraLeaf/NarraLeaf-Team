@@ -6,9 +6,11 @@
  * documentation of what the verb accepts, and it makes an added field a
  * question the compiler asks rather than a silent default.
  *
- * There is nothing here that writes a revision. Team clones, syncs, and reads;
- * a repository is written by the people using Studio, and a Team server that could
- * commit would be a second author nobody asked for.
+ * Almost everything here reads. The exceptions are the four write verbs at the
+ * end - stage, commit, flush, push - which exist for one caller: the project
+ * authority, which is the place a team project's current state lives and puts
+ * it into the repository as history versions (src/projects/workingCopy.ts).
+ * Nothing else in Team writes a revision.
  */
 import {
   LORE_ROOT_NODE_ID,
@@ -17,7 +19,9 @@ import {
 import { invoke, type LoreGlobals } from "./call.js";
 import {
   LoreTag,
+  type LoreBranchPushPayload,
   type LoreCloneEndPayload,
+  type LoreCommitRevisionPayload,
   type LoreHistoryEntryPayload,
   type LoreMetadataPayload,
   type LoreStorageDataPayload,
@@ -87,13 +91,13 @@ export interface CloneResult {
  */
 export async function cloneRepository(
   globals: LoreGlobals,
-  options: { repositoryUrl: string },
+  options: { repositoryUrl: string; /** Check the files out. Only a working copy that commits wants it. */ checkout?: boolean },
 ): Promise<CloneResult> {
   const result = await invoke("repositoryClone", globals, {
     repositoryUrl: loreString(options.repositoryUrl),
     revision: loreString(undefined),
     view: loreString(undefined),
-    bare: 1,
+    bare: options.checkout === true ? 0 : 1,
     // Not available in the published builds, which answer it with "Virtual
     // repositories not supported, build with --features=vfs".
     virtually: 0,
@@ -415,4 +419,77 @@ export async function readAddress(
       .sort((left, right) => left.offset - right.offset)
       .map((chunk) => chunk.bytes),
   );
+}
+
+/* ------------------------------------------------------------------ writing */
+
+/**
+ * Stage paths for the next commit.
+ *
+ * Paths must be absolute and inside the repository. Lore resolves a relative
+ * path against the process working directory, and answers a path outside the
+ * repository with success and a PATH_IGNORE event - so that event is turned
+ * into an error here, which is the only thing standing between a mistyped path
+ * and a snapshot that silently leaves a file out.
+ */
+export async function stagePaths(globals: LoreGlobals, paths: readonly string[]): Promise<void> {
+  const result = await invoke("fileStage", globals, {
+    paths: loreStringArray(paths),
+    caseChange: 0,
+    scan: 1,
+  });
+  if (result.events.some((event) => event.tag === LoreTag.PATH_IGNORE)) {
+    throw new Error(`fileStage: Lore ignored a path it was given: ${paths.join(", ")}`);
+  }
+}
+
+/**
+ * Commit what is staged, recorded as `globals.identity`.
+ *
+ * **The caller must flush afterwards** ({@link flushRepository}): the store
+ * holding branch tips is flushed lazily, and a process that commits and moves
+ * on can lose the commit outright - Studio measured it (its
+ * docs/version-control.md §4.11).
+ */
+export async function commitStaged(globals: LoreGlobals, message: string): Promise<LoreCommitRevisionPayload> {
+  const result = await invoke("revisionCommit", globals, {
+    message: loreString(message),
+    link: loreString(undefined),
+    linkPaths: loreStringArray(undefined),
+    linkMessages: loreStringArray(undefined),
+    layer: loreString(undefined),
+    layerPaths: loreStringArray(undefined),
+    layerMessages: loreStringArray(undefined),
+    stats: 0,
+  });
+  const committed = result.first<LoreCommitRevisionPayload>(LoreTag.REVISION_COMMIT_REVISION);
+  if (committed === undefined) {
+    throw new Error("revisionCommit: Lore committed and reported no revision");
+  }
+  return committed;
+}
+
+/** Force Lore's stores to disk. Not optional after a commit; see {@link commitStaged}. */
+export async function flushRepository(globals: LoreGlobals): Promise<void> {
+  await invoke("repositoryFlush", globals, { unused: 0 });
+}
+
+/**
+ * Send this branch's revisions to the remote.
+ *
+ * `fastForwardMerge` stays off: a push that is not a fast-forward is refused
+ * rather than merged on the server, because a merge nobody can see is not
+ * something a snapshot should be able to cause. The caller decides what a
+ * refusal means.
+ */
+export async function pushBranch(globals: LoreGlobals): Promise<LoreBranchPushPayload> {
+  const result = await invoke("branchPush", globals, {
+    branch: loreString(undefined),
+    fastForwardMerge: 0,
+  });
+  const pushed = result.first<LoreBranchPushPayload>(LoreTag.BRANCH_PUSH);
+  if (pushed === undefined) {
+    throw new Error("branchPush: Lore pushed and reported nothing");
+  }
+  return pushed;
 }

@@ -19,6 +19,7 @@ import { stat, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { describeDuration } from "./duration.js";
+import { POLICIES, policyStored, shownPolicy } from "./identity/policy.js";
 import { audienceHosts, hostOf, type IdentityConfig } from "./identity/config.js";
 import {
   COLLABORATION_KEY,
@@ -26,6 +27,14 @@ import {
   REPOSITORY_LIFETIME_CAUTION,
   REPOSITORY_LIFETIME_KEY,
   PUBLISH_LINEAGE_KEY,
+  PROJECT_CREATE_KEY,
+  PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
+  DOCUMENT_RETENTION_KEY,
+  storedProjectCreators,
+  storedProjectDeleters,
+  storedProjectAccess,
+  storedRetentionDays,
   SERVER_NAME_KEY,
   storedCollaboration,
   storedPublishLineage,
@@ -72,6 +81,10 @@ const STORAGE_FILE_LIMIT = 50_000;
 export const SERVER_NAME_SETTING = "name";
 export const COLLABORATION_SETTING = "collaboration";
 export const PUBLISH_LINEAGE_SETTING = "repeat publishes";
+export const PROJECT_CREATE_SETTING = "who makes projects";
+export const PROJECT_DELETE_SETTING = "who removes projects";
+export const PROJECT_ACCESS_SETTING = "others in a new project";
+export const DOCUMENT_RETENTION_SETTING = "edit log kept (days)";
 export const SIGN_IN_SETTING = "sign-in token";
 export const REPOSITORY_SETTING = "repository token";
 
@@ -93,6 +106,14 @@ export function settingKeyOf(label: string): SettingKey | undefined {
       return COLLABORATION_KEY;
     case PUBLISH_LINEAGE_SETTING:
       return PUBLISH_LINEAGE_KEY;
+    case PROJECT_CREATE_SETTING:
+      return PROJECT_CREATE_KEY;
+    case PROJECT_DELETE_SETTING:
+      return PROJECT_DELETE_KEY;
+    case PROJECT_ACCESS_SETTING:
+      return PROJECT_ACCESS_KEY;
+    case DOCUMENT_RETENTION_SETTING:
+      return DOCUMENT_RETENTION_KEY;
     case SIGN_IN_SETTING:
       return SIGN_IN_LIFETIME_KEY;
     case REPOSITORY_SETTING:
@@ -168,7 +189,7 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
   const lifetimes = storedTokenLifetimes(context.database);
   const storageRoot = storageRootOf(context.root);
   const { config, database } = context;
-  return [
+  const rows: TeamAdminSetting[] = [
     {
       group: "server",
       label: SERVER_NAME_SETTING,
@@ -200,6 +221,38 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       // used, not about what it lets anybody do.
       value: storedPublishLineage(database),
       stored: isSettingStored(database, PUBLISH_LINEAGE_KEY),
+      editable: true,
+    },
+    {
+      group: "server",
+      label: PROJECT_CREATE_SETTING,
+      // Every account, or the operators alone.
+      value: storedProjectCreators(database),
+      stored: isSettingStored(database, PROJECT_CREATE_KEY),
+      editable: true,
+    },
+    {
+      group: "server",
+      label: PROJECT_DELETE_SETTING,
+      // A project's own owners, or the operators alone.
+      value: storedProjectDeleters(database),
+      stored: isSettingStored(database, PROJECT_DELETE_KEY),
+      editable: true,
+    },
+    {
+      group: "server",
+      label: PROJECT_ACCESS_SETTING,
+      // What everybody but its maker is given in a new project: editor, viewer or none.
+      value: storedProjectAccess(database),
+      stored: isSettingStored(database, PROJECT_ACCESS_KEY),
+      editable: true,
+    },
+    {
+      group: "server",
+      label: DOCUMENT_RETENTION_SETTING,
+      // How long a team project's applied edits are kept once a saved version holds them.
+      value: String(storedRetentionDays(database)),
+      stored: isSettingStored(database, DOCUMENT_RETENTION_KEY),
       editable: true,
     },
     {
@@ -242,4 +295,16 @@ export function settingRows(context: ViewContext): TeamAdminSetting[] {
       editable: false,
     },
   ];
+  // The policies come last, so that the rows above keep the positions a command
+  // line already finds them by.
+  for (const policy of POLICIES) {
+    rows.push({
+      group: policy.group,
+      label: policy.label,
+      value: shownPolicy(database, policy),
+      stored: policyStored(database, policy.key),
+      editable: true,
+    });
+  }
+  return rows;
 }

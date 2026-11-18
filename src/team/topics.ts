@@ -8,21 +8,19 @@
  *   - **Is it a topic at all?** A name nobody publishes on is a subscription
  *     that would never fire, and a client holding one would wait forever for an
  *     event rather than being told it asked for something that does not exist.
- *   - **May this caller have it?** For anything about a project the answer is
- *     yes for every account of this server, because that is the whole of the
- *     authorization model: every account reaches every project - see
- *     src/projects/registry.ts. The `admin/*` topics are the exception, and the
- *     reason this question is asked at all: they carry the accounts, the
+ *   - **May this caller have it?** For anything about a project, yes for any
+ *     account with a role in it, and for the operators - see
+ *     src/projects/members.ts. The `admin/*` topics carry the accounts, the
  *     settings, the keys and the refusals, and they are an operator's business.
  *
- * A topic that names a project checks the project exists. Not for secrecy - the
- * list is the same list for everybody - but because a subscription to a project
- * that was taken off this server is a client waiting on something that will not
- * happen, and saying so is cheaper than never answering.
+ * A topic that names a project the caller has no role in is answered as one
+ * that does not exist, exactly as a project that was taken off this server is:
+ * saying "you may not" would say the project is there.
  */
 import type { DatabaseSync } from "node:sqlite";
 
 import { findProjectById } from "../projects/registry.js";
+import { maySeeProject } from "../projects/members.js";
 import { isOperator, type UserRecord } from "../identity/users.js";
 import type { TeamPresence } from "./presence.js";
 import {
@@ -48,7 +46,28 @@ export const SUBSCRIPTION_LIMIT = 64;
 const PROJECT_PREFIX = "project:";
 
 /** What may hang off one project, after the id. */
-const PROJECT_SUFFIXES: readonly string[] = ["", "/threads", "/overlay", "/clients", "/live"];
+const PROJECT_SUFFIXES: readonly string[] = [
+  "",
+  "/threads",
+  "/overlay",
+  "/clients",
+  "/live",
+  "/members",
+  "/todos",
+  "/reviews",
+  "/milestones",
+  "/approvals",
+  "/locks",
+  "/builds",
+  "/chat",
+  "/doc",
+];
+
+/** The prefix an account's own topics start with. */
+const ACCOUNT_PREFIX = "account:";
+
+/** What may hang off one account, after the id. Only that account may hold any of it. */
+const ACCOUNT_SUFFIXES: readonly string[] = ["/todos", "/notifications"];
 
 /** The prefix a live session's own topic starts with. */
 const LIVE_PREFIX = "live:";
@@ -64,6 +83,27 @@ const ADMIN_TOPICS: readonly string[] = [
   TOPIC_ADMIN_REFUSALS,
 ];
 
+/**
+ * The project a `project:*` topic names, or undefined for any other topic.
+ *
+ * Split at the first separator rather than the last: a project id never
+ * contains one, and reading it from the right would let a topic invent an id
+ * out of a suffix nobody serves.
+ */
+export function projectOfTopic(topic: string): string | undefined {
+  if (!topic.startsWith(PROJECT_PREFIX)) {
+    return undefined;
+  }
+  const rest = topic.slice(PROJECT_PREFIX.length);
+  const separator = rest.indexOf("/");
+  return separator === -1 ? rest : rest.slice(0, separator);
+}
+
+/** The live session a `live:{session}` topic is about, or undefined for any other topic. */
+export function liveSessionOfTopic(topic: string): string | undefined {
+  return topic.startsWith(LIVE_PREFIX) ? topic.slice(LIVE_PREFIX.length) : undefined;
+}
+
 /** Whether `topic` is one of this server's own, whoever is asking for it. */
 export function isAdminTopic(topic: string): boolean {
   return topic.startsWith(ADMIN_PREFIX);
@@ -72,9 +112,8 @@ export function isAdminTopic(topic: string): boolean {
 /**
  * Whether this session may subscribe to `topic`.
  *
- * The caller is read for the `admin/*` topics and for nothing else, which is
- * the shape of the authorization model rather than an accident of what has been
- * written so far.
+ * The caller is read for the `admin/*` topics, and for a project's topics to
+ * ask whether they have a role in it.
  */
 export function judgeTopic(
   database: DatabaseSync,
@@ -103,6 +142,23 @@ export function judgeTopic(
     return { kind: "allowed" };
   }
 
+  if (topic.startsWith(ACCOUNT_PREFIX)) {
+    const rest = topic.slice(ACCOUNT_PREFIX.length);
+    const separator = rest.indexOf("/");
+    const accountId = separator === -1 ? rest : rest.slice(0, separator);
+    const suffix = separator === -1 ? "" : rest.slice(separator);
+    if (!ACCOUNT_SUFFIXES.includes(suffix)) {
+      return { kind: "unknown", detail: `${topic} is not something this server publishes` };
+    }
+    // Somebody else's is not there, to the caller: their to-dos and their
+    // notifications are nobody else's business, and a refusal would say whose
+    // account the id is.
+    if (accountId !== user.id) {
+      return { kind: "unknown", detail: `${topic} is not something this server publishes` };
+    }
+    return { kind: "allowed" };
+  }
+
   if (topic.startsWith(LIVE_PREFIX)) {
     // Existence, not membership. Subscribing is hearing and joining is being
     // counted, and they are different acts: a client subscribes so that the
@@ -112,8 +168,16 @@ export function judgeTopic(
     //
     // A build with no live sessions has no presence to ask, and a topic naming
     // one is then a topic nobody publishes on.
+    //
+    // ⚠ Existence alone is not enough, though: every operation said in a room
+    // goes out on this topic, and a room's id travels further than its project
+    // does - `live.byCode` answers it to anybody holding four digits, and
+    // somebody taken out of the project still remembers it. So the room's
+    // project is judged as a project topic would be, and a room in a project
+    // the caller cannot see reads as one that is not there.
     const id = topic.slice(LIVE_PREFIX.length);
-    if (presence?.liveSession(id) === undefined) {
+    const session = presence?.liveSession(id);
+    if (session === undefined || !maySeeProject(database, session.project, user)) {
       return { kind: "unknown", detail: "there is no live session of that id on this server" };
     }
     return { kind: "allowed" };
@@ -130,7 +194,9 @@ export function judgeTopic(
     if (!PROJECT_SUFFIXES.includes(suffix)) {
       return { kind: "unknown", detail: `${topic} is not something this server publishes` };
     }
-    if (findProjectById(database, projectId) === undefined) {
+    // A project the caller has no role in reads as one that is not there, as
+    // it does on every method (projectVisible in ./methods.ts).
+    if (findProjectById(database, projectId) === undefined || !maySeeProject(database, projectId, user)) {
       return { kind: "unknown", detail: "there is no project of that id on this server" };
     }
     return { kind: "allowed" };

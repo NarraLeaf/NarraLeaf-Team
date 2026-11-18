@@ -87,6 +87,7 @@ export const COORDINATION_CAPABILITIES: readonly TeamCapability[] = [
   "live",
   "overlay",
   "blobs",
+  "chat",
 ];
 
 /**

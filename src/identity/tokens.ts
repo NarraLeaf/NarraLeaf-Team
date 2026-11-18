@@ -17,10 +17,12 @@
  *     idp                 which identity provider vouched for the user
  *     iat, exp
  *
- * Two claims are Team's own:
+ * Three claims are Team's own:
  *
  *     token_epoch         the account's `token_epoch` when this was signed
  *     authority_sha256    the fingerprint of this Team server's certificate authority
+ *     grant               the OAuth grant (one signed-in device) this token belongs to,
+ *                         on tokens issued through the browser sign-in only
  *
  * The first is there because Team is a verifier too — it is the service
  * loreserver asks about a caller — and the epoch is what makes tokens minted
@@ -68,6 +70,14 @@ export interface TokenClaims {
    * this program.
    */
   readonly authority_sha256?: string;
+  /**
+   * The OAuth grant this token was issued under — one Studio installation an
+   * account signed in through the browser. Checked on every verification
+   * Team makes (src/identity/bearer.ts), so revoking the device refuses its
+   * tokens at once rather than at their expiry, and carried through both
+   * exchanges so the tokens they mint answer to the same grant.
+   */
+  readonly grant?: string;
   /**
    * What the bearer may do to which resources.
    *
@@ -156,11 +166,18 @@ export interface MintOptions {
    */
   readonly purpose?: TokenPurpose;
   /**
+   * A shorter life than the purpose's, in seconds: what a token Studio refreshes on its own gets.
+   * Never longer than the purpose's own.
+   */
+  readonly lifetimeSeconds?: number;
+  /**
    * The resources this token is being issued for, written as the `resources`
    * claim. Given by the two exchanges a client makes; a token minted for
    * anything else opens no data connection and names none.
    */
   readonly resources?: readonly ResourceClaim[];
+  /** The OAuth grant the token belongs to, written as the `grant` claim. */
+  readonly grant?: string;
   /**
    * The fingerprint of this Team server's authority, for a token that is going to
    * leave the building.
@@ -238,10 +255,12 @@ export function mintToken(
   }
 
   const issuedAt = Math.floor((options.now?.getTime() ?? Date.now()) / 1000);
-  const lifetimeSeconds =
+  const purposeSeconds =
     options.purpose === "repository"
       ? config.repositoryTokenLifetimeSeconds
       : config.signInTokenLifetimeSeconds;
+  const lifetimeSeconds =
+    options.lifetimeSeconds !== undefined && options.lifetimeSeconds > 0 ? Math.min(options.lifetimeSeconds, purposeSeconds) : purposeSeconds;
   const header: TokenHeader = { alg: "RS256", typ: "JWT", kid: key.kid };
   const claims: TokenClaims = {
     iss: config.issuer,
@@ -275,6 +294,7 @@ export function mintToken(
     // same as an absent claim to a reader that treats the field as optional,
     // and a token for signing in is good for no resources rather than for none.
     ...(options.resources === undefined ? {} : { resources: options.resources }),
+    ...(options.grant === undefined ? {} : { grant: options.grant }),
   };
 
   const signingInput = `${encodeSegment(header)}.${encodeSegment(claims)}`;
@@ -371,7 +391,7 @@ function readClaims(value: unknown): TokenClaims | undefined {
   }
   const claims = value as Record<string, unknown>;
   const { iss, sub, env, name, preferred_username, idp, aud, groups } = claims;
-  const { is_service_account, iat, exp, token_epoch } = claims;
+  const { is_service_account, iat, exp, token_epoch, grant } = claims;
   if (
     typeof iss !== "string" ||
     typeof sub !== "string" ||
@@ -384,7 +404,8 @@ function readClaims(value: unknown): TokenClaims | undefined {
     typeof exp !== "number" ||
     typeof token_epoch !== "number" ||
     !isStringArray(aud) ||
-    !isStringArray(groups)
+    !isStringArray(groups) ||
+    (grant !== undefined && typeof grant !== "string")
   ) {
     return undefined;
   }
@@ -401,6 +422,7 @@ function readClaims(value: unknown): TokenClaims | undefined {
     iat,
     exp,
     token_epoch,
+    ...(typeof grant === "string" ? { grant } : {}),
   };
 }
 

@@ -46,6 +46,8 @@ import {
   serverCapabilities,
 } from "../src/team/methods.js";
 import { teamMethods } from "../src/team/endpoint.js";
+import { TEAM_PROJECT_AREAS } from "../protocol/src/index.js";
+import { PROJECT_AREAS as KERNEL_PROJECT_AREAS, projectAreaOf, projectDocumentPath } from "../studio-kernel/vendor/kernel.js";
 import type { TeamService } from "../src/team/service.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
 import { identityLayout } from "../src/identity/layout.js";
@@ -111,6 +113,8 @@ describe("the protocol contract", () => {
         database,
         readings: { get: () => undefined, revisions: async () => undefined },
         blobs: true,
+        // And the project authorities, which are what `documents` says.
+        authorities: {},
       } as unknown as TeamService;
       expect(serverCapabilities(methodTable(teamMethods()), everything).sort()).toEqual(
         [...contract.capabilities].sort(),
@@ -147,6 +151,18 @@ describe("the protocol contract", () => {
     expect(INSTANCE_FIELD_LIMIT).toBe(contract.limits["instanceField"]);
     expect(PAGE_BYTES_LIMIT).toBe(contract.limits["pageBytes"]);
     expect(ANSWER_BYTES_LIMIT).toBe(contract.limits["answerBytes"]);
+  });
+});
+
+describe("the areas of a project", () => {
+  it("are the same list in the protocol and in the kernel that sorts edits into them", () => {
+    expect([...TEAM_PROJECT_AREAS]).toEqual([...KERNEL_PROJECT_AREAS]);
+  });
+
+  it("put the story, the characters and the game's configuration where an owner expects", () => {
+    expect(projectAreaOf("editor/story/index.json")).toBe("story");
+    expect(projectAreaOf(projectDocumentPath({ doc: "characters" }))).toBe("characters");
+    expect(projectAreaOf("project.json")).toBe("config");
   });
 });
 

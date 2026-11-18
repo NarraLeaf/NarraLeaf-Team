@@ -51,5 +51,6 @@
     // it is walked is how an entry gets missed. The rule cannot see the delete.
     "no-useless-spread": "off"
   },
-  "ignorePatterns": ["dist", "node_modules"]
+  // studio-kernel/vendor is generated from Studio by scripts/vendor-studio.mjs; its style is Studio's.
+  "ignorePatterns": ["dist", "node_modules", "studio-kernel/vendor"]
 }

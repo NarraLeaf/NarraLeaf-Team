@@ -32,6 +32,12 @@ export interface RevisionFile {
   /** Repository-relative, with forward slashes, no leading slash. */
   readonly path: string;
   readonly size: number;
+  /**
+   * Lore's content address for the bytes, where the tree gave one: two files with the same hash
+   * hold the same bytes. Read off the tree, never computed from the content - so a page can tell
+   * what changed between revisions without the server opening a single file.
+   */
+  readonly hash?: string;
 }
 
 /**

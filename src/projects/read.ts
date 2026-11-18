@@ -11,11 +11,14 @@
  * saying which. That is what keeps a loreserver that is down or a Studio that
  * is newer costing freshness rather than costing the screen.
  */
+import { existsSync } from "node:fs";
+
 import {
   closeStore,
   closeTree,
   listTreeChildren,
   loadTree,
+  loginWithToken,
   NODE_DIRECTORY,
   NODE_FILE,
   openStore,
@@ -33,6 +36,8 @@ import {
   offlineGlobals,
   onlineGlobals,
   projectCheckoutPath,
+  readyMarkerPath,
+  repositoryUrl,
   type CheckoutOptions,
 } from "./cache.js";
 import { readProjectFile, revisionSizes, type RevisionFile, type RevisionSource } from "./content.js";
@@ -429,4 +434,93 @@ function indexOfRevision(history: readonly RevisionEntry[], revision: string): n
   const wanted = revision.toLowerCase();
   const at = history.findIndex((entry) => entry.revision.toLowerCase() === wanted);
   return at === -1 ? undefined : at;
+}
+
+/* ------------------------------------------------------- one revision's files */
+
+/**
+ * One revision of a project, opened for reading files out of it: the web
+ * console's story, blueprint and asset viewers read through this.
+ *
+ * Team never parses what it hands over here — it lists the tree and returns
+ * bytes, and the page interprets them (docs/architecture.md, D2) — so a newer
+ * Studio's format costs this server nothing.
+ */
+export interface RevisionTree {
+  /** The revision this is, resolved (never "head"). */
+  readonly revision: string;
+  readonly files: readonly RevisionFile[];
+  /** The bytes of one file, or undefined for a path that is not in the revision. */
+  read(path: string): Promise<Buffer | undefined>;
+  close(): Promise<void>;
+}
+
+/** Where a revision is read from: an existing checkout, and how to reach the remote for its blobs. */
+export interface OpenRevisionOptions extends CheckoutOptions {
+  /** A revision id, or "head" for the newest. */
+  readonly revision: string;
+}
+
+/**
+ * Open one revision of a project from Team's checkout, or undefined where there
+ * is no checkout yet or no such revision.
+ *
+ * It never clones: a project the refresh loop has not reached is "not read
+ * yet", the same answer its history gives. A blob not already on disk is
+ * fetched from the remote, which is why this signs in first, exactly as the
+ * refresh does.
+ */
+export async function openRevisionTree(options: OpenRevisionOptions): Promise<RevisionTree | undefined> {
+  const path = projectCheckoutPath(options.root, options.projectId);
+  if (!existsSync(readyMarkerPath(options.root, options.projectId))) {
+    return undefined;
+  }
+  const remoteUrl = repositoryUrl(options.remote, options.projectName);
+  const local = offlineGlobals(path);
+  const online = onlineGlobals(path);
+
+  let revision = options.revision;
+  if (revision === "head") {
+    const tip = (await revisionHistory(local).catch(() => [])).at(-1);
+    if (tip === undefined) {
+      await releaseRepository(local).catch(() => undefined);
+      return undefined;
+    }
+    revision = tip.revision;
+  }
+
+  if (options.token !== undefined) {
+    await loginWithToken(online, {
+      remoteUrl,
+      token: options.token,
+      ...(options.authUrl === undefined ? {} : { authUrl: options.authUrl }),
+    }).catch(() => undefined);
+  }
+
+  let store: StoreHandle | undefined;
+  let tree: TreeHandle | undefined;
+  const close = async (): Promise<void> => {
+    if (tree !== undefined) await closeTree(online, tree).catch(() => undefined);
+    if (store !== undefined) await closeStore(online, store).catch(() => undefined);
+    await releaseRepository(local).catch(() => undefined);
+  };
+  try {
+    store = await openStore(online, { path, remoteUrl });
+    tree = await loadTree(online, store, options.projectId, revision);
+    const files = await collectFiles(online, tree);
+    const opened = store;
+    const addresses = new Map(files.map((file) => [file.path, file.address]));
+    return {
+      revision,
+      files: files.map(({ path: filePath, size, address }) => ({ path: filePath, size, hash: address.hash })),
+      async read(filePath) {
+        const address = addresses.get(filePath);
+        return address === undefined ? undefined : readAddress(online, opened, options.projectId, address);
+      },
+      close,
+    };
+  } catch {
+    await close();
+    return undefined;
+  }
 }

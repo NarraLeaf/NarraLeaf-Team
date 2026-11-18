@@ -17,7 +17,6 @@
  *
  * **Nothing announced here is stored.** See src/team/presence.ts for why.
  */
-import { findProjectById } from "../../projects/registry.js";
 import { InstanceTakenError, TooManyInstancesError } from "../presence.js";
 import {
   MethodError,
@@ -26,6 +25,7 @@ import {
   requiredText,
   type MethodContext,
   type TeamMethod,
+  projectVisible,
 } from "../methods.js";
 import {
   ANCHOR_FIELD_LIMIT,
@@ -49,12 +49,14 @@ export function clientMethods(): TeamMethod[] {
         // built on: an instance parked on a project id nobody has would be a
         // presence nothing could ever see, which reads to its owner as being
         // invisible rather than as having typed something wrong.
-        if (project !== undefined && findProjectById(context.options.database, project) === undefined) {
+        if (project !== undefined && !projectVisible(context, project)) {
           throw new MethodError("not-found", "there is no project of that id on this server");
         }
         // Bounded as an anchor field is, and for the same reason: it is a
         // revision as the client writes one, and this server never reads it.
         const revision = optionalText(read, "revision", ANCHOR_FIELD_LIMIT);
+        // A document in anchor terms, as unread as one: a hint for others, not a lock.
+        const editing = optionalText(read, "editing", ANCHOR_FIELD_LIMIT);
         try {
           return {
             client: context.presence.announce(context.connection.id, context.account.username, {
@@ -63,6 +65,7 @@ export function clientMethods(): TeamMethod[] {
               agent: requiredText(read, "agent", INSTANCE_FIELD_LIMIT),
               ...(project === undefined ? {} : { project }),
               ...(revision === undefined ? {} : { revision }),
+              ...(editing === undefined ? {} : { editing }),
             }),
           };
         } catch (error) {
@@ -104,14 +107,29 @@ export function clientMethods(): TeamMethod[] {
       capability: "clients",
       handle: (params: unknown, context: MethodContext) => {
         const project = optionalText(paramsObject(params), "project", ID_LIMIT);
-        // Not checked here, unlike the announcement: asking about a project that
+        // Not refused here, unlike the announcement: asking about a project that
         // is not on this server is a question with an honest answer - nobody -
         // and a client polling one that was just taken off should be told that
         // rather than handed a refusal it has to interpret.
+        //
+        // ⚠ But nobody is also the answer for a project the caller has no role
+        // in, and for every such project in the unscoped list. An instance says
+        // who has the project open and which document they are in, which is
+        // exactly what the project's own clients topic keeps from outsiders.
+        // An instance on no project says only that somebody is connected, and
+        // stays in the list.
+        const seen = new Map<string, boolean>();
+        const visible = (id: string): boolean => {
+          let answer = seen.get(id);
+          if (answer === undefined) {
+            answer = projectVisible(context, id);
+            seen.set(id, answer);
+          }
+          return answer;
+        };
+        const listed = project === undefined ? context.presence.clients() : context.presence.clients(project);
         return {
-          clients: project === undefined
-            ? context.presence.clients()
-            : context.presence.clients(project),
+          clients: listed.filter((client) => client.project === undefined || visible(client.project)),
         };
       },
     },

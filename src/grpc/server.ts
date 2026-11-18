@@ -20,6 +20,7 @@
  */
 import { X509Certificate } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { createSecureContext, type SecureContext } from "node:tls";
 import {
@@ -310,10 +311,17 @@ function handleStream(
   });
 }
 
+/** Whether a request is a gRPC call, which is to say its content type says so. */
+function isGrpcRequest(headers: { readonly [name: string]: unknown }): boolean {
+  const type = headers["content-type"];
+  return typeof type === "string" && type.toLowerCase().startsWith("application/grpc");
+}
+
 /** A gRPC server, listening. */
 export class GrpcServer {
   readonly #server: Http2Server | Http2SecureServer;
   readonly #sessions: Set<ServerHttp2Session>;
+  readonly #sockets: Set<Socket>;
   readonly #host: string;
   readonly #port: number;
   readonly #scheme: "http" | "https";
@@ -321,12 +329,14 @@ export class GrpcServer {
   private constructor(
     server: Http2Server | Http2SecureServer,
     sessions: Set<ServerHttp2Session>,
+    sockets: Set<Socket>,
     host: string,
     port: number,
     scheme: "http" | "https",
   ) {
     this.#server = server;
     this.#sessions = sessions;
+    this.#sockets = sockets;
     this.#host = host;
     this.#port = port;
     this.#scheme = scheme;
@@ -352,6 +362,15 @@ export class GrpcServer {
             ...(speaksHttp1(options) ? { allowHTTP1: true } : {}),
           });
     const sessions = new Set<ServerHttp2Session>();
+    // Every raw connection, whatever it became: an HTTP/2 session, an HTTP/1.1 keep-alive
+    // connection, or a socket upgraded to the Team protocol. Node tracks none of the last two once
+    // the server is closing, so without this one open console page or Studio keeps `close()`
+    // waiting for ever.
+    const sockets = new Set<Socket>();
+    server.on("connection", (socket: Socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
 
     server.on("session", (session: ServerHttp2Session) => {
       sessions.add(session);
@@ -373,17 +392,25 @@ export class GrpcServer {
         );
       });
     }
+    const http1 = options.http1;
     server.on("stream", (stream, headers) => {
+      // A browser negotiates h2 on this port as readily as a gRPC client does,
+      // because it is offered first. So on h2 it is the content type, not the
+      // protocol, that says which side a request is for: gRPC always says
+      // application/grpc, and a page, its sign-in and the discovery document
+      // never do. Those go to the same handler HTTP/1.1 reaches, below.
+      if (http1 !== undefined && !isGrpcRequest(headers)) {
+        return;
+      }
       handleStream(stream, headers, options);
     });
 
-    // Guarded on the version rather than trusted to fire only for HTTP/1.1: the compat
-    // layer emits `request` for an h2 stream as well, and that stream has already been
-    // answered by the handler above.
-    const http1 = options.http1;
+    // The compat layer emits `request` for every h2 stream as well as for every
+    // HTTP/1.1 request, so an h2 stream is taken here only when the handler
+    // above left it — when it is not gRPC.
     if (http1 !== undefined) {
       server.on("request", (request, response) => {
-        if (request.httpVersionMajor === 1) {
+        if (request.httpVersionMajor === 1 || !isGrpcRequest(request.headers)) {
           http1(request as unknown as IncomingMessage, response as unknown as ServerResponse);
         }
       });
@@ -428,6 +455,7 @@ export class GrpcServer {
     return new GrpcServer(
       server,
       sessions,
+      sockets,
       host,
       port,
       options.tls === undefined ? "http" : "https",
@@ -458,6 +486,12 @@ export class GrpcServer {
         session.destroy();
       }
       this.#sessions.clear();
+      // What is left: HTTP/1.1 keep-alive connections and upgraded sockets, which node never
+      // closes for a closing server.
+      for (const socket of this.#sockets) {
+        socket.destroy();
+      }
+      this.#sockets.clear();
     });
   }
 }

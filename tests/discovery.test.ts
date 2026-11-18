@@ -129,6 +129,38 @@ describe("the address an author is given", () => {
         }
     });
 
+    it("answers the same document over h2, which is what a browser negotiates", { timeout: 30_000 }, async () => {
+        // A browser is offered h2 first and takes it. A request that is not gRPC
+        // (no application/grpc content type) must reach the web handler rather
+        // than the gRPC one, or the web console and its sign-in are unreachable
+        // from every browser.
+        const { port, ca, stop } = await endpoint();
+        const { connect } = await import("node:http2");
+        const session = connect(`https://127.0.0.1:${String(port)}`, { ca, servername: "localhost" });
+        try {
+            const answer = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+                const stream = session.request({ ":path": DISCOVERY_PATH, ":method": "GET" });
+                let status = 0;
+                let body = "";
+                stream.on("response", (headers) => {
+                    status = Number(headers[":status"]);
+                });
+                stream.setEncoding("utf-8");
+                stream.on("data", (chunk: string) => {
+                    body += chunk;
+                });
+                stream.on("end", () => resolve({ status, body }));
+                stream.on("error", reject);
+                stream.end();
+            });
+            expect(answer.status).toBe(200);
+            expect(JSON.parse(answer.body)).toEqual(DOCUMENT);
+        } finally {
+            session.close();
+            await stop();
+        }
+    });
+
     it("answers nothing else, because this is not a web interface", { timeout: 30_000 }, async () => {
         const { port, stop } = await endpoint();
         try {

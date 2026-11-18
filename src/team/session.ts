@@ -30,8 +30,10 @@
  * sentence about this server's insides, and the client's side of the protocol is
  * a code it can act on plus a line in the operator's log.
  */
-import { describeRefusal, identifyToken } from "../identity/bearer.js";
 import { isOperator, type UserRecord } from "../identity/users.js";
+import type { ApiTokenLimits } from "../identity/apitokens.js";
+import { totpEnabled, twoFactorRequired } from "../identity/totp.js";
+import type { DatabaseSync } from "node:sqlite";
 import { judgeCollaboration } from "./collaboration.js";
 import type { TeamService } from "./service.js";
 import type { TeamHub, HubSession } from "./hub.js";
@@ -47,7 +49,9 @@ import {
   type TeamErrorCode,
   type TeamServerFrame,
 } from "./protocol.js";
-import { isAdminTopic, judgeTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
+import { findProjectById } from "../projects/registry.js";
+import { maySeeProject, projectRole } from "../projects/members.js";
+import { isAdminTopic, judgeTopic, liveSessionOfTopic, projectOfTopic, SUBSCRIPTION_LIMIT } from "./topics.js";
 import { CLOSE, type WebSocketConnection } from "./websocket.js";
 
 /**
@@ -87,8 +91,13 @@ export interface SessionOptions {
    * room full of people who are not there is worse than no room.
    */
   readonly presence: TeamPresence;
-  /** The token this session was opened with, kept so the caller can be identified again. */
-  readonly token: string;
+  /**
+   * Who the credential this session was opened with signs in now: a bearer
+   * token for Studio and the command line, a console cookie for a browser.
+   * Asked on every call and on the revalidation timer; a refusal ends the
+   * session, with `detail` as the sentence.
+   */
+  readonly identify: () => SessionIdentity;
   /** Who it was when it opened, so the hello frame does not repeat the work. */
   readonly user: UserRecord;
   readonly serverName: string;
@@ -148,18 +157,27 @@ function closeCodeFor(code: TeamErrorCode): number {
   }
 }
 
+/** What asking a session's credential again answers. */
+export type SessionIdentity =
+  | { readonly kind: "identified"; readonly user: UserRecord; readonly limits?: ApiTokenLimits }
+  | { readonly kind: "refused"; readonly detail: string };
+
 export class TeamSession implements HubSession {
   readonly id: string;
+  readonly userId: string;
 
   private readonly options: SessionOptions;
   private readonly topics = new Set<string>();
   private inFlight = 0;
   private revalidation: NodeJS.Timeout | undefined;
   private over = false;
+  /** What the credential this session opened with may do, when it is an API token. */
+  private limits: ApiTokenLimits | undefined;
 
   constructor(options: SessionOptions) {
     this.options = options;
     this.id = options.connection.id;
+    this.userId = options.user.id;
 
     options.hub.add(this);
 
@@ -199,6 +217,19 @@ export class TeamSession implements HubSession {
 
   end(message: string): void {
     this.bye("unavailable", message);
+  }
+
+  /**
+   * Ask again, now, what this session may still hold.
+   *
+   * Called when this account's place somewhere changed — it was taken out of a
+   * project — so that what it subscribed to is taken back at once rather than
+   * at the next call or revalidation. Identifying is the whole of it.
+   */
+  recheck(): void {
+    if (!this.over) {
+      this.identify();
+    }
   }
 
   /* ------------------------------------------------------- what arrives */
@@ -294,16 +325,25 @@ export class TeamSession implements HubSession {
       this.fail(id, "refused", collaboration.detail);
       return;
     }
+    const gated = gateCall(this.options.service.database, user, this.limits, method.name, frame.params);
+    if (gated !== undefined) {
+      this.fail(id, "refused", gated);
+      return;
+    }
 
     const context: MethodContext = {
       options: this.options.service,
       user,
       account: accountOf(user),
-      publish: (topic, payload) => {
-        this.options.hub.publish(topic, payload);
+      publish: (topic, payload, audience) => {
+        this.options.hub.publish(topic, payload, audience);
       },
       connection: { id: this.id },
       presence: this.options.presence,
+      recheck: (userId) => {
+        this.options.hub.recheck(userId);
+      },
+      online: (userId) => this.options.hub.isOnline(userId),
     };
 
     this.inFlight += 1;
@@ -368,6 +408,17 @@ export class TeamSession implements HubSession {
       this.fail(id, "refused", verdict.detail);
       return;
     }
+    const topicProject = this.projectBehind(frame.topic);
+    const gated =
+      this.limits?.projects !== undefined && topicProject !== undefined && !this.limits.projects.includes(topicProject)
+        ? "this API token does not reach that project"
+        : isAdminTopic(frame.topic) && this.limits !== undefined
+          ? "an API token does not reach the management plane"
+          : gateCall(this.options.service.database, user, this.limits, "topic.subscribe.list", undefined);
+    if (gated !== undefined) {
+      this.fail(id, "refused", gated);
+      return;
+    }
 
     this.topics.add(frame.topic);
     this.send({
@@ -423,21 +474,85 @@ export class TeamSession implements HubSession {
       return;
     }
     for (const topic of [...this.topics]) {
-      if (!isAdminTopic(topic)) {
-        continue;
+      if (isAdminTopic(topic)) {
+        this.withdraw(topic, "this account is no longer an operator of this server");
       }
-      this.topics.delete(topic);
-      this.send({
-        t: "event",
-        topic,
-        seq: this.options.hub.sequenceOf(topic),
-        payload: {
-          kind: "subscription-withdrawn",
-          topic,
-          why: "this account is no longer an operator of this server",
-        },
-      });
     }
+  }
+
+  /**
+   * Take back every project subscription from somebody taken out of that
+   * project, for the same reason and in the same way as {@link withdrawManagement}.
+   *
+   * Only for a project that is still there. One that was forgotten has already
+   * said so on its own topic, and a withdrawal after that would tell the client
+   * nothing it had not just been told.
+   */
+  private withdrawProjects(user: UserRecord): void {
+    const database = this.options.service.database;
+    // A member made a viewer keeps the project and its instance there, and is
+    // taken out of that project's rooms: a viewer watches a room and does not take
+    // part in one, which `live.join` and `live.say` refuse too. Before the
+    // operator test below because the role is what this asks about, and the same
+    // test the live methods make.
+    for (const instance of this.options.presence.instancesOf(this.id)) {
+      if (instance.project !== undefined && projectRole(database, instance.project, user) === "viewer") {
+        this.options.presence.leaveRooms(instance.id, instance.project);
+      }
+    }
+    if (isOperator(user.groups)) {
+      return;
+    }
+    const judged = new Map<string, boolean>();
+    const lostOn = (projectId: string): boolean => {
+      let lost = judged.get(projectId);
+      if (lost === undefined) {
+        lost =
+          findProjectById(database, projectId) !== undefined &&
+          !maySeeProject(database, projectId, user);
+        judged.set(projectId, lost);
+      }
+      return lost;
+    };
+    for (const topic of [...this.topics]) {
+      // A live room's topic counts as its project's: what is said there is that
+      // project's documents, and judgeTopic let it in on those terms.
+      const projectId = this.projectBehind(topic);
+      if (projectId !== undefined && lostOn(projectId)) {
+        this.withdraw(topic, "this account no longer has a role in that project");
+      }
+    }
+    // And whatever this connection announced on such a project goes with it.
+    // An instance is what a live room counts as a member and what `live.say`
+    // asks after, so one left standing would keep somebody in a room - still
+    // speaking into it - after the project they were in it for was taken away.
+    for (const instance of this.options.presence.instancesOf(this.id)) {
+      if (instance.project !== undefined && lostOn(instance.project)) {
+        this.options.presence.withdraw(this.id, instance.project);
+      }
+    }
+  }
+
+  /**
+   * The project a topic is about: a project topic's own, or a live room's.
+   *
+   * A room that has closed has no project to name, and its topic has nothing
+   * left on it to hear.
+   */
+  private projectBehind(topic: string): string | undefined {
+    const session = liveSessionOfTopic(topic);
+    return session === undefined ? projectOfTopic(topic) : this.options.presence.liveSession(session)?.project;
+  }
+
+  /** Drop one topic and tell this session alone, without moving its sequence. */
+  private withdraw(topic: string, why: string): void {
+    this.topics.delete(topic);
+    this.send({
+      t: "event",
+      topic,
+      seq: this.options.hub.sequenceOf(topic),
+      payload: { kind: "subscription-withdrawn", topic, why },
+    });
   }
 
   /**
@@ -454,17 +569,14 @@ export class TeamSession implements HubSession {
    * longer be told.
    */
   private identify(): UserRecord | undefined {
-    const identified = identifyToken(
-      this.options.service.database,
-      this.options.service.keys,
-      this.options.service.config,
-      this.options.token,
-    );
+    const identified = this.options.identify();
     if (identified.kind === "refused") {
-      this.bye("unauthenticated", describeRefusal(identified.reason));
+      this.bye("unauthenticated", identified.detail);
       return undefined;
     }
+    this.limits = identified.limits;
     this.withdrawManagement(identified.user);
+    this.withdrawProjects(identified.user);
     return identified.user;
   }
 
@@ -483,3 +595,77 @@ export class TeamSession implements HubSession {
     this.options.connection.send(JSON.stringify(frame));
   }
 }
+
+/** The last part of a method name that only reads, as an API token without write may call. */
+const READ_ENDINGS = new Set([
+  "list", "get", "history", "discover", "deliveries", "heatmap", "locks", "prefs", "head",
+  "effects", "base", "files", "file", "status", "ping", "byCode", "key", "usage",
+]);
+
+/** Whether a method only reads, by the last part of its name. */
+export function readsOnly(method: string): boolean {
+  return READ_ENDINGS.has(method.slice(method.lastIndexOf(".") + 1));
+}
+
+/**
+ * The refusal for one call that its credential or this server's policy does not
+ * allow, or undefined.
+ *
+ * Two rules. An API token never reaches the management plane or makes tokens,
+ * reads only unless it was made to write, and reaches only the projects it
+ * names. And while `security.require_two_factor` is on, an account without a
+ * second factor can do nothing but set one up.
+ */
+export function gateCall(
+  database: DatabaseSync,
+  user: UserRecord,
+  limits: ApiTokenLimits | undefined,
+  method: string,
+  params: unknown,
+): string | undefined {
+  const ref =
+    params !== null && typeof params === "object" ? (params as Record<string, unknown>)["project"] : undefined;
+  const project =
+    typeof ref === "string"
+      ? (database.prepare("SELECT id, archived_at FROM projects WHERE id = ? OR name = ?").get(ref, ref) as
+          | Record<string, unknown>
+          | undefined)
+      : undefined;
+  if (limits !== undefined) {
+    if (method.startsWith("admin.") || method.startsWith("account.")) {
+      return "an API token does not reach the management plane or this account's own settings";
+    }
+    if (!limits.write && !readsOnly(method)) {
+      return "this API token reads only";
+    }
+    if (limits.projects !== undefined && typeof ref === "string") {
+      const id = project === undefined ? ref : String(project["id"]);
+      if (!limits.projects.includes(id)) {
+        return "this API token does not reach that project";
+      }
+    }
+  } else if (
+    !method.startsWith("account.totp.") &&
+    !method.startsWith("server.") &&
+    // So a client can say why it is being held, and by whom.
+    method !== "account.policy" &&
+    twoFactorRequired(database, user.id) &&
+    !totpEnabled(database, user.id)
+  ) {
+    return "two-step sign-in is required for this account; set it up first";
+  }
+  // An archived project is read-only for everybody: what it holds may be read,
+  // and the only thing done to it is bringing it back or removing it.
+  if (
+    project !== undefined &&
+    project["archived_at"] !== null &&
+    !readsOnly(method) &&
+    !ARCHIVE_EXEMPT.has(method)
+  ) {
+    return "this project is archived; restore it to change anything in it";
+  }
+  return undefined;
+}
+
+/** What may still be done to an archived project. */
+const ARCHIVE_EXEMPT = new Set(["projects.restore", "projects.archive", "projects.forget", "projects.update"]);

@@ -65,6 +65,21 @@ export function projectCheckoutPath(root: string, projectId: string): string {
 }
 
 /**
+ * Where the project authority's working copy of one project lives.
+ *
+ * A second checkout beside the read cache, and a different kind: this one has
+ * its files checked out, because it is where the authority writes a snapshot
+ * of the project's current state and commits it as a history version
+ * (./workingCopy.ts). It obeys the same rule as the read cache - it is Team's
+ * own clone, reached over the network, never the store loreserver serves - and
+ * it is just as disposable: everything in it is either in the repository or in
+ * the authority, so deleting it costs one clone.
+ */
+export function authorityWorkingCopyPath(root: string, projectId: string): string {
+  return join(resolve(root), "cache", "authority", projectId);
+}
+
+/**
  * The file that says a checkout finished.
  *
  * Outside the checkout rather than in it, so that nothing Team writes ever
@@ -73,7 +88,7 @@ export function projectCheckoutPath(root: string, projectId: string): string {
  * that looks like a checkout, and every later sync of it fails in the same way
  * for ever with no way out but deleting it by hand.
  */
-function readyMarkerPath(root: string, projectId: string): string {
+export function readyMarkerPath(root: string, projectId: string): string {
   return `${projectCheckoutPath(root, projectId)}.ready`;
 }
 

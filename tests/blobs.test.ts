@@ -368,6 +368,18 @@ describe("dropping", () => {
     expect(await blobBytesOnDisk(held.root, held.project, "t-13")).toBe(-1);
   });
 
+  it("says when a file becomes whole, once, so the project authorities can keep what an edit named", async () => {
+    const held = await harness();
+    const whole: string[] = [];
+    held.store.onComplete((project, transfer) => whole.push(`${project}/${transfer}`));
+    const bytes = randomBytes(3000);
+    await reserve(held, "t-15", bytes.length, sha256(bytes));
+    await put(held, "t-15", 0, bytes.subarray(0, 1000));
+    expect(whole).toEqual([]);
+    await put(held, "t-15", 1000, bytes.subarray(1000));
+    expect(whole).toEqual([`${held.project}/t-15`]);
+  });
+
   it("empties the directory when it is opened, because every room it held has ended", async () => {
     const held = await harness();
     const bytes = randomBytes(1000);

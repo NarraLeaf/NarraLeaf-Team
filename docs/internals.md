@@ -108,8 +108,8 @@ given that authority; nothing was ever pointed at it, so what it amounted to was
 this service answering, unencrypted, on a port with no caller.
 
 Team identifies the caller by verifying the token against its own signing keys,
-and answers with the projects of this server, since every account of it reaches
-every project. A token that is expired, altered, from a disabled account, or
+and answers with the projects whose repository that account may open: those it
+owns or edits, or every one for an operator (src/projects/members.ts). A token that is expired, altered, from a disabled account, or
 issued before that account's access was revoked is refused, and a refusal reaches the person as "not found",
 `loreserver` tells a client nothing about why. Every decision is written to
 Team's log with the caller, the resource and the outcome, and kept in `team.db`
@@ -390,9 +390,10 @@ module out loses the method and the capability together, which is the one
 direction that cannot strand a client: a capability announced by a build that
 does not serve it defeats the whole point of checking before asking.
 
-Who may do what has not changed and is still one sentence, every account of
-this server reaches every project on it. The single exception is not about
-projects: **a comment is edited or withdrawn by whoever wrote it**, operators
+Who may do what is a project role (src/projects/members.ts): a project
+somebody has no role in is not there for them, only owners forget a project,
+and only owners and editors open its repository. One rule is not about
+projects at all: **a comment is edited or withdrawn by whoever wrote it**, operators
 included. That is authorship rather than authorization.
 
 Delivery is deliberately the weakest guarantee that is still correct. Nothing is

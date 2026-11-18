@@ -307,7 +307,8 @@ with it, and a capability is never announced by a server that cannot answer it.
 | `admin` | This server's own state, its accounts, settings, keys, decisions and health, may be read and changed over the socket, by an operator. |
 | `password-sign-in` | A username and a password may be exchanged for a token, before any session. This names the sign-in route above. |
 | `project-history` | A project's revisions may be read a page at a time, through `projects.history`. Present only where the server has a reader that can page one, a build without one answers an empty page, which is not the same as a project with no revisions. |
-| `blobs` | A live session's files may be put down on this server and collected from it, over `/api/team/v1/blobs/{project}/{transfer}`. The one capability that is about bytes rather than about a call: the socket carries sixteen kilobytes a message, and a file is not a message. Present only where the build has somewhere to put one. |
+| `blobs` | A live session's files may be put down on this server and collected from it, over `/api/team/v1/blobs/{project}/{transfer}`. The one capability that is about bytes rather than about a call: the socket carries sixteen kilobytes a message, and a file is not a message. Present only where the build has somewhere to put one. A team project's asset files travel the same way. |
+| `documents` | This server is the authority over team projects' documents: edits are `doc.intent` calls, applied here with Studio's kernel and published on `project:{project}/doc`; history versions are snapshots this server commits. Present only where the server holds the project authorities. |
 
 A client decides what a server can do from `capabilities` or from `hello.methods`,
 never by probing for a `404`.
@@ -388,11 +389,42 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 
 | Method | Capability | What it does |
 |---|---|---|
-| `projects.list` | `session` | The projects on this server, in name order. Bounded rather than paged: at most a thousand rows, and a shorter answer once they total a mebibyte. `total` is how many there are in all, so a list shorter than `total` was cut. There is no cursor, a client reads this whole, and one that ignored a cursor would quietly take the first page for the server. |
+| `projects.list` | `session` | The projects on this server, in name order. Bounded rather than paged: at most a thousand rows, and a shorter answer once they total a mebibyte. `total` is how many there are in all, so a list shorter than `total` was cut. There is no cursor, a client reads this whole, and one that ignored a cursor would quietly take the first page for the server. `mayCreate` says whether `projects.create` would let the caller through (see `project.create_by`). Each row carries the caller's `role`, `mayRemove` (whether `projects.forget` would), and `areas` when the caller is an editor kept to some areas. |
 | `projects.get` | `session` | One project: its row, and the project file read out of its repository, the title, the stage, how many scenes and assets. A file the server could not make sense of comes back `readable: false` with a sentence, never a refusal, and so does one whose first clone has not landed. Takes an id or a name. |
 | `projects.history` | `session` | A page of one project's revisions, newest first. `limit` defaults to 20 and is capped at 100, and a page also ends once the revisions on it total a mebibyte, whichever comes first, since a revision carries the message it was pushed with and that message comes out of a repository rather than out of a field this server bounds. The cursor is the id of the revision to carry on after, and is absent when there is no page beyond this one. A project the server has no checkout of yet answers an empty page rather than a refusal, which is not the same as a project with no revisions. |
-| `projects.create` | `session` | Make a project, or, given a `repositoryId`, register a repository the author already has. Making one asks the content server for the repository and takes the row back if it refuses; registering one asks it for nothing, because the repository already exists under that id. Announces `project-created` on the `projects` topic. |
-| `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Any account may, and forgetting a project that is already gone answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
+| `projects.create` | `session` | Make a project, or, given a `repositoryId`, register a repository the author already has. Making one asks the content server for the repository and takes the row back if it refuses; registering one asks it for nothing, because the repository already exists under that id. Announces `project-created` on the `projects` topic. The project row carries `role`, the caller's role in it, as every project row does. |
+| `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Only an owner of the project, or an operator, may (anybody else is `refused`); where `project.delete_by` is `admins`, only an operator may. Forgetting a project that is already gone, or one the caller cannot see, answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
+| `projects.members.list` | `session` | Who belongs to one project: `members` (username, display name, role, who gave them it, when), owners first, with `total`, and `role`, the caller's own, which for an operator without a row of their own is `owner`. Any member may ask. A project the caller has no role in is `not-found`. |
+| `projects.members.set` | `session` | Give an account (`username`) a role (`role`: `owner`, `editor`, `reviewer` or `viewer`) in a project, adding it if it is not a member. For an editor, `areas` is the list of the project's areas they may change (`story`, `characters`, `assets`, `ui`, `localization`, `config`); `null` or every area means all of them, and leaving it out keeps what the editor had. Any other role ignores it. In place of `role` and `areas`, `template` names one of the permission templates (below); naming both is `bad-params`. An editor kept to some areas does not open the repository, which cannot tell one file from another, and edits through Team. Only an owner, or an operator, may (anybody else is `refused`). Refused when it would demote the project's only owner of its own. Setting the role somebody already has changes nothing and announces nothing. Announces `member-set` on the project's members topic, and `project-access-changed` on `projects` to that account alone. |
+| `server.ping` | `session` | Answers at once with `at`, this server's clock in epoch milliseconds, and echoes `sent` when given. What a client times to show its round trip; it reads and writes nothing. The plain HTTP equivalent is `GET /api/team/v1/ping`: a `204` with `x-team-time`, never cached, asking nobody who they are. |
+| `projects.discover` | `session` | The projects the caller has no role in (`id`, `name`, `description`), so it can ask to join one. Empty for an operator, who is in every project already. Bounded by `limit` (default 500). |
+| `access.requests.list` | `session` | `mine`, the caller's own requests, and `toDecide`, those it answers: for an operator, everybody else's; for an owner, requests about the projects it owns. `project` keeps both to one project; `all` includes decided requests in `toDecide` (otherwise only pending ones); `limit` defaults to 50. |
+| `access.requests.create` | `session` | Ask for access. `kind` is `project` (the default) or `creator`. For a project: `project`, and what is wanted as `template` or as `role` (default `editor`) with `areas`; an optional `message` (up to 1000 characters). Refused `conflict` when the caller already holds as much (owners always do), `not-found` for a project that is not there. A second request for the same thing replaces the pending one. For `creator`, leave to make projects: only where `project.create_by` is `creators`; `conflict` where it is `everyone` or the caller is already a creator, `refused` where it is `admins`. Notifies whoever decides (`access-requested`) and announces `access-request` on `projects` to them and the asker. |
+| `access.requests.decide` | `session` | Answer a pending request: `id`, `approve` (`true` or `false`), optional `note`. A project request is decided by its owners and the operators, and on approval may grant something else than was asked by naming `template`, or `role` with `areas`. A creator request is decided by the operators alone and puts the asker in `project-creator`. An approval writes the role as `projects.members.set` would, with the same announcements. Notifies the asker (`access-decided`). `conflict` for a request already decided. |
+| `access.requests.withdraw` | `session` | The asker takes back its own pending request (`id`). Withdrawing one already decided answers it as it stands. |
+| `projects.update` | `session` | Owners only. Change a project's `description`, and who may save (`saveRole`) and restore (`restoreRole`) its versions: `editor` (owners and editors, the default) or `owner`. The name is refused: it is part of the repository's address. Answers the project. |
+| `projects.webhooks.list` / `create` / `delete` / `test` | `webhooks` | The project's owners (and operators): the same as `admin.webhooks.*`, held to one `project`. |
+| `projects.members.remove` | `session` | Take an account (`username`) out of a project. Owners and operators only, and never the only owner. Removing somebody who is not a member answers `{}`. Announces `member-removed` on the project's members topic and `project-access-changed` to the account removed, and withdraws, at once, every subscription that account's sessions hold on the project. |
+| `account.devices.list` | `session` | The devices the caller is signed in on through the browser sign-in: id, the name the device gave, the application, when it signed in and was last used. |
+| `account.devices.revoke` | `session` | Sign one of the caller's own devices out (`device`). Every token it holds is refused at once. Another account's device, or one already signed out, answers `{}`. |
+| `account.profile.get` | `session` | An account's profile (`username`, or the caller's): display name, bio, `avatarUrl`. |
+| `account.profile.update` | `session` | Change the caller's own `displayName` and `bio`. Avatars are uploaded over HTTP (`PUT /api/console/v1/avatar`, console session only) and served content-addressed at `/api/team/v1/avatars/{username}/{sha256}.{ext}` to signed-in callers. |
+| `activity.list` | `activity` | A page of what happened, newest first, for an `account` and/or a `project`: commits (read by the refresh pass; the author string is matched to an account where it can be, and is unverified), threads, comments, resolutions, to-dos made and finished. Only rows about projects the caller can see; private rows only to their own account. |
+| `activity.heatmap` | `activity` | Per-day counts for one account over the last year, bucketed in the caller's time zone (`tzOffsetMinutes`, as `Date#getTimezoneOffset`). The same visibility as `activity.list`. |
+| `todos.list` | `todos` | The caller's to-dos (owned, or assigned in a project they can see), or one `project`'s (shown to the project, plus the caller's own private ones there). `includeDone` defaults to false. |
+| `todos.create` | `todos` | Make one: `title`, optional `body`, `project`, `visibility` (`private` default, or `project`), `assignee` (project to-dos only, a member of that project), `dueAt`, `anchor`. Announces `todo-set` on the owner's and assignee's `account:{account}/todos` and, for a project to-do, on `project:{project}/todos`; notifies the assignee. |
+| `todos.update` | `todos` | Change one. Its owner may change anything; its assignee only its `status`; a project owner may tidy a project to-do. `null` clears a field. Finishing one records activity. With `status: "done"`, a project's to-do may also carry `doneRevision`, the commit that finished it (Studio sends it when a to-do is ticked off in the commit dialog; the assignee may send it too). It is kept while the to-do stays done and cleared when it is opened again. |
+| `todos.delete` | `todos` | Its owner only. |
+| `reviews.list` | `reviews` | One `project`'s review requests, or (without one) those the caller asked for or is asked; open and changes-requested ones unless `includeClosed`. |
+| `reviews.create` | `reviews` | Ask `reviewer` (a member, not oneself) to review `toRevision` (and optionally from `fromRevision`), with a `title` and `note`. Viewers may not ask. Notifies the reviewer (`review-requested`). |
+| `reviews.update` | `reviews` | The reviewer gives a verdict, `approved` or `changes` with an optional `verdictNote`, and may change it; the requester `withdrawn`s or re-`open`s. A new verdict notifies the requester (`review-answered`). The line-by-line part is ordinary threads. |
+| `milestones.list` | `milestones` | One project's milestones, newest first. |
+| `milestones.create` | `milestones` | Put a `name` (unique in the project) on a `revision`. Owners and editors. |
+| `milestones.delete` | `milestones` | Whoever named it, or an owner. |
+| `admin.documents.status` | `admin` | Operators. Every team project with a log or a saved version: whether its authority is loaded, its `seq`, the `savedSeq` and `savedAt` of the last version, how many `versions`, `logRows` and `prunedThrough`, and for a loaded one the files still owed to a version and the documents it could not read. Also `retainDays`, the `documents.retain_days` setting. |
+| `admin.webhooks.list` / `create` / `delete` / `test` | `webhooks` | Operators. `create` takes `url` (http or https, no credentials in it), `format` (`json`, `slack`, `discord`, `feishu`), `events` and optionally `project`, and answers the signing `secret` once. `test` posts one event now and answers the status (0 for no answer). |
+| `notifications.list` | `notifications` | The caller's notifications, newest first, with `unread`. Mentions (`@username` in a comment), replies in a thread the caller is in, and to-dos given to them; never about a project they cannot see, never about their own act. |
+| `notifications.read` | `notifications` | Mark `ids`, or `all: true`, read. |
 | `members.list` | `session` | The accounts on this server, as a name beside a piece of work, in name order. Bounded the way `projects.list` is and for the same reason, with the same `total` and no cursor. |
 | `threads.list` | `comments` | The threads anchored in one project, newest activity first, paged. `limit` defaults to 50 and is capped at 200, and a page also ends once the threads on it total a mebibyte, whichever comes first, since a thread carries the comment that opened it and that comment may hold a suggestion, so the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. |
 | `threads.get` | `comments` | One thread and a page of its comments, oldest first. `limit` defaults to 50 and is capped at 200, and a page also ends once the comments on it total a mebibyte; `after` carries the reader on from the cursor the last page ended with, and the cursor is absent when the conversation ends there. The thread's own `comments` count is how many there are in all, so a client knows what it holds a page of. |
@@ -401,15 +433,23 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `threads.resolve` | `comments` | Mark a thread resolved, or open it again. Idempotent: resolving a thread that is already in the asked-for state changes nothing and announces nothing. |
 | `comments.edit` | `comments` | Change the wording of one's own comment. |
 | `comments.delete` | `comments` | Withdraw one's own comment, keeping the shape of the conversation. |
-| `clients.announce` | `clients` | Say which installation this is, and what it has open. Announcing an id one already holds is ordinary, it is how a reconnect keeps its place, and an id held by another account is a `conflict`. |
+| `clients.announce` | `clients` | Say which installation this is, and what it has open. Announcing an id one already holds is ordinary, it is how a reconnect keeps its place, and an id held by another account is a `conflict`. With a project, `editing` may name the document being edited in anchor terms (`story:<id>`, `ui:<id>`); the instance then carries `editing` and `editingSince` (kept while the same document is announced again), so another client opening that document can say who is in it. A hint, never a lock: nothing is refused because of it. |
 | `clients.withdraw` | `clients` | Take one window's presence back. |
 | `clients.list` | `clients` | Which installations are connected, optionally on one project. |
-| `live.list` | `live` | The live sessions open on one project. |
+| `live.list` | `live` | The live sessions open on one project. A viewer of the project may list rooms and hold a room's topic to watch it; opening, joining, asking to join and speaking are `refused` to them, and a member made a viewer is taken out of the rooms it is in. |
 | `live.open` | `live` | Open one, and be its first member. |
 | `live.join` | `live` | Join one somebody else opened. |
 | `live.leave` | `live` | Leave one. The last one out closes it. |
 | `live.close` | `live` | Close one outright, which only its opener may do. |
 | `live.say` | `live` | Say something to everybody in one. Kept by nobody. |
+| `doc.head` | `documents` | Where a project's documents stand: the last applied `seq`, the last saved version (`snapshot`: `seq`, `revision`, `at`), the kernel version, `prunedThrough` (the log is cleared up to here), documents that could not be read, `mayEdit` for the caller, and `areas`, the areas the caller may change (all six for an owner, none for a reviewer or viewer). Loads the project's authority. |
+| `doc.effects` | `documents` | The applied edits after `after`, oldest first, a page at a time (500 by default, 5 000 at most, a mebibyte at most). A page whose first `seq` is past `after + 1` means the log was cleared: start again from `doc.base`. |
+| `doc.base` | `documents` | The files of the last saved version and the `seq` they stand at - what a Studio that does not know where it stands starts from. Without `path`, the list of files; with `path` and `offset`, one chunk of one file as base64 (512 KiB). |
+| `doc.file` | `documents` | One file (`path`) as the project holds it now and the `seq` it stands at, a chunk at a time like `doc.base`. A file held only as a note answers its `digest` and either `stored` with the `revision` to read it from or the `transferId` bringing it. How a Studio puts back a file its offline copy collided on. |
+| `doc.files` | `documents` | The project documents of one saved version (`revision`), listed or a chunk at a time like `doc.base`: for previewing and comparing a version. |
+| `doc.intent` | `documents` | Ask for one edit: `clientId` (idempotency key), `document`, `op`, optional `derived` and, for an edit made offline, `basedOn` (the seq it was written against). Answers `{ kind: "effect", effect }` or `{ kind: "refusal", reason, detail?, conflicts? }`, where `reason` is `rejected`, `nothing-there` or `conflict`. Owners and editors only, and an editor only within their areas: the file the edit reaches decides its area (the story library, stories and variables are `story`; characters; assets and their metadata; UI documents and graphs; localization, voice and the dictionary; anything else, the project file and brand included, is `config`), and an edit outside them is `refused`. |
+| `doc.snapshot` | `documents` | Save the project's current state as a version, with an optional `label`. Answers the `revision`, absent when nothing had changed. Owners and editors, or owners only where the project's `saveRole` is `owner`. A version saved this way is recorded as the caller's (`version` activity, the `version` webhook event); one the server saves on its own is marked automatic and is not news. |
+| `doc.restore` | `documents` | Put one `revision` back as the current state, itself a step in the log and a new version. Owners and editors, or owners only where the project's `restoreRole` is `owner`. A version changes every area at once, so an editor kept to some areas may not restore one. |
 | `overlay.list` | `overlay` | A page of what is attached to one project, newest change first, and what the server last read its head to be. `limit` defaults to 500 and is capped at 2 000, and a page also ends once the records on it total a mebibyte, whichever comes first, since a record's body may be 64 KiB and the count alone would not bound the answer. `before` carries the reader on from the cursor the last page ended with, and the cursor is absent when there is nothing past this page. `total` is how many the project holds in all, whatever this page or a narrowing left out. |
 | `overlay.put` | `overlay` | Attach something, or replace something one attached before. A project holds at most 20 000 records; past that a new one is `refused`, in a sentence naming `overlay.drop` as the way back under. Replacing a record already there is never refused, since it adds none. |
 | `overlay.drop` | `overlay` | Take one's own record off again. |
@@ -422,6 +462,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `admin.users.disable` | `admin` | Stop an account being issued anything, and refuse the tokens it already holds. Answers with the account. Idempotent: one already disabled is answered and nothing is announced, and its token epoch is not moved a second time. Announces `user-disabled`. |
 | `admin.users.enable` | `admin` | Let a disabled account sign in again. Tokens minted before it was disabled stay unrenewable. Idempotent, and announces `user-enabled`. |
 | `admin.users.grantAdmin` | `admin` | Put an account in the admin group. Idempotent, and announces `user-granted-admin`. |
+| `admin.users.setCreator` | `admin` | Put an account in (`creator: true`) or take it out of the `project-creator` group, which is who may make projects where `project.create_by` is `creators`. Idempotent, and announces `user-creator-set`. |
 | `admin.users.revokeAdmin` | `admin` | Take one out again. Idempotent, and announces `user-revoked-admin`. **Refused for the last operator**; see below. |
 | `admin.users.revokeTokens` | `admin` | Refuse every token an account already holds, without disabling it. Answers with the account, whose `tokensInvalidatedAt` is the moment. Never a no-op, which is why it is worth a `clientId`. Announces `user-tokens-revoked`. |
 | `admin.tokens.mint` | `admin` | Mint a sign-in token for an account without knowing its password, to be handed to the person. Answers with the account, when it expires, and the token, **shown once and kept nowhere**. A repeat under the same `clientId` mints nothing and answers without a token. Refused for a disabled account. Announces nothing on any topic. |
@@ -429,7 +470,26 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `admin.keys.rotate` | `admin` | Generate a signing key and sign with it from now on. Every key that is not retired goes on being published, so a token signed a second ago still verifies. Answers with the key list as `admin.keys.list` carries it, the same ceiling and the same `total`, and announces `keys-rotated` carrying that. |
 | `admin.keys.retire` | `admin` | Stop publishing the key named by `kid`, which **refuses every token that key signed**, here and anywhere else verifying against this server's JWKS. The opposite of rotating and not a stronger version of it: whoever held one of those tokens signs in again. The key's file is kept, so `total` does not move and the row stays on the list as `retired`. **The key that signs is refused**, in a sentence saying to rotate first, retiring it would refuse the token the call arrived on and leave nothing able to sign a replacement. Retiring the last key that was only verifying is not refused: it is what somebody does about a key they believe has got out, and the cost is the point. A `kid` this server has never held is `not-found`; one already retired is answered and nothing is announced, as with every idempotent write here. Answers with the key list exactly as `admin.keys.rotate` does and announces `key-retired` carrying it. |
 
+### Permission templates
+
+A template is a named grant every Team and every Studio knows by the same id,
+listed in the contract as `permissionTemplates`: `owner`; `editor` (every area);
+`writer` (story, characters); `artist` (characters, assets, UI); `translator`
+(localization); `engineer` (UI, config); `reviewer`; `viewer`. A grant that
+matches none is shown as custom. Templates are words for grants, not a stored
+thing: a member holds a role and areas, whichever way they were given.
+
 ### Administering a server
+
+`admin.brand.set` (`accent`: `#rrggbb` or `null`) sets the team's accent colour;
+the logo is uploaded by an operator over HTTP (`PUT /api/console/v1/brand/logo`,
+console session, PNG/JPEG/WebP up to 512 KiB) and served to anybody at
+`/api/team/v1/brand/logo/{sha256}.{ext}`. Both appear in the discovery document
+as `brand: { accent?, logoUrl? }`, which the console and Studio draw. The web
+console's administration pages (accounts, project members, brand and settings,
+signing keys and the decision log, server status) are built on these methods and
+the rest of the family below.
+
 
 The `admin` family is refused to anybody who is not an operator, and the check is
 made **on every call** rather than when the session opened. That is not
@@ -463,6 +523,13 @@ an ordinary event, `{ kind: "subscription-withdrawn", topic, why }`, and to that
 session alone: the sequence does not move for the operators still listening, and
 the session stays open and keeps everything else it subscribed to.
 
+**A project subscription does not outlive the account's role in it.** The same
+check, made the same way, takes back every `project:{project}…` topic from an
+account that no longer has a role in that project, with the same event. Taking
+somebody out with `projects.members.remove` also asks that account's sessions to
+check at once, so for that path there is no window at all. A project that was
+forgotten is not withdrawn this way: it has already said `project-forgotten`.
+
 ### Anchors
 
 Where in a project something is attached is an **anchor**: `{ document?, element?, revision? }`,
@@ -473,6 +540,20 @@ stood at. That the server never reads them is what lets the two halves ship on
 separate schedules: a client that begins anchoring to a new kind of thing needs
 no server release.
 
+The clients agree on a vocabulary among themselves, so that a thread written in
+one shows in the other:
+
+| What | `document` | `element` |
+|---|---|---|
+| A story row | `story:<storyId>` | `<sceneId>/<blockId>` |
+| A blueprint node | `ui:<blueprintId>` | `<graphId>/<nodeId>` |
+
+Studio writes its row comments to these threads whenever the project is on a
+Team server (pushing local ones once each, with their local ids as client ids,
+and pulling the server's), and keeps `editor/story-comments.json` as the
+offline copy; the web console reads and writes the same threads. A viewer of a
+project reads its threads and may not write in them (`refused`).
+
 ## Topics
 
 A topic is a string a client subscribes to. Every one has a publisher; a name the
@@ -480,13 +561,18 @@ server never publishes on is refused rather than left waiting.
 
 | Topic | When it fires |
 |---|---|
-| `projects` | The list of projects on this server changed. |
+| `projects` | The list of projects on this server changed. Each event goes only to the accounts it concerns: `project-created` and `project-forgotten` to the project's members and the operators, `project-access-changed` to the one account whose role changed, `access-request` (a request made, decided or withdrawn) to its asker and whoever decides it. The sequence moves for everybody, so a session left out sees a gap and may read the list again. |
 | `project:{project}` | One project's row changed, or the server read its repository again. |
 | `project:{project}/threads` | A thread or comment in one project changed. |
 | `project:{project}/overlay` | An overlay record on one project changed. |
 | `project:{project}/clients` | An installation opened or closed one project. |
 | `project:{project}/live` | A live session on one project opened, changed or closed. |
+| `project:{project}/members` | Somebody was given a role in one project, had it changed, or was taken out. |
+| `project:{project}/todos` | A to-do shown to one project was made, changed or removed. |
+| `account:{account}/todos` | One of the account's own to-dos changed. Held by that account only; anybody else's is "not found". |
+| `account:{account}/notifications` | A notification arrived, or some were read. Held by that account only. |
 | `live:{session}` | Something was said inside one live session. Kept by nobody. |
+| `project:{project}/doc` | A team project's documents moved: `doc-effect` (an applied edit, with its `seq`), `doc-snapshot` (a version was saved: everything up to `seq` is in `revision`) or `doc-reset` (a version was restored: bring the documents to `revision` and carry on from `seq`). A gap in `seq` is read back with `doc.effects`. |
 | `admin/users` | An account was made, disabled, enabled, given or denied administration, or had its tokens refused. Operators only. |
 | `admin/settings` | A setting of this server changed. Operators only. |
 | `admin/keys` | This server rotated its signing keys or retired one; the event carries the whole list either way, so a client that replaces what it holds does not have to tell the two apart. Operators only. |
@@ -505,6 +591,29 @@ only act on by re-reading a page it already holds. **An allowed decision is
 published nowhere.** A client that wants the whole log pages `admin.audit.list`,
 and has to: the sequence on that topic counts refusals, not rows.
 
+## Project files
+
+Not part of the socket: two read-only HTTP routes on the same listener, for the
+web console's viewers. Signed in by a console cookie or a bearer token; any role
+in the project may read, and a project the caller has no role in is a 404.
+
+```
+GET /api/team/v1/projects/{project}/tree/{revision}          {revision, files: [{path, size}], total}
+GET /api/team/v1/projects/{project}/raw/{revision}/{path…}   the file's bytes
+```
+
+`{revision}` is a revision id or `head`. A revision id's answers are
+`immutable`; `head`'s are `no-cache` and carry `x-team-revision` naming what it
+resolved to. Team never interprets the bytes: the console reads them with
+`@narraleaf/project-view` (`project-view/` in this repository). A path is looked
+up in the revision's own tree, never joined onto a directory. JSON, text,
+common image, audio, video and font types are served as themselves; anything
+else is an attachment. Asset bytes, which Studio stores without an extension
+under `assets/content/`, may be asked for as a type with `?as=png` (that
+directory only, types on the list only). Every file answer carries `nosniff` and
+`Content-Security-Policy: sandbox`, so nothing committed to a project can run
+in this origin. Files over 32 MiB are refused with 413.
+
 ## Limits
 
 Every limit is in the contract, so that a client can know it rather than discover
@@ -517,6 +626,7 @@ it by being refused.
 | `suggestion` | 65 536 | What a suggestion carries. |
 | `overlayBody` | 65 536 | One overlay record. |
 | `livePayload` | 16 384 | One thing said in a live session. |
+| `docIntent` | 98 304 | One edit to a team project, as JSON: its document address, operation and derived entries. |
 | `instanceField` | 256 | Each field describing a client installation. |
 | `pageBytes` | 1 048 576 | The rows on one page of any list this server answers with, weighed as the whole of what a client wrote into each, a comment's body and the suggestion beside it, an overlay record's body and its anchor. A page ends at this or at its count, whichever comes first, and its first row goes on it whatever it weighs. |
 | `answerBytes` | 2 097 152 | The largest answer a server composes, derived from the limits above: a page of rows, the one row a page admits beyond its budget, and the fields around them that are not weighed. It is what a client sizes its reader from, a reader smaller than this refuses an answer the server it is talking to built. One answer stands outside that working-out: a page of a project's history is weighed like every other page, but the one row a page admits beyond its budget is a commit message read out of a repository, so one revision pushed with a very long message is one answer past this figure. |
@@ -540,3 +650,38 @@ The number is `2`. It moved to `2` while Team had never been released and the
 only client shipped in step with it, so the change cost nobody a migration. That
 justification does not return: once Team is released, a further breaking change is
 made by negotiation rather than by moving this number under a client's feet.
+
+
+## Webhooks
+
+An operator can have the server post its events to a URL: `commit` (new
+revisions since the last refresh pass, never the first pass's backfill),
+`thread`, `todo-assigned`, `todo-done` (project to-dos only), `review-requested`,
+`review-answered`, `milestone` and `version` (a history version saved by hand
+or restored; automatic snapshots post nothing, and `commit` is never sent for a
+revision the project authority wrote). A webhook for a project hears only that
+project; one with no project hears all of them. A project's owners manage its
+own webhooks with `projects.webhooks.*`.
+
+Each delivery is one POST with `content-type: application/json`,
+`x-nlteam-event` and `x-nlteam-signature: sha256=<hex>`, the HMAC-SHA256 of the
+body under the webhook's secret. A `json` body is
+`{ event, project: { id, name }, summary, actor?, ref?, at }`; the chat formats
+are those services' incoming-webhook shapes carrying `[project] summary`.
+Redirects are not followed, a delivery gets five seconds, and a failure is
+recorded on the webhook (`lastStatus`, `lastAt`) and not retried.
+
+`projects.history` carries `version` beside each revision the project authority
+wrote: `label?`, `auto`, `savedBy?`, `participants` (usernames whose edits it
+holds) and `seq`. The commit itself is under the account the server reads as,
+so its author says nothing about who did the work. Edits are counted in the
+activity as `edit` rows, one per account per project per stretch of work (edits
+within half an hour of each other), with `count`.
+
+The console's file routes also take `current` as the revision: the documents
+and whole files the project authority holds now, and the last saved version for
+everything else.
+
+To-dos carry a `kind`: `task`, `asset` (asks for a file for the row it is
+anchored to; the assignee may set `asset` when finishing it), `translation` or
+`voice` (with a `locale`). The last three belong to a project.

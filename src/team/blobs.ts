@@ -156,6 +156,7 @@ export type BlobAppendOutcome =
 export class TeamBlobStore {
   private readonly entries = new Map<string, BlobEntry>();
   private timer: NodeJS.Timeout | undefined;
+  private readonly completed = new Set<(project: string, transfer: string) => void>();
 
   private constructor(private readonly directory: string) {}
 
@@ -177,6 +178,15 @@ export class TeamBlobStore {
     // Never a reason to keep this process alive on its own.
     store.timer.unref();
     return store;
+  }
+
+  /**
+   * Be told whenever an object becomes whole. What the project authorities use to copy a file an
+   * edit named somewhere that outlives this store, before the next saved version takes it.
+   */
+  public onComplete(listener: (project: string, transfer: string) => void): () => void {
+    this.completed.add(listener);
+    return () => this.completed.delete(listener);
   }
 
   /** Stop sweeping. What shutting down does; the directory is emptied by the next `open`. */
@@ -315,6 +325,15 @@ export class TeamBlobStore {
       entry.writing = false;
       entry.touchedAt = Date.now();
       this.wake(entry);
+      if (entry.received >= entry.length && !entry.gone) {
+        for (const listener of this.completed) {
+          try {
+            listener(entry.project, entry.transfer);
+          } catch {
+            // A listener's trouble is its own; the append landed either way.
+          }
+        }
+      }
     }
   }
 

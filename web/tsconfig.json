@@ -1,0 +1,29 @@
+{
+  // The web console: a page, so DOM and JSX rather than Node. Checked on its own
+  // (`npm run typecheck` runs both configurations) because the two disagree
+  // about the platform, and bundled by scripts/build-console.mjs.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "types": [],
+    "baseUrl": "..",
+    "paths": {
+      "@narraleaf/team-protocol": ["./protocol/src/index.ts"],
+      "@narraleaf/project-view": ["./project-view/src/index.ts"]
+    },
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "../tests/projectdata.test.ts", "../tests/qr.test.ts"]
+}

@@ -478,6 +478,715 @@ const MIGRATIONS: readonly Migration[] = [
        ) STRICT`,
     ],
   },
+  {
+    version: 12,
+    description: "projects have members again, each with a role",
+    statements: [
+      // Version 7 dropped per-project access because one rule was enough for a
+      // server only Studio reached. A web console that a reviewer or a
+      // contractor signs in to is not that server, and docs/architecture.md
+      // (Decided for 0.2) records the reversal.
+      //
+      // `role` is owner, editor, reviewer or viewer. Only the first two reach
+      // the repository: loreserver 0.8.6 was measured to ignore read and write
+      // in a token and answer only "may this caller open it at all", so a role
+      // that may not write is a role that may not open the repository.
+      // src/projects/registry.ts holds the rule.
+      `CREATE TABLE project_members (
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         role       TEXT    NOT NULL,
+         added_by   TEXT,
+         added_at   INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE UNIQUE INDEX project_members_key ON project_members (project_id, user_id)",
+      "CREATE INDEX project_members_by_user ON project_members (user_id)",
+      // Nobody's access changes on upgrade: before this, every account reached
+      // every project as somebody who could write it. The creator is the owner;
+      // everybody else is an editor. Disabled accounts included, so enabling
+      // one again restores what it had.
+      `INSERT INTO project_members (project_id, user_id, role, added_by, added_at)
+         SELECT p.id, u.id,
+                CASE WHEN u.id = p.created_by THEN 'owner' ELSE 'editor' END,
+                NULL, CAST(unixepoch('subsec') * 1000 AS INTEGER)
+           FROM projects p CROSS JOIN users u`,
+    ],
+  },
+  {
+    version: 13,
+    description: "a browser signs in to the web console and holds a session",
+    statements: [
+      // The one place this server keeps a sign-in. Studio and the command line
+      // hold stateless tokens and still do; a browser holds an HttpOnly cookie
+      // instead, because a page's script must never be able to read what signs
+      // it in. src/identity/websessions.ts sets out the rest.
+      //
+      // `id_hash` is the SHA-256 of the cookie, never the cookie: a copy of
+      // this database signs nobody in. `token_epoch` is the account's epoch
+      // when the session began, so revoking an account's tokens ends its
+      // browser sessions with them.
+      `CREATE TABLE web_sessions (
+         id_hash      TEXT    PRIMARY KEY,
+         user_id      TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         token_epoch  INTEGER NOT NULL,
+         created_at   INTEGER NOT NULL,
+         last_seen_at INTEGER NOT NULL,
+         expires_at   INTEGER NOT NULL,
+         user_agent   TEXT
+       ) STRICT`,
+      "CREATE INDEX web_sessions_by_user ON web_sessions (user_id)",
+    ],
+  },
+  {
+    version: 14,
+    description: "Studio signs in through the browser, as an OAuth client of this server",
+    statements: [
+      // One row per signed-in Studio installation: what the "signed in on"
+      // list shows and what signing a device out revokes. Every token issued
+      // under a grant names it (the `grant` claim), and Team refuses a token
+      // whose grant is revoked. The refresh token is stored hashed, rotated on
+      // each use; the one it replaced is kept so that a replayed old one —
+      // which means two parties hold the chain — revokes the grant outright.
+      `CREATE TABLE oauth_grants (
+         id            TEXT    PRIMARY KEY,
+         user_id       TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         client_id     TEXT    NOT NULL,
+         device_name   TEXT    NOT NULL,
+         refresh_hash  TEXT    NOT NULL UNIQUE,
+         previous_hash TEXT,
+         token_epoch   INTEGER NOT NULL,
+         created_at    INTEGER NOT NULL,
+         last_used_at  INTEGER NOT NULL,
+         expires_at    INTEGER NOT NULL,
+         revoked_at    INTEGER
+       ) STRICT`,
+      "CREATE INDEX oauth_grants_by_user ON oauth_grants (user_id)",
+      "CREATE INDEX oauth_grants_by_previous ON oauth_grants (previous_hash)",
+      // An authorization code, between the browser approving and Studio
+      // redeeming it. Single use, minutes long, bound to the PKCE challenge
+      // and the exact redirect it was issued for.
+      `CREATE TABLE oauth_codes (
+         code_hash    TEXT    PRIMARY KEY,
+         user_id      TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         client_id    TEXT    NOT NULL,
+         redirect_uri TEXT    NOT NULL,
+         challenge    TEXT    NOT NULL,
+         device_name  TEXT    NOT NULL,
+         expires_at   INTEGER NOT NULL
+       ) STRICT`,
+      // A device code (RFC 8628), for a Studio that cannot open a browser on
+      // its own machine: it shows a short code, somebody types it into the
+      // console on any device, and Studio's polling then receives the grant.
+      `CREATE TABLE oauth_devices (
+         device_hash TEXT    PRIMARY KEY,
+         user_code   TEXT    NOT NULL UNIQUE,
+         client_id   TEXT    NOT NULL,
+         device_name TEXT    NOT NULL,
+         user_id     TEXT    REFERENCES users(id) ON DELETE CASCADE,
+         decision    TEXT,
+         expires_at  INTEGER NOT NULL,
+         polled_at   INTEGER
+       ) STRICT`,
+    ],
+  },
+  {
+    version: 15,
+    description: "activity, to-dos, notifications, and a face for every account",
+    statements: [
+      // What happened, for a person's timeline and contribution graph and a
+      // project's feed. One row per event; `ref` says which thing (a revision,
+      // a thread, a to-do) and never holds its text. `account_id` is who did it
+      // when Team knows, and NULL for a commit whose author string matches no
+      // account — `actor_label` keeps that string so the row still says who.
+      // `private` rows (a private to-do finished) are shown to their owner only.
+      `CREATE TABLE activity (
+         id          INTEGER PRIMARY KEY,
+         account_id  TEXT REFERENCES users(id) ON DELETE SET NULL,
+         actor_label TEXT,
+         project_id  TEXT REFERENCES projects(id) ON DELETE CASCADE,
+         kind        TEXT    NOT NULL,
+         ref         TEXT,
+         summary     TEXT,
+         private     INTEGER NOT NULL DEFAULT 0,
+         at          INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE INDEX activity_by_account ON activity (account_id, at)",
+      "CREATE INDEX activity_by_project ON activity (project_id, at)",
+      // A revision is one event however many passes see it.
+      "CREATE UNIQUE INDEX activity_commit_once ON activity (project_id, ref) WHERE kind = 'commit'",
+      // A to-do: an owner's, optionally assigned, optionally in a project and
+      // anchored to a line or a node there. `visibility` is enforced by the
+      // server: a private to-do is answered to its owner and nobody else.
+      `CREATE TABLE todos (
+         id          TEXT    PRIMARY KEY,
+         owner_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         assignee_id TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         project_id  TEXT    REFERENCES projects(id) ON DELETE CASCADE,
+         document    TEXT,
+         element     TEXT,
+         revision    TEXT,
+         title       TEXT    NOT NULL,
+         body        TEXT,
+         status      TEXT    NOT NULL,
+         visibility  TEXT    NOT NULL,
+         due_at      INTEGER,
+         created_at  INTEGER NOT NULL,
+         updated_at  INTEGER NOT NULL,
+         done_at     INTEGER
+       ) STRICT`,
+      "CREATE INDEX todos_by_owner ON todos (owner_id, updated_at)",
+      "CREATE INDEX todos_by_assignee ON todos (assignee_id, updated_at)",
+      "CREATE INDEX todos_by_project ON todos (project_id, updated_at)",
+      // Somebody wants one account's attention: a mention, a reply in a thread
+      // they are in, a to-do given to them.
+      `CREATE TABLE notifications (
+         id         INTEGER PRIMARY KEY,
+         account_id TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         kind       TEXT    NOT NULL,
+         project_id TEXT    REFERENCES projects(id) ON DELETE CASCADE,
+         ref        TEXT,
+         actor_id   TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         summary    TEXT,
+         at         INTEGER NOT NULL,
+         read_at    INTEGER
+       ) STRICT`,
+      "CREATE INDEX notifications_by_account ON notifications (account_id, id)",
+      // A face and a line about oneself. `avatar` is the SHA-256 of the image
+      // stored under avatars/ in the storage root, so its address changes when
+      // it does and can be cached for ever.
+      "ALTER TABLE users ADD COLUMN avatar TEXT",
+      "ALTER TABLE users ADD COLUMN bio TEXT",
+    ],
+  },
+  {
+    version: 16,
+    description: "the revision that finished a to-do",
+    statements: [
+      // Which revision finished a to-do, when it was finished by one: Studio
+      // ticks to-dos off as it commits and says which commit did it. Opaque,
+      // like an anchor's revision; cleared when the to-do is opened again.
+      "ALTER TABLE todos ADD COLUMN done_revision TEXT",
+    ],
+  },
+  {
+    version: 17,
+    description: "review requests, milestones, webhooks, and what a to-do asks for",
+    statements: [
+      // What a to-do asks for (task | asset | translation | voice), the
+      // language a translation or voice to-do is about, and the asset that
+      // answered an asset request. All opaque to the server but `kind`.
+      "ALTER TABLE todos ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'",
+      "ALTER TABLE todos ADD COLUMN locale TEXT",
+      "ALTER TABLE todos ADD COLUMN asset TEXT",
+      // Somebody asked to look at a range of revisions. The revisions are
+      // strings this server stores and never reads.
+      `CREATE TABLE reviews (
+         id            TEXT    PRIMARY KEY,
+         project_id    TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         requester_id  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         reviewer_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         from_revision TEXT,
+         to_revision   TEXT    NOT NULL,
+         title         TEXT    NOT NULL,
+         note          TEXT,
+         status        TEXT    NOT NULL,
+         verdict_note  TEXT,
+         created_at    INTEGER NOT NULL,
+         updated_at    INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE INDEX reviews_by_project ON reviews (project_id, updated_at)",
+      "CREATE INDEX reviews_by_reviewer ON reviews (reviewer_id, updated_at)",
+      // A name on a revision, unique within its project.
+      `CREATE TABLE milestones (
+         id          TEXT    PRIMARY KEY,
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         name        TEXT    NOT NULL,
+         revision    TEXT    NOT NULL,
+         note        TEXT,
+         created_by  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at  INTEGER NOT NULL,
+         UNIQUE (project_id, name)
+       ) STRICT`,
+      // Where this server posts its events. `secret` signs each body; it is
+      // shown once, when the webhook is made.
+      `CREATE TABLE webhooks (
+         id          TEXT    PRIMARY KEY,
+         project_id  TEXT    REFERENCES projects(id) ON DELETE CASCADE,
+         url         TEXT    NOT NULL,
+         format      TEXT    NOT NULL,
+         events      TEXT    NOT NULL,
+         secret      TEXT    NOT NULL,
+         created_by  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at  INTEGER NOT NULL,
+         last_status INTEGER,
+         last_at     INTEGER
+       ) STRICT`,
+    ],
+  },
+  {
+    version: 18,
+    description: "the project authority's log of applied edits, and where its snapshots stand",
+    statements: [
+      // Every edit the project authority applied, in the order it applied
+      // them. `seq` is the authority's own number for the project; `document`
+      // and `op` are Studio's, stored as JSON this server hands to Studio's
+      // kernel and never reads itself. The log is what a restarted server
+      // replays on top of the last snapshot, and what a Studio that missed
+      // something catches up from. `client_id` makes a resent intent land once.
+      `CREATE TABLE doc_effects (
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         seq        INTEGER NOT NULL,
+         client_id  TEXT    NOT NULL,
+         account_id TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         by_label   TEXT    NOT NULL,
+         document   TEXT    NOT NULL,
+         op         TEXT    NOT NULL,
+         derived    TEXT,
+         touched    TEXT,
+         at         INTEGER NOT NULL,
+         PRIMARY KEY (project_id, seq)
+       ) STRICT`,
+      "CREATE UNIQUE INDEX doc_effects_once ON doc_effects (project_id, client_id)",
+      // Which revision holds everything up to which seq. A server opening a
+      // project reads that revision and replays the log after it.
+      // `pruned_through`: the log has been cleared up to here (only ever up to a saved version), so
+      // an offline edit based on anything older cannot be checked for collisions and is refused.
+      `CREATE TABLE doc_snapshots (
+         project_id     TEXT    PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+         seq            INTEGER NOT NULL,
+         revision       TEXT,
+         at             INTEGER NOT NULL,
+         pruned_through INTEGER NOT NULL DEFAULT 0
+       ) STRICT`,
+    ],
+  },
+  {
+    version: 19,
+    description: "history versions with who did the work, edit stretches in activity, and per-project version roles",
+    statements: [
+      // Every history version the project authority committed. The commit itself is made under one
+      // account (the one the server reads the repository as), so this is where who saved it and
+      // whose edits it holds are kept. `participants` is a JSON array of account ids.
+      `CREATE TABLE doc_versions (
+         project_id   TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         revision     TEXT    NOT NULL,
+         seq          INTEGER NOT NULL,
+         from_seq     INTEGER NOT NULL,
+         label        TEXT,
+         saved_by     TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         auto         INTEGER NOT NULL,
+         participants TEXT    NOT NULL,
+         at           INTEGER NOT NULL,
+         PRIMARY KEY (project_id, revision)
+       ) STRICT`,
+      "CREATE INDEX doc_versions_by_seq ON doc_versions (project_id, seq)",
+      // How many edits an `edit` row stands for; one for every other kind.
+      "ALTER TABLE activity ADD COLUMN count INTEGER NOT NULL DEFAULT 1",
+      // The least role that may save a version, and restore one: 'editor' or 'owner'.
+      "ALTER TABLE projects ADD COLUMN save_role TEXT NOT NULL DEFAULT 'editor'",
+      "ALTER TABLE projects ADD COLUMN restore_role TEXT NOT NULL DEFAULT 'editor'",
+    ],
+  },
+  {
+    version: 20,
+    description: "a channel per project: messages its members write to each other",
+    statements: [
+      // Kept in the order written. A message its author takes back keeps its
+      // row, emptied, so the conversation keeps its shape.
+      `CREATE TABLE chat_messages (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         author_id   TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         body        TEXT    NOT NULL,
+         at          INTEGER NOT NULL,
+         deleted_at  INTEGER
+       ) STRICT`,
+      "CREATE INDEX chat_messages_by_project ON chat_messages (project_id, id)",
+    ],
+  },
+  {
+    version: 21,
+    description: "the parts of a project an editor may change",
+    statements: [
+      // A JSON array of area names (story, characters, assets, ui, localization,
+      // config), or NULL for all of them. Read only for editors: an owner
+      // changes everything and a reviewer or viewer nothing.
+      "ALTER TABLE project_members ADD COLUMN areas TEXT",
+    ],
+  },
+  {
+    version: 22,
+    description: "requests for access: a place in a project, or leave to make projects",
+    statements: [
+      // kind is 'project' or 'creator'; project_id is NULL for 'creator'.
+      // role and areas are what was asked (areas a JSON array, NULL for all);
+      // granted_role and granted_areas what an approval gave, which an owner
+      // may have changed. status is pending, approved, denied or withdrawn.
+      `CREATE TABLE access_requests (
+         id             INTEGER PRIMARY KEY AUTOINCREMENT,
+         kind           TEXT    NOT NULL,
+         project_id     TEXT    REFERENCES projects(id) ON DELETE CASCADE,
+         user_id        TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         role           TEXT,
+         areas          TEXT,
+         template       TEXT,
+         message        TEXT,
+         status         TEXT    NOT NULL DEFAULT 'pending',
+         at             INTEGER NOT NULL,
+         decided_by     TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         decided_at     INTEGER,
+         note           TEXT,
+         granted_role   TEXT,
+         granted_areas  TEXT
+       ) STRICT`,
+      // One pending request per account and project (and one to make projects).
+      `CREATE UNIQUE INDEX access_requests_one_pending
+         ON access_requests (user_id, kind, COALESCE(project_id, ''))
+         WHERE status = 'pending'`,
+      "CREATE INDEX access_requests_by_project ON access_requests (project_id, status)",
+    ],
+  },
+  {
+    version: 23,
+    description: "what each webhook was sent, how it went, and when it is tried again",
+    statements: [
+      // One row per event per webhook. status is the last answer (0 for none);
+      // next_at is when it is tried again, NULL once it worked or gave up.
+      // body is what was posted, so "send again" posts exactly that.
+      `CREATE TABLE webhook_deliveries (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         webhook_id  TEXT    NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+         event       TEXT    NOT NULL,
+         project_id  TEXT,
+         summary     TEXT    NOT NULL,
+         body        TEXT    NOT NULL,
+         signature   TEXT    NOT NULL,
+         attempts    INTEGER NOT NULL DEFAULT 0,
+         status      INTEGER NOT NULL DEFAULT 0,
+         error       TEXT,
+         at          INTEGER NOT NULL,
+         last_at     INTEGER,
+         next_at     INTEGER
+       ) STRICT`,
+      "CREATE INDEX webhook_deliveries_by_hook ON webhook_deliveries (webhook_id, id)",
+      "CREATE INDEX webhook_deliveries_due ON webhook_deliveries (next_at) WHERE next_at IS NOT NULL",
+    ],
+  },
+  {
+    version: 24,
+    description: "approvals, asset locks, saved filters, to-do labels and milestone dates",
+    statements: [
+      // Where a scene or an asset stands, one row per target. target is
+      // `scene:{id}` or `asset:{id}`, never read by the server. status is
+      // draft, pending, approved or changes.
+      `CREATE TABLE approvals (
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         target      TEXT    NOT NULL,
+         status      TEXT    NOT NULL,
+         by_id       TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         note        TEXT,
+         at          INTEGER NOT NULL,
+         PRIMARY KEY (project_id, target)
+       ) STRICT`,
+      // Every change to one, oldest first: who moved it where, and why.
+      `CREATE TABLE approval_history (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         target      TEXT    NOT NULL,
+         status      TEXT    NOT NULL,
+         by_id       TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         note        TEXT,
+         at          INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE INDEX approval_history_by_target ON approval_history (project_id, target, id)",
+      // Who holds an asset, until when. An edit that touches it from anybody
+      // else is refused while expires_at is in the future.
+      `CREATE TABLE asset_locks (
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         asset_id    TEXT    NOT NULL,
+         holder_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         note        TEXT,
+         at          INTEGER NOT NULL,
+         expires_at  INTEGER NOT NULL,
+         PRIMARY KEY (project_id, asset_id)
+       ) STRICT`,
+      // An account's named searches. query is the page's own JSON, never read here.
+      `CREATE TABLE saved_filters (
+         id          TEXT    PRIMARY KEY,
+         user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         scope       TEXT    NOT NULL,
+         name        TEXT    NOT NULL,
+         query       TEXT    NOT NULL,
+         created_at  INTEGER NOT NULL
+       ) STRICT`,
+      "CREATE UNIQUE INDEX saved_filters_by_name ON saved_filters (user_id, scope, name)",
+      // A JSON array of short words, NULL for none.
+      "ALTER TABLE todos ADD COLUMN labels TEXT",
+      // When it is meant to be reached, and whether it waits on every scene being approved.
+      "ALTER TABLE milestones ADD COLUMN due_at INTEGER",
+      "ALTER TABLE milestones ADD COLUMN gate INTEGER NOT NULL DEFAULT 0",
+    ],
+  },
+  {
+    version: 25,
+    description: "playable builds, pictures beside comments, and read-only share links",
+    statements: [
+      // A build's bytes live at builds/{project}/{id} under the storage root;
+      // this row is what is known about them. The server never opens the file.
+      `CREATE TABLE builds (
+         id           TEXT    PRIMARY KEY,
+         project_id   TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         name         TEXT    NOT NULL,
+         note         TEXT,
+         revision     TEXT,
+         platform     TEXT,
+         file         TEXT    NOT NULL,
+         size         INTEGER NOT NULL,
+         sha256       TEXT    NOT NULL,
+         uploaded_by  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at   INTEGER NOT NULL,
+         latest       INTEGER NOT NULL DEFAULT 0
+       ) STRICT`,
+      "CREATE INDEX builds_by_project ON builds (project_id, created_at)",
+      // A picture at attachments/{project}/{id}.{type}, checked by its magic number.
+      `CREATE TABLE attachments (
+         id           TEXT    PRIMARY KEY,
+         project_id   TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         type         TEXT    NOT NULL,
+         size         INTEGER NOT NULL,
+         uploaded_by  TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at   INTEGER NOT NULL
+       ) STRICT`,
+      // Only the token's SHA-256 is kept; the token is shown once. paths is a
+      // JSON array the console worked out, NULL for the whole project.
+      `CREATE TABLE share_links (
+         id             TEXT    PRIMARY KEY,
+         project_id     TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         token_hash     TEXT    NOT NULL UNIQUE,
+         label          TEXT    NOT NULL,
+         scope          TEXT    NOT NULL,
+         revision       TEXT    NOT NULL,
+         paths          TEXT,
+         allow_comments INTEGER NOT NULL DEFAULT 0,
+         expires_at     INTEGER,
+         revoked_at     INTEGER,
+         created_by     TEXT    REFERENCES users(id) ON DELETE SET NULL,
+         created_at     INTEGER NOT NULL,
+         last_used_at   INTEGER,
+         uses           INTEGER NOT NULL DEFAULT 0
+       ) STRICT`,
+      "CREATE INDEX share_links_by_project ON share_links (project_id, created_at)",
+    ],
+  },
+  {
+    version: 26,
+    description: "push subscriptions, notification switches, watches, reactions, time zones and digests",
+    statements: [
+      // One row per browser that asked to be pushed to. endpoint is the push
+      // service's address for it; p256dh and auth are the keys its payloads are
+      // encrypted to (RFC 8291), base64url as the browser gave them.
+      `CREATE TABLE push_subscriptions (
+         endpoint    TEXT    PRIMARY KEY,
+         account_id  TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         p256dh      TEXT    NOT NULL,
+         auth        TEXT    NOT NULL,
+         created_at  INTEGER NOT NULL,
+         last_ok_at  INTEGER
+       ) STRICT`,
+      "CREATE INDEX push_subscriptions_by_account ON push_subscriptions (account_id)",
+      // Only the switches somebody turned; a missing row is on.
+      `CREATE TABLE notification_prefs (
+         account_id TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         category   TEXT    NOT NULL,
+         channel    TEXT    NOT NULL,
+         enabled    INTEGER NOT NULL,
+         PRIMARY KEY (account_id, category, channel)
+       ) STRICT`,
+      // scope is '' for the whole project, scene:{id} for one scene.
+      `CREATE TABLE watches (
+         account_id TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         scope      TEXT    NOT NULL DEFAULT '',
+         created_at INTEGER NOT NULL,
+         PRIMARY KEY (account_id, project_id, scope)
+       ) STRICT`,
+      "CREATE INDEX watches_by_project ON watches (project_id, scope)",
+      // The watched scenes an edit reached since the project's last version.
+      `CREATE TABLE watch_touched (
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         scope      TEXT    NOT NULL,
+         account_id TEXT,
+         at         INTEGER NOT NULL,
+         PRIMARY KEY (project_id, scope)
+       ) STRICT`,
+      // target_kind is comment or chat; target_id the comment's id or the message's.
+      `CREATE TABLE reactions (
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         target_kind TEXT    NOT NULL,
+         target_id   TEXT    NOT NULL,
+         account_id  TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         emoji       TEXT    NOT NULL,
+         at          INTEGER NOT NULL,
+         PRIMARY KEY (target_kind, target_id, account_id, emoji)
+       ) STRICT`,
+      "CREATE INDEX reactions_by_target ON reactions (target_kind, target_id)",
+      "ALTER TABLE users ADD COLUMN timezone TEXT",
+      // off, daily or weekly; and when the last one went.
+      "ALTER TABLE users ADD COLUMN digest TEXT NOT NULL DEFAULT 'off'",
+      "ALTER TABLE users ADD COLUMN last_digest_at INTEGER",
+      // A Feishu or Slack incoming-webhook address of the account's own.
+      "ALTER TABLE users ADD COLUMN notify_hook TEXT",
+    ],
+  },
+  {
+    version: 27,
+    description: "glossaries, voice recording status, project templates, and to-dos counting toward a milestone",
+    statements: [
+      // translations is a JSON object of locale tag to the agreed word.
+      `CREATE TABLE glossary (
+         id          TEXT    PRIMARY KEY,
+         project_id  TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         term        TEXT    NOT NULL,
+         translations TEXT   NOT NULL DEFAULT '{}',
+         note        TEXT,
+         created_by  TEXT,
+         updated_by  TEXT,
+         created_at  INTEGER NOT NULL,
+         updated_at  INTEGER NOT NULL,
+         UNIQUE (project_id, term)
+       ) STRICT`,
+      // line is Studio's textId; a line with no row has not been recorded.
+      `CREATE TABLE voice_lines (
+         project_id TEXT    NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+         locale     TEXT    NOT NULL,
+         line       TEXT    NOT NULL,
+         status     TEXT    NOT NULL,
+         take       INTEGER,
+         note       TEXT,
+         updated_by TEXT,
+         updated_at INTEGER NOT NULL,
+         PRIMARY KEY (project_id, locale, line)
+       ) STRICT`,
+      // body is the TeamTemplateBody as JSON.
+      `CREATE TABLE project_templates (
+         id          TEXT    PRIMARY KEY,
+         name        TEXT    NOT NULL UNIQUE,
+         description TEXT,
+         body        TEXT    NOT NULL,
+         created_by  TEXT,
+         created_at  INTEGER NOT NULL,
+         updated_at  INTEGER NOT NULL
+       ) STRICT`,
+      // No REFERENCES: deleting a milestone clears it by hand, and the column can be dropped.
+      "ALTER TABLE todos ADD COLUMN milestone_id TEXT",
+    ],
+  },
+  {
+    version: 28,
+    description: "two-step sign-in, recovery codes, password-reset links, API tokens, archived projects and SSO subjects",
+    statements: [
+      // The TOTP secret is base32. enabled_at is null while it is being set up and not yet confirmed.
+      // last_step is the time step last accepted, so one code cannot be spent twice.
+      `CREATE TABLE user_totp (
+         user_id    TEXT    NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+         secret     TEXT    NOT NULL,
+         enabled_at INTEGER,
+         last_step  INTEGER NOT NULL DEFAULT 0
+       ) STRICT`,
+      // Only the SHA-256 of each code is kept: the codes are random enough that no slow hash is needed.
+      `CREATE TABLE recovery_codes (
+         user_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         code_hash TEXT    NOT NULL,
+         used_at   INTEGER,
+         PRIMARY KEY (user_id, code_hash)
+       ) STRICT`,
+      `CREATE TABLE password_resets (
+         token_hash TEXT    NOT NULL PRIMARY KEY,
+         user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         created_by TEXT,
+         created_at INTEGER NOT NULL,
+         expires_at INTEGER NOT NULL,
+         used_at    INTEGER
+       ) STRICT`,
+      // projects is a JSON array of project ids, or null for every project the account may reach.
+      `CREATE TABLE api_tokens (
+         id           TEXT    NOT NULL PRIMARY KEY,
+         user_id      TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         name         TEXT    NOT NULL,
+         token_hash   TEXT    NOT NULL UNIQUE,
+         projects     TEXT,
+         can_write    INTEGER NOT NULL DEFAULT 0,
+         expires_at   INTEGER,
+         created_at   INTEGER NOT NULL,
+         last_used_at INTEGER
+       ) STRICT`,
+      "CREATE INDEX api_tokens_by_user ON api_tokens (user_id)",
+      "ALTER TABLE projects ADD COLUMN archived_at INTEGER",
+      // What a project is called on screen. The name stays what it was, because it is the end
+      // of the repository address every clone holds.
+      "ALTER TABLE projects ADD COLUMN title TEXT",
+      // Which OIDC subject an account was matched to, so a later sign-in finds it by that and not by email.
+      `CREATE TABLE sso_subjects (
+         provider TEXT NOT NULL,
+         subject  TEXT NOT NULL,
+         user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         PRIMARY KEY (provider, subject)
+       ) STRICT`,
+    ],
+  },
+  {
+    version: 29,
+    description: "account policy templates, each account's policy, and Studio preferences kept per account",
+    statements: [
+      // policy is the JSON of a TeamAccountPolicy.
+      `CREATE TABLE policy_templates (
+         id          TEXT    NOT NULL PRIMARY KEY,
+         name        TEXT    NOT NULL UNIQUE,
+         description TEXT,
+         policy      TEXT    NOT NULL,
+         created_at  INTEGER NOT NULL,
+         updated_at  INTEGER NOT NULL
+       ) STRICT`,
+      // An account follows a template (template_id) or has settings of its own (policy); never both.
+      // Removing a template copies its policy onto its accounts first, so SET NULL is only a backstop.
+      `CREATE TABLE account_policies (
+         user_id     TEXT    NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+         template_id TEXT    REFERENCES policy_templates(id) ON DELETE SET NULL,
+         policy      TEXT,
+         updated_at  INTEGER NOT NULL,
+         updated_by  TEXT
+       ) STRICT`,
+      "CREATE INDEX account_policies_by_template ON account_policies (template_id)",
+      // The bytes Studio sent, as they came; this server never reads them.
+      `CREATE TABLE studio_configs (
+         user_id        TEXT    NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+         body           BLOB    NOT NULL,
+         size           INTEGER NOT NULL,
+         sha256         TEXT    NOT NULL,
+         studio_version TEXT,
+         updated_at     INTEGER NOT NULL
+       ) STRICT`,
+    ],
+  },
+  {
+    version: 30,
+    description: "deleted accounts, and accounts locked after wrong passwords",
+    statements: [
+      // A deleted account keeps its row, so the history that names it still resolves, and its
+      // name, so nobody else can take it and be mistaken for it.
+      "ALTER TABLE users ADD COLUMN deleted_at INTEGER",
+      "ALTER TABLE users ADD COLUMN failed_signins INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE users ADD COLUMN locked_until INTEGER",
+    ],
+  },
+  {
+    version: 31,
+    description: "a priority on each to-do",
+    statements: [
+      // 0 none, 1 low, 2 medium, 3 high.
+      "ALTER TABLE todos ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+    ],
+  },
 ];
 
 /** The schema version this build of Team writes and expects. */

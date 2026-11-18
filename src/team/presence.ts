@@ -55,6 +55,7 @@ export interface InstanceAnnouncement {
   readonly agent: string;
   readonly project?: string;
   readonly revision?: string;
+  readonly editing?: string;
 }
 
 interface InstanceEntry {
@@ -261,6 +262,17 @@ export class TeamPresence {
       agent: said.agent,
       ...(said.project === undefined ? {} : { project: said.project }),
       ...(said.revision === undefined ? {} : { revision: said.revision }),
+      ...(said.editing === undefined || said.project === undefined
+        ? {}
+        : {
+            editing: said.editing,
+            // Since it started on THIS document: saying so again while still on it
+            // keeps the time, so "for ten minutes" stays true across re-announcements.
+            editingSince:
+              previous?.instance.editing === said.editing && previous.instance.project === said.project
+                ? (previous.instance.editingSince ?? Date.now())
+                : Date.now(),
+          }),
       // Kept from the first announcement on this connection, so that changing
       // project does not read as somebody having just arrived.
       since: previous?.connection === connection ? previous.instance.since : Date.now(),
@@ -301,7 +313,7 @@ export class TeamPresence {
     return undefined;
   }
 
-  /** Everything announced on one connection, for a log line rather than a decision. */
+  /** Everything announced on one connection: for a log line, and for taking back what a lost project leaves behind. */
   instancesOf(connection: string): TeamClientInstance[] {
     const held = this.byConnection.get(connection);
     if (held === undefined) {
@@ -638,6 +650,26 @@ export class TeamPresence {
       return;
     }
     this.part(session, instanceId);
+  }
+
+  /**
+   * Take one instance out of every room of one project, and drop whatever it was
+   * still asking to be let into there - for an account that may no longer take
+   * part in that project's rooms (made a viewer of it), not for one that lost the
+   * project, which withdraws the whole instance.
+   *
+   * A request dropped this way is answered no, so whoever asked stops waiting.
+   */
+  leaveRooms(instanceId: string, project: string): void {
+    for (const session of [...this.sessions.values()]) {
+      if (session.project !== project) {
+        continue;
+      }
+      if (session.requests.delete(instanceId)) {
+        this.publish(projectLiveTopic(project), { kind: "live-refused", session: session.id, instance: instanceId });
+      }
+      this.part(session, instanceId);
+    }
   }
 
   /**

@@ -128,6 +128,79 @@ export const TEAM_CAPABILITIES = [
   "admin",
   /** A username and a password may be exchanged for a token, before any session. */
   "password-sign-in",
+  /**
+   * Studio may sign in through the browser instead: this server is an OAuth 2.0
+   * authorization server for the public client `narraleaf-studio` —
+   * authorization code with PKCE to a loopback redirect, refresh tokens, and the
+   * device flow. The discovery document's `oauth` names the endpoints.
+   */
+  "oauth",
+  /** A timeline and a contribution graph per account and per project. */
+  "activity",
+  /** To-dos, private or shown to a project, optionally assigned and anchored. */
+  "todos",
+  /** Mentions, replies and assignments, kept per account until read. */
+  "notifications",
+  /** Asking somebody to review a range of revisions, and their verdict. */
+  "reviews",
+  /** Names on revisions — "Demo 1" — that a project can be read at. */
+  "milestones",
+  /** Where each scene and asset stands: draft, waiting, approved or sent back. Team state only. */
+  "approvals",
+  /** An asset held by one person for a while; edits to it from anybody else are refused. */
+  "locks",
+  /**
+   * Playable builds kept beside a project: uploaded to `PUT /api/team/v1/projects/{project}/builds`
+   * and downloaded from it, never unpacked or run by the server.
+   */
+  "builds",
+  /** Pictures put beside a comment (a playtest screenshot), at `/api/team/v1/projects/{project}/attachments`. */
+  "attachments",
+  /** Read-only links for somebody without an account, opened at `/console/s/{token}`. */
+  "shares",
+  /**
+   * Notifications may reach a browser that is closed: Web Push, encrypted per RFC 8291, to the
+   * subscriptions a console registered with `push.subscribe` under this server's VAPID key.
+   */
+  "push",
+  /** An emoji from {@link TEAM_REACTIONS} on a comment or a chat message. */
+  "reactions",
+  /** Following a project, or one scene of it, to be told when a version is saved or a commit lands. */
+  "watches",
+  /** A project's glossary: terms and how each language says them, kept by Team for translators. */
+  "glossary",
+  /** Which voiced lines are recorded, and which need another take, per language. Team state only. */
+  "voice",
+  /** Project templates: members, milestones and to-dos to start a project with, or to add to one. */
+  "templates",
+  /** A daily or weekly letter of what was unread, by email or to a personal Feishu or Slack address. */
+  "digests",
+  /** Two-step sign-in: an authenticator app's code (RFC 6238) or a recovery code after the password. */
+  "two-factor",
+  /** Personal API tokens for scripts: per project, read-only unless made to write, expiring. */
+  "api-tokens",
+  /** A project may be archived - read-only and out of lists - and brought back; and given a title on screen. */
+  "archive",
+  /** How much a project keeps on this server (builds and attachments), against the quota. */
+  "storage",
+  /**
+   * Operators may fix an account's own settings - its profile, notifications, two-step sign-in,
+   * API tokens - by hand or from a template; what is fixed the account reads and cannot change.
+   */
+  "account-policy",
+  /**
+   * Studio may keep its preferences on this server, one document per account, to put back on
+   * another computer: `PUT` and `GET /api/team/v1/studio-config`. Kept as bytes, never read.
+   */
+  "studio-config",
+  /**
+   * A project's own channel: messages its members write to each other, kept,
+   * in order, and read back a page at a time - unlike a live session's chat,
+   * which only the people in the room at that moment ever see.
+   */
+  "chat",
+  /** Operators may have this server post its events to a chat or another service. */
+  "webhooks",
   /** A project's revisions may be read a page at a time. */
   "project-history",
   /**
@@ -140,6 +213,14 @@ export const TEAM_CAPABILITIES = [
    * not a message.
    */
   "blobs",
+  /**
+   * This server is the authority over a team project's documents: every edit
+   * is an intent sent here, applied here with Studio's own appliers, logged,
+   * and published on the project's `doc` topic; history versions are
+   * snapshots this server commits. Opening a team project means following
+   * that topic - there is no room to open or join.
+   */
+  "documents",
 ] as const;
 
 export type TeamCapability = (typeof TEAM_CAPABILITIES)[number];
@@ -345,6 +426,61 @@ export function projectLiveTopic(projectId: string): string {
   return `project:${projectId}/live`;
 }
 
+/** Who belongs to one project, and in which role. */
+export function projectMembersTopic(projectId: string): string {
+  return `project:${projectId}/members`;
+}
+
+/** The to-dos shown to one project's members. */
+export function projectTodosTopic(projectId: string): string {
+  return `project:${projectId}/todos`;
+}
+
+/** One project's review requests. Its members may hold it. */
+export function projectReviewsTopic(projectId: string): string {
+  return `project:${projectId}/reviews`;
+}
+
+/** One project's channel. Its members may hold it. */
+export function projectChatTopic(projectId: string): string {
+  return `project:${projectId}/chat`;
+}
+
+/** One project's milestones. Its members may hold it. */
+export function projectMilestonesTopic(projectId: string): string {
+  return `project:${projectId}/milestones`;
+}
+
+/** Where one project's scenes and assets stand. Its members may hold it. */
+export function projectApprovalsTopic(projectId: string): string {
+  return `project:${projectId}/approvals`;
+}
+
+/** One project's playable builds. Its members may hold it. */
+export function projectBuildsTopic(projectId: string): string {
+  return `project:${projectId}/builds`;
+}
+
+/** Who holds which of one project's assets. Its members may hold it. */
+export function projectLocksTopic(projectId: string): string {
+  return `project:${projectId}/locks`;
+}
+
+/** One project's applied edits, saved versions and restores. Its members may hold it. */
+export function projectDocTopic(projectId: string): string {
+  return `project:${projectId}/doc`;
+}
+
+/** One account's own to-dos — those it owns and those given to it. Only that account may hold it. */
+export function accountTodosTopic(accountId: string): string {
+  return `account:${accountId}/todos`;
+}
+
+/** One account's notifications. Only that account may hold it. */
+export function accountNotificationsTopic(accountId: string): string {
+  return `account:${accountId}/notifications`;
+}
+
 /**
  * What is being said inside one live session.
  *
@@ -429,6 +565,19 @@ export const ANCHOR_FIELD_LIMIT = 512;
 
 /** The most a comment may be. Long enough for a paragraph of notes, short of a document. */
 export const COMMENT_BODY_LIMIT = 8 * 1024;
+/** The longest message a project's channel keeps, in UTF-8 bytes. */
+export const CHAT_BODY_LIMIT = 4 * 1024;
+/** How many labels one to-do may carry, and how long each may be. */
+export const TODO_LABELS_LIMIT = 8;
+export const TODO_LABEL_LENGTH = 32;
+/** How long an asset may be held at most, and for how long when nobody says. */
+export const ASSET_LOCK_MAX_MINUTES = 7 * 24 * 60;
+export const ASSET_LOCK_DEFAULT_MINUTES = 4 * 60;
+/** The largest build one upload may be, and the largest picture beside a comment. */
+export const BUILD_MAX_BYTES = 1024 * 1024 * 1024;
+export const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+/** How long a share link may last at most, in days. */
+export const SHARE_LINK_MAX_DAYS = 365;
 
 /**
  * The most a suggestion may carry.
@@ -461,6 +610,13 @@ export const LIVE_PAYLOAD_LIMIT = 16 * 1024;
 
 /** The most any single field describing a client instance may be. */
 export const INSTANCE_FIELD_LIMIT = 256;
+
+/**
+ * The most one edit may carry, as JSON: its document address and its
+ * operation. Large enough for a paste of a few hundred rows; a whole document
+ * is never an edit.
+ */
+export const DOC_INTENT_LIMIT = 96 * 1024;
 
 /**
  * The most the rows on one page may weigh, in UTF-8 bytes.
@@ -564,6 +720,15 @@ export interface TeamClientInstance {
   readonly project?: string;
   /** What that project stands at on that machine, as the client reported it. */
   readonly revision?: string;
+  /**
+   * The document this instance is editing, in anchor terms (`story:<id>`,
+   * `ui:<id>`), and since when. A hint for somebody about to open the same one —
+   * "Ada has been in this chapter for ten minutes" — and never a lock: nothing
+   * is refused because of it. Absent while nothing is being edited; only with a
+   * project.
+   */
+  readonly editing?: string;
+  readonly editingSince?: number;
   /** When this instance announced itself on its current link session. */
   readonly since: number;
 }
@@ -862,14 +1027,780 @@ export type TeamThreadEvent =
   | { readonly kind: "thread-created"; readonly thread: TeamThread }
   | { readonly kind: "thread-updated"; readonly thread: TeamThread }
   | { readonly kind: "comment-created"; readonly thread: string; readonly comment: TeamComment }
-  | { readonly kind: "comment-updated"; readonly thread: string; readonly comment: TeamComment };
+  | { readonly kind: "comment-updated"; readonly thread: string; readonly comment: TeamComment }
+  /** Somebody reacted to a comment, or took a reaction back; `target` is the comment id. */
+  | { readonly kind: "reaction"; readonly reaction: TeamReaction };
 
-/** What happened on the projects topic. */
+/**
+ * What happened on the projects topic.
+ *
+ * **Each event goes only to the accounts it is about.** The projects topic is
+ * one name every session may hold, but the list behind it differs by account —
+ * a project somebody has no role in is not on their list — so a project being
+ * made or forgotten is told to its members and to the operators, and to nobody
+ * else. A sequence still moves for everybody, so a session that was not told
+ * sees a gap it may read the list again over, which costs it one call and tells
+ * it nothing it could not already see.
+ */
 export type TeamProjectsEvent =
   | { readonly kind: "project-created"; readonly project: string }
   | { readonly kind: "project-forgotten"; readonly project: string }
   /** This server read a repository again, so what it says about it may have changed. */
-  | { readonly kind: "project-read"; readonly project: string };
+  | { readonly kind: "project-read"; readonly project: string }
+  /**
+   * The receiving account was given a role in a project, had it changed, or was
+   * taken out. Told to that account alone: read the list again, and the
+   * project is on it with its new role, or is not on it any more.
+   */
+  | { readonly kind: "project-access-changed"; readonly project: string }
+  /**
+   * An access request was made, answered or withdrawn. Told to whoever asked
+   * and to whoever decides it (the project's owners and the operators, or the
+   * operators alone for leave to make projects): read the requests again.
+   */
+  | { readonly kind: "access-request"; readonly request: TeamAccessRequest };
+
+/* ----------------------------------------------------------- own devices */
+
+/**
+ * One Studio installation an account signed in on through the browser (an OAuth
+ * grant). Revoking it refuses every token it holds, at once, and touches no
+ * other device.
+ */
+export interface TeamAccountDevice {
+  readonly id: string;
+  /** What the installation called itself when it asked, e.g. "the studio iMac". */
+  readonly name: string;
+  /** Which application, e.g. "NarraLeaf Studio". */
+  readonly client: string;
+  readonly signedInAt: number;
+  readonly lastUsedAt: number;
+}
+
+/* ----------------------------------------------------------- activity */
+
+/** What kind of thing happened. */
+export type TeamActivityKind =
+  | "commit"
+  | "thread"
+  | "comment"
+  | "resolve"
+  | "todo-created"
+  | "todo-done"
+  | "review"
+  | "milestone"
+  /**
+   * Edits to a team project's documents through this server, folded into one row per stretch of
+   * work: an account's edits to one project that follow each other within half an hour. `count`
+   * says how many.
+   */
+  | "edit"
+  /** A history version saved by hand, or an older one restored. Automatic snapshots are not news. */
+  | "version"
+  /** A scene or asset approved; `ref` is its target. */
+  | "approved"
+  /** A scene or asset sent back with a reason (the summary); `ref` is its target. */
+  | "sent-back"
+  /** A playable build uploaded; `ref` is `build:{id}`, the summary its name. */
+  | "build";
+
+/**
+ * One thing that happened, for a timeline.
+ *
+ * `account` is who did it when Team knows; a commit's author is the string the
+ * pushing client wrote, matched to an account by username, address or name
+ * where one matches, and otherwise shown as `actor` alone. That match is a
+ * convenience, not proof: loreserver does not check what a client writes there.
+ */
+export interface TeamActivity {
+  readonly id: number;
+  readonly kind: TeamActivityKind;
+  readonly project?: string;
+  /** Which thing: a revision id, a thread id, a to-do id. Never its text. */
+  readonly ref?: string;
+  /** A short line: a commit's message, a thread's opening words, a to-do's title. */
+  readonly summary?: string;
+  readonly account?: string;
+  /** What to call whoever did it. */
+  readonly actor: string;
+  readonly at: number;
+  /** How many edits an `edit` row stands for. */
+  readonly count?: number;
+}
+
+/** One day of a contribution graph, in the caller's time zone. */
+export interface TeamActivityDay {
+  /** `YYYY-MM-DD`. */
+  readonly day: string;
+  readonly count: number;
+}
+
+/* -------------------------------------------------------------- to-dos */
+
+export type TeamTodoStatus = "open" | "doing" | "done";
+/** `private`: its owner alone. `project`: every member of its project. */
+export type TeamTodoVisibility = "private" | "project";
+/**
+ * What a to-do asks for. `task` is anything; `asset` asks for a file (a sprite, a sound) for the
+ * row it is anchored to, and names the asset that answered it once done; `translation` and `voice`
+ * give one language of a story or scene to somebody, and name the `locale`.
+ */
+export type TeamTodoKind = "task" | "asset" | "translation" | "voice";
+/** How much a to-do matters: 0 none, 1 low, 2 medium, 3 high. */
+export type TeamTodoPriority = 0 | 1 | 2 | 3;
+
+export interface TeamTodo {
+  readonly id: string;
+  /** Who made it, by username. */
+  readonly owner: string;
+  readonly assignee?: string;
+  readonly project?: string;
+  /** Where in the project it points, in the same terms a thread's anchor uses. Never parsed. */
+  readonly anchor?: { readonly document: string; readonly element: string; readonly revision?: string };
+  readonly title: string;
+  readonly body?: string;
+  readonly status: TeamTodoStatus;
+  readonly visibility: TeamTodoVisibility;
+  /** What it asks for; `task` where a client did not say. */
+  readonly kind: TeamTodoKind;
+  /** The language a `translation` or `voice` to-do is about, as a locale tag. */
+  readonly locale?: string;
+  /** The asset that answered an `asset` to-do, by id. Never read by the server. */
+  readonly asset?: string;
+  /** Short words to sort it by — "bug", "art", "chapter 2". At most {@link TODO_LABELS_LIMIT}. */
+  readonly labels?: readonly string[];
+  /** Left out where it is 0, none. */
+  readonly priority?: TeamTodoPriority;
+  readonly dueAt?: number;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly doneAt?: number;
+  /** The revision that finished it, where it was ticked off in a commit. Never parsed. */
+  readonly doneRevision?: string;
+  /** The milestone of the same project it counts toward, by id: what a burndown is drawn from. */
+  readonly milestone?: string;
+}
+
+/** What happened on a to-do topic. */
+export type TeamTodosEvent =
+  | { readonly kind: "todo-set"; readonly todo: TeamTodo }
+  | { readonly kind: "todo-removed"; readonly todo: string };
+
+/* -------------------------------------------------------- notifications */
+
+export type TeamNotificationKind =
+  | "mention"
+  | "reply"
+  | "assigned"
+  | "review-requested"
+  | "review-answered"
+  /** Somebody asked for access this account decides on; `ref` is `access:{id}`. */
+  | "access-requested"
+  /** An access request this account made was answered; `ref` is `access:{id}`. */
+  | "access-decided"
+  /** Something this account follows changed: a version saved or a commit landed; `ref` is the revision. */
+  | "watch";
+
+/**
+ * What a person may switch notifications on and off by. Each {@link TeamNotificationKind} is one
+ * of these: `review-requested` and `review-answered` are both `review`, both access kinds `access`.
+ */
+export const TEAM_NOTIFICATION_CATEGORIES = ["mention", "reply", "assign", "review", "watch", "access"] as const;
+
+export type TeamNotificationCategory = (typeof TEAM_NOTIFICATION_CATEGORIES)[number];
+
+/**
+ * Where a notification may go: the list in the console and Studio, a push to a browser, and the
+ * daily or weekly digest (by email, or to the account's own Feishu or Slack address).
+ */
+export const TEAM_NOTIFICATION_CHANNELS = ["inapp", "push", "email"] as const;
+
+export type TeamNotificationChannel = (typeof TEAM_NOTIFICATION_CHANNELS)[number];
+
+export const TEAM_DIGEST_FREQUENCIES = ["off", "daily", "weekly"] as const;
+
+export type TeamDigestFrequency = (typeof TEAM_DIGEST_FREQUENCIES)[number];
+
+/** One account's notification settings. Every switch not stored is on. */
+export interface TeamNotificationPrefs {
+  readonly switches: readonly { readonly category: TeamNotificationCategory; readonly channel: TeamNotificationChannel; readonly enabled: boolean }[];
+  readonly digest: TeamDigestFrequency;
+  /** A Feishu or Slack incoming-webhook address the digest is also posted to. */
+  readonly hook?: string;
+  /** Where the digest is mailed, absent when the account has no address. */
+  readonly email?: string;
+  /** Whether this server can send mail at all: an operator configured SMTP. */
+  readonly mail: boolean;
+  /** How many browsers this account has asked to be pushed to. */
+  readonly pushSubscriptions: number;
+}
+
+/** Something one account follows: a whole project, or one scene in it. */
+export interface TeamWatch {
+  readonly project: string;
+  /** `scene:{sceneId}` for one scene; absent for the whole project. */
+  readonly scope?: string;
+  readonly createdAt: number;
+}
+
+/** The reactions a comment or a chat message may carry, and nothing else. */
+export const TEAM_REACTIONS = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"] as const;
+
+export type TeamReactionEmoji = (typeof TEAM_REACTIONS)[number];
+
+/** Everybody who put one emoji on one comment or message, by username, earliest first. */
+export interface TeamReaction {
+  readonly target: string;
+  readonly emoji: TeamReactionEmoji;
+  readonly by: readonly string[];
+}
+
+/* -------------------------------------------------------------- reviews */
+
+/**
+ * `open` waits on the reviewer; `approved` and `changes` are their verdict; `withdrawn` is the
+ * requester taking it back. A verdict can be changed while the request stands.
+ */
+export type TeamReviewStatus = "open" | "approved" | "changes" | "withdrawn";
+
+/** Somebody asked to look at a range of a project's revisions. */
+export interface TeamReview {
+  readonly id: string;
+  readonly project: string;
+  /** Who asked, by username. */
+  readonly requester: string;
+  /** Who is asked, by username. */
+  readonly reviewer: string;
+  /** The revision before the range, absent for "everything up to". Never read by the server. */
+  readonly fromRevision?: string;
+  /** The last revision of the range. */
+  readonly toRevision: string;
+  readonly title: string;
+  readonly note?: string;
+  readonly status: TeamReviewStatus;
+  /** What the reviewer said with the verdict. */
+  readonly verdictNote?: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+export type TeamReviewsEvent = { readonly kind: "review-set"; readonly review: TeamReview };
+
+/* ----------------------------------------------------------------- chat */
+
+/** One message in a project's channel. */
+export interface TeamChatMessage {
+  readonly id: number;
+  readonly project: string;
+  /** Who wrote it, by username; absent once that account is gone. */
+  readonly author?: string;
+  readonly body: string;
+  readonly at: number;
+  /** Set when its author took it back; the body is then empty. */
+  readonly deletedAt?: number;
+}
+
+export type TeamChatEvent =
+  | { readonly kind: "chat-message"; readonly message: TeamChatMessage }
+  | { readonly kind: "chat-deleted"; readonly id: number; readonly project: string }
+  /** Somebody reacted to a message, or took a reaction back; `target` is the message id. */
+  | { readonly kind: "reaction"; readonly project: string; readonly reaction: TeamReaction };
+
+/* ----------------------------------------------------------- milestones */
+
+/**
+ * A name on one revision of a project. Unique per project. A milestone that is only planned —
+ * "Demo 1, due in March" — has no revision yet, and `revision` is the empty string.
+ */
+export interface TeamMilestone {
+  readonly id: string;
+  readonly project: string;
+  readonly name: string;
+  /** The revision it names, or `""` while it is only planned. */
+  readonly revision: string;
+  readonly note?: string;
+  readonly createdBy?: string;
+  readonly createdAt: number;
+  /** When it is meant to be reached. */
+  readonly dueAt?: number;
+  /**
+   * It is not reached until every scene is approved. The server keeps the flag; the console
+   * works the share out from the project's files and the approvals.
+   */
+  readonly gate?: boolean;
+}
+
+export type TeamMilestonesEvent =
+  | { readonly kind: "milestone-set"; readonly milestone: TeamMilestone }
+  | { readonly kind: "milestone-removed"; readonly milestone: string };
+
+/* ------------------------------------------------------------- glossary */
+
+/** One term of a project's glossary and how each language says it. Unique by term per project. */
+export interface TeamGlossaryEntry {
+  readonly id: string;
+  readonly project: string;
+  /** The term as the source language writes it. */
+  readonly term: string;
+  /** Locale tag → how that language says it. A missing locale has no agreed word yet. */
+  readonly translations: Readonly<Record<string, string>>;
+  readonly note?: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly updatedBy?: string;
+}
+
+/* ---------------------------------------------------------------- voice */
+
+/**
+ * Where one voiced line stands in one language. `recorded`: there is a take to use; `retake`: it
+ * has to be recorded again. A line with no record has not been recorded. Only Team's own record;
+ * the voice files in the project are Studio's.
+ */
+export const TEAM_VOICE_STATUSES = ["recorded", "retake"] as const;
+export type TeamVoiceStatus = (typeof TEAM_VOICE_STATUSES)[number];
+
+export interface TeamVoiceLine {
+  readonly project: string;
+  readonly locale: string;
+  /** The line, by the textId Studio gives it. Never parsed. */
+  readonly line: string;
+  readonly status: TeamVoiceStatus;
+  /** Which take is the one to use, counted from 1. */
+  readonly take?: number;
+  readonly note?: string;
+  readonly updatedAt: number;
+  readonly updatedBy?: string;
+}
+
+/* ------------------------------------------------------------ templates */
+
+/** What a project template puts into a project. Nothing in it touches the project's files. */
+export interface TeamTemplateBody {
+  /** Accounts to add, each with a permission template. Accounts that do not exist are skipped. */
+  readonly members?: readonly { readonly username: string; readonly template: TeamPermissionTemplateId }[];
+  /** Planned milestones, due some days after the template is applied. */
+  readonly milestones?: readonly { readonly name: string; readonly note?: string; readonly dueInDays?: number }[];
+  /** Project to-dos, optionally counting toward one of the milestones above, by name. */
+  readonly todos?: readonly {
+    readonly title: string;
+    readonly body?: string;
+    readonly kind?: TeamTodoKind;
+    readonly locale?: string;
+    readonly labels?: readonly string[];
+    readonly milestone?: string;
+    readonly dueInDays?: number;
+  }[];
+}
+
+export interface TeamProjectTemplate {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly body: TeamTemplateBody;
+  readonly createdBy?: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+/* ------------------------------------------------------------ approvals */
+
+/**
+ * `draft` is still being made; `pending` waits on a reviewer; `approved` and `changes` are the
+ * verdict. Only Team's own record: the project's files are never touched by it.
+ */
+export const TEAM_APPROVAL_STATUSES = ["draft", "pending", "approved", "changes"] as const;
+export type TeamApprovalStatus = (typeof TEAM_APPROVAL_STATUSES)[number];
+
+/** Where one scene or asset stands. `target` is `scene:{id}` or `asset:{id}`, never parsed. */
+export interface TeamApproval {
+  readonly project: string;
+  readonly target: string;
+  readonly status: TeamApprovalStatus;
+  /** Who moved it there, by username. */
+  readonly by?: string;
+  /** Why — required when it is sent back. */
+  readonly note?: string;
+  readonly at: number;
+}
+
+export type TeamApprovalsEvent = { readonly kind: "approval-set"; readonly approval: TeamApproval };
+
+/* ---------------------------------------------------------------- locks */
+
+/** Somebody holds one asset of a project until `expiresAt`. */
+export interface TeamAssetLock {
+  readonly project: string;
+  readonly asset: string;
+  /** Who holds it, by username. */
+  readonly holder: string;
+  readonly note?: string;
+  readonly at: number;
+  readonly expiresAt: number;
+}
+
+export type TeamLocksEvent =
+  | { readonly kind: "lock-set"; readonly lock: TeamAssetLock }
+  | { readonly kind: "lock-released"; readonly project: string; readonly asset: string };
+
+/* --------------------------------------------------------------- builds */
+
+/** One playable build kept beside a project. The bytes are at `/api/team/v1/projects/{project}/builds/{id}`. */
+export interface TeamBuild {
+  readonly id: string;
+  readonly project: string;
+  readonly name: string;
+  readonly note?: string;
+  /** The revision it was built from, where the uploader said. */
+  readonly revision?: string;
+  /** What it runs on, as the uploader put it: `windows`, `mac`, `web`... Never interpreted. */
+  readonly platform?: string;
+  /** The file's own name, for the download. */
+  readonly file: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly uploadedBy?: string;
+  readonly createdAt: number;
+  /** The one build of the project to play now. At most one is. */
+  readonly latest: boolean;
+}
+
+export type TeamBuildsEvent =
+  | { readonly kind: "build-set"; readonly build: TeamBuild }
+  | { readonly kind: "build-removed"; readonly build: string };
+
+/** A picture kept beside a comment. Its bytes are at `/api/team/v1/projects/{project}/attachments/{id}`. */
+export interface TeamAttachment {
+  readonly id: string;
+  readonly project: string;
+  readonly type: "png" | "jpg" | "webp";
+  readonly size: number;
+  readonly uploadedBy?: string;
+  readonly createdAt: number;
+}
+
+/* ---------------------------------------------------------- share links */
+
+/**
+ * A read-only link for somebody without an account.
+ *
+ * `paths` is the files it shows, worked out by the console when the link was made (a story's
+ * document and what it needs), or absent for the whole project; the server holds the visitor to
+ * that list without reading any of the files. The token itself is shown once, at creation.
+ */
+export interface TeamShareLink {
+  readonly id: string;
+  readonly project: string;
+  readonly label: string;
+  /** What the console calls it: `project`, or `story:{id}`. Never read by the server. */
+  readonly scope: string;
+  readonly revision: string;
+  readonly paths?: readonly string[];
+  readonly allowComments: boolean;
+  readonly expiresAt?: number;
+  readonly revokedAt?: number;
+  readonly createdBy?: string;
+  readonly createdAt: number;
+  readonly lastUsedAt?: number;
+  readonly uses: number;
+}
+
+/** What a visitor's page is told about the link it was opened from. */
+export interface TeamShareView {
+  readonly project: string;
+  readonly projectName: string;
+  readonly label: string;
+  readonly scope: string;
+  readonly revision: string;
+  readonly allowComments: boolean;
+  readonly expiresAt?: number;
+}
+
+/* -------------------------------------------------------- saved filters */
+
+/** A search one account named and keeps. `query` is the page's own JSON, never read by the server. */
+export interface TeamSavedFilter {
+  readonly id: string;
+  /** Which list it filters: `todos`, `threads`, ... */
+  readonly scope: string;
+  readonly name: string;
+  readonly query: string;
+  readonly createdAt: number;
+}
+
+/* ------------------------------------------------------------- webhooks */
+
+/** What a webhook can be told about. */
+export const TEAM_WEBHOOK_EVENTS = [
+  "commit",
+  "thread",
+  "todo-assigned",
+  "todo-done",
+  "review-requested",
+  "review-answered",
+  "milestone",
+  /** A history version saved by hand, or restored. Automatic snapshots post nothing. */
+  "version",
+  /** A playable build uploaded. */
+  "build",
+] as const;
+export type TeamWebhookEvent = (typeof TEAM_WEBHOOK_EVENTS)[number];
+
+/**
+ * What this server knows about a revision it wrote as a team project's history version, carried on
+ * `projects.history` beside the revision. Every such revision is committed under one account (the
+ * one the server reads the repository as), so the commit's own author says nothing about who did
+ * the work: this does.
+ */
+export interface TeamDocVersion {
+  /** The name it was saved under, for a version saved by hand. */
+  readonly label?: string;
+  /** Saved by the server on its own, when the project went quiet or had been edited for a while. */
+  readonly auto: boolean;
+  /** Who saved it or restored it, for one saved by hand. */
+  readonly savedBy?: string;
+  /** Everybody whose edits it holds that the version before it did not, by username. */
+  readonly participants: readonly string[];
+  /** The authority's seq it stands at. */
+  readonly seq: number;
+}
+
+/** Which project role at least may save a version, or restore one. */
+export type TeamVersionRole = "editor" | "owner";
+
+/**
+ * How the body is shaped. `json` is this server's own event object, signed; the others are the
+ * message shape of a chat service's incoming webhook, carrying one line of text.
+ */
+export const TEAM_WEBHOOK_FORMATS = ["json", "slack", "discord", "feishu"] as const;
+export type TeamWebhookFormat = (typeof TEAM_WEBHOOK_FORMATS)[number];
+
+export interface TeamWebhook {
+  readonly id: string;
+  /** Only this project's events, or every project's where absent. */
+  readonly project?: string;
+  readonly url: string;
+  readonly format: TeamWebhookFormat;
+  readonly events: readonly TeamWebhookEvent[];
+  readonly createdBy?: string;
+  readonly createdAt: number;
+  /** How the last delivery went: an HTTP status, or 0 for no answer. */
+  readonly lastStatus?: number;
+  readonly lastAt?: number;
+}
+
+/** One event sent to one webhook, and how it went. Failed ones are tried again on a schedule. */
+export interface TeamWebhookDelivery {
+  readonly id: number;
+  readonly webhook: string;
+  readonly event: TeamWebhookEvent;
+  readonly project?: string;
+  readonly summary: string;
+  /** Tries so far. */
+  readonly attempts: number;
+  /** The last answer: an HTTP status, or 0 for none. */
+  readonly status: number;
+  /** Why it failed, in a few words, where it did. */
+  readonly error?: string;
+  readonly at: number;
+  readonly lastAt?: number;
+  /** When it is tried again, where it will be. */
+  readonly nextAt?: number;
+}
+
+export interface TeamNotification {
+  readonly id: number;
+  readonly kind: TeamNotificationKind;
+  readonly project?: string;
+  /** A thread id for a mention or a reply; a to-do id for an assignment. */
+  readonly ref?: string;
+  /** Who caused it, by username. */
+  readonly actor?: string;
+  readonly summary?: string;
+  readonly at: number;
+  readonly readAt?: number;
+}
+
+export type TeamNotificationsEvent =
+  | { readonly kind: "notification"; readonly notification: TeamNotification }
+  | { readonly kind: "notifications-read"; readonly ids: readonly number[] | "all" };
+
+/* -------------------------------------------------------------- profiles */
+
+/** An account as a person sees it: a name, a face and a line. */
+export interface TeamProfile {
+  readonly username: string;
+  readonly displayName: string;
+  readonly bio?: string;
+  /** Where the avatar image is, on this server. Absent for an account with none. */
+  readonly avatarUrl?: string;
+  /** An IANA time zone the person set, such as `Asia/Shanghai`. */
+  readonly timezone?: string;
+  /** Whether a console or a Studio of theirs is connected now. */
+  readonly online?: boolean;
+}
+
+/* --------------------------------------------------------- project members */
+
+/**
+ * The roles an account may have in a project, most able first.
+ *
+ * Owners and editors open the repository; reviewers and viewers read the
+ * project through Team and never through loreserver, which does not tell a read
+ * from a write. An owner may also change who belongs, and may take the project
+ * off the list. An operator of the server is the owner of every project.
+ */
+export const TEAM_PROJECT_ROLES = ["owner", "editor", "reviewer", "viewer"] as const;
+
+export type TeamProjectRole = (typeof TEAM_PROJECT_ROLES)[number];
+
+/**
+ * The parts of a project an owner may let an editor change separately: the
+ * story (stories, variables, story animations), characters, assets (and audio
+ * tracks), the UI, localization (and voice, and the dictionary), and the game's
+ * configuration (the project file, brand, variants, DLC, save schema, icons and
+ * any file not named elsewhere). Studio's kernel decides which a file is in.
+ */
+export const TEAM_PROJECT_AREAS = ["story", "characters", "assets", "ui", "localization", "config"] as const;
+
+export type TeamProjectArea = (typeof TEAM_PROJECT_AREAS)[number];
+
+/** One account's place in one project. */
+export interface TeamProjectMember {
+  readonly username: string;
+  readonly displayName: string;
+  /** Where the account's avatar is, absent for one with none. */
+  readonly avatarUrl?: string;
+  readonly role: TeamProjectRole;
+  /**
+   * For an editor kept to some areas, which ones; absent for an editor who may
+   * change all of them, and for every other role. Such an editor reads the
+   * project through Team rather than opening its repository.
+   */
+  readonly areas?: readonly TeamProjectArea[];
+  /** Who gave them the role, by username; absent when nobody did, as on an upgrade. */
+  readonly addedBy?: string;
+  readonly addedAt: number;
+}
+
+/** What happened on a project's members topic. */
+export type TeamProjectMembersEvent =
+  | { readonly kind: "member-set"; readonly member: TeamProjectMember }
+  | { readonly kind: "member-removed"; readonly username: string };
+
+/* --------------------------------------------------- permission templates */
+
+/**
+ * A named grant: a role, and for an editor the areas it may change. What an
+ * owner picks instead of ticking boxes one by one, and what somebody asking for
+ * access names. A template is only a shorthand: what is stored is the role and
+ * the areas it stands for, and changing the list later changes nobody's grant.
+ */
+export interface TeamPermissionTemplate {
+  readonly id: string;
+  readonly role: TeamProjectRole;
+  /** For an editor kept to some areas, which ones; absent for all of them. */
+  readonly areas?: readonly TeamProjectArea[];
+}
+
+/**
+ * The templates every Team and every Studio offers, in the order a picker shows
+ * them. Their names are the clients' to translate, by `id`.
+ */
+export const TEAM_PERMISSION_TEMPLATES = [
+  { id: "owner", role: "owner" },
+  { id: "editor", role: "editor" },
+  { id: "writer", role: "editor", areas: ["story", "characters"] },
+  { id: "artist", role: "editor", areas: ["characters", "assets", "ui"] },
+  { id: "translator", role: "editor", areas: ["localization"] },
+  { id: "engineer", role: "editor", areas: ["ui", "config"] },
+  { id: "reviewer", role: "reviewer" },
+  { id: "viewer", role: "viewer" },
+] as const satisfies readonly TeamPermissionTemplate[];
+
+export type TeamPermissionTemplateId = (typeof TEAM_PERMISSION_TEMPLATES)[number]["id"];
+
+/** The template of an id, or undefined for one this build does not know. */
+export function teamPermissionTemplate(id: string): TeamPermissionTemplate | undefined {
+  return (TEAM_PERMISSION_TEMPLATES as readonly TeamPermissionTemplate[]).find((template) => template.id === id);
+}
+
+/**
+ * The template a grant is exactly, or undefined when it is none of them. An
+ * editor's areas are compared as a set; a list naming every area is all of them.
+ */
+export function teamTemplateOf(
+  role: TeamProjectRole,
+  areas?: readonly TeamProjectArea[],
+): (TeamPermissionTemplate & { readonly id: TeamPermissionTemplateId }) | undefined {
+  const all = (list?: readonly TeamProjectArea[]) => list === undefined || TEAM_PROJECT_AREAS.every((area) => list.includes(area));
+  return (TEAM_PERMISSION_TEMPLATES as readonly (TeamPermissionTemplate & { readonly id: TeamPermissionTemplateId })[]).find((template) => {
+    if (template.role !== role) return false;
+    if (role !== "editor") return true;
+    if (all(template.areas) || all(areas)) return all(template.areas) && all(areas);
+    const mine = new Set(areas);
+    return template.areas?.length === mine.size && template.areas.every((area) => mine.has(area));
+  });
+}
+
+/* -------------------------------------------------------- access requests */
+
+/**
+ * What somebody may ask for: a place in a project, or more of one (`project`),
+ * which that project's owners decide; or leave to make projects (`creator`),
+ * which the operators decide, and which is only asked for where
+ * `project.create_by` is `creators`.
+ */
+export const TEAM_ACCESS_REQUEST_KINDS = ["project", "creator"] as const;
+export type TeamAccessRequestKind = (typeof TEAM_ACCESS_REQUEST_KINDS)[number];
+
+/**
+ * `pending` waits on whoever decides; `approved` and `denied` are their answer;
+ * `withdrawn` is the person who asked taking it back. Only a pending request
+ * changes, and an account has at most one pending request per project (and one
+ * to make projects): asking again replaces what it asked before.
+ */
+export const TEAM_ACCESS_REQUEST_STATUSES = ["pending", "approved", "denied", "withdrawn"] as const;
+export type TeamAccessRequestStatus = (typeof TEAM_ACCESS_REQUEST_STATUSES)[number];
+
+/** The longest message a request, or an answer to one, carries, in bytes. */
+export const ACCESS_REQUEST_MESSAGE_LIMIT = 1000;
+
+export interface TeamAccessRequest {
+  readonly id: number;
+  readonly kind: TeamAccessRequestKind;
+  /** The project asked about, for a `project` request. */
+  readonly project?: string;
+  /** Its name, so somebody who cannot see it yet still reads what they asked for. */
+  readonly projectName?: string;
+  /** Who asked, by username. */
+  readonly requester: string;
+  readonly requesterName?: string;
+  /** For a `project` request: the role asked for, and for an editor its areas (absent for all). */
+  readonly role?: TeamProjectRole;
+  readonly areas?: readonly TeamProjectArea[];
+  /** The template it was asked by, when it was. */
+  readonly template?: string;
+  /** The role the requester holds now, for a `project` request; absent for none. */
+  readonly currentRole?: TeamProjectRole;
+  readonly message?: string;
+  readonly status: TeamAccessRequestStatus;
+  readonly at: number;
+  /** Who answered, by username, and when, and what they said. */
+  readonly decidedBy?: string;
+  readonly decidedAt?: number;
+  readonly note?: string;
+  /** For an approved `project` request: what was granted, which an owner may have changed. */
+  readonly grantedRole?: TeamProjectRole;
+  readonly grantedAreas?: readonly TeamProjectArea[];
+}
+
+/** A project somebody has no role in, as much as they need to ask to join it. */
+export interface TeamDiscoverableProject {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+}
 
 /* ------------------------------------------------------- administration */
 
@@ -927,7 +1858,89 @@ export interface TeamAdminUser {
    * refusal was made before this server kept the moment.
    */
   readonly tokensInvalidatedAt?: number;
+  /** The account policy an operator gave it: a template by name, or settings of its own. Absent when none. */
+  readonly policy?: { readonly templateId?: string; readonly templateName?: string };
+  /**
+   * Until when its sign-ins are refused: after too many wrong passwords in a row, or because an
+   * operator locked it. Absent while it is not locked. A lock with no end reads as the largest
+   * safe integer.
+   */
+  readonly lockedUntil?: number;
 }
+
+/**
+ * One of an account's own settings, fixed by an operator.
+ *
+ * Present means fixed: the account reads it and cannot change it. `value` is what it is fixed
+ * to, written onto the account when the policy is applied; absent means fixed at whatever the
+ * account has now (a template, which many accounts share, has no one display name to give).
+ */
+export interface TeamPolicyLock<T> {
+  readonly value?: T;
+}
+
+/** Whether something may be done: at all, only reading, or not. */
+export type TeamPolicyAccess = "on" | "read" | "off";
+
+/**
+ * What an operator decided about one account's own settings. Every field is optional, and a
+ * field left out leaves that setting to the account.
+ */
+export interface TeamAccountPolicy {
+  readonly displayName?: TeamPolicyLock<string>;
+  readonly bio?: TeamPolicyLock<string>;
+  /** An IANA zone, or "" for none. */
+  readonly timezone?: TeamPolicyLock<string>;
+  /** The picture cannot be changed or taken away. */
+  readonly lockAvatar?: boolean;
+  readonly notificationSwitches?: TeamPolicyLock<TeamNotificationPrefs["switches"]>;
+  readonly digest?: TeamPolicyLock<TeamDigestFrequency>;
+  /** A personal Feishu or Slack address, or "" for none. */
+  readonly hook?: TeamPolicyLock<string>;
+  /** Two-step sign-in is asked of this account whatever the server-wide switch says. */
+  readonly requireTwoFactor?: boolean;
+  /** Personal API tokens: may be made, only read-only ones, or none. "off" and "read" revoke what no longer fits. */
+  readonly apiTokens?: TeamPolicyAccess;
+  /** The longest an API token may live, in days; a token that never expires is then refused. */
+  readonly apiTokenMaxDays?: number;
+  /** Keeping Studio's preferences on this server: back up and restore, restore only, or neither. */
+  readonly studioConfig?: TeamPolicyAccess;
+}
+
+/** A named policy many accounts may follow. Changing it changes it for all of them. */
+export interface TeamPolicyTemplate {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly policy: TeamAccountPolicy;
+  /** How many accounts follow it. */
+  readonly accounts: number;
+  readonly updatedAt: number;
+}
+
+/** The policy one account is under, as `account.policy` and `admin.users.policy` answer it. */
+export interface TeamAccountPolicyView {
+  /** What is in force: the template's or the account's own, with the server-wide two-step switch folded in. */
+  readonly policy: TeamAccountPolicy;
+  readonly template?: { readonly id: string; readonly name: string };
+  /** Whether the account has settings of its own rather than a template. */
+  readonly custom: boolean;
+  /** Whether two-step sign-in is asked of every account on this server. */
+  readonly serverRequiresTwoFactor: boolean;
+}
+
+/** What this server keeps of one account's Studio preferences. */
+export interface TeamStudioConfigStatus {
+  readonly access: TeamPolicyAccess;
+  /** Absent when nothing has been put there. */
+  readonly stored?: { readonly size: number; readonly updatedAt: number; readonly studioVersion?: string; readonly sha256: string };
+}
+
+/** The largest Studio preferences document this server keeps. */
+export const STUDIO_CONFIG_MAX_BYTES = 1024 * 1024;
+
+/** Where Studio puts and reads its preferences document. */
+export const STUDIO_CONFIG_PATH = "/api/team/v1/studio-config";
 
 /**
  * One line of what this server keeps in its settings.
@@ -1154,8 +2167,14 @@ export type TeamAdminUsersEvent =
   | { readonly kind: "user-disabled"; readonly user: TeamAdminUser }
   | { readonly kind: "user-enabled"; readonly user: TeamAdminUser }
   | { readonly kind: "user-granted-admin"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-creator-set"; readonly user: TeamAdminUser }
   | { readonly kind: "user-revoked-admin"; readonly user: TeamAdminUser }
-  | { readonly kind: "user-tokens-revoked"; readonly user: TeamAdminUser };
+  | { readonly kind: "user-tokens-revoked"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-locked"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-unlocked"; readonly user: TeamAdminUser }
+  | { readonly kind: "user-updated"; readonly user: TeamAdminUser }
+  /** The account is gone from the list; only its id and name are left, for the history that holds them. */
+  | { readonly kind: "user-deleted"; readonly id: string; readonly username: string };
 
 /** What happened on the `admin/settings` topic. */
 export type TeamAdminSettingsEvent =
@@ -1207,12 +2226,12 @@ export type TeamAdminRefusalsEvent =
  * never heard of it does what it does with any event kind it does not know, and
  * an older one is not left holding a frame it has no name for.
  *
- * Only the `admin/*` topics ever carry this, and only for one reason: the
- * account holding the subscription stopped being an operator. A topic is judged
- * when it is taken and a token stays perfectly valid across a demotion, so
- * without this a demoted account would go on being told about the accounts
- * until it happened to reconnect. The session itself stays open and keeps
- * everything else it subscribed to.
+ * Two kinds of topic carry this, each for one reason: an `admin/*` topic when
+ * the account holding it stopped being an operator, and a `project:*` topic
+ * when the account was taken out of that project. A topic is judged when it is
+ * taken and a token stays perfectly valid across either change, so without this
+ * the account would go on being told until it happened to reconnect. The
+ * session itself stays open and keeps everything else it subscribed to.
  */
 export interface TeamSubscriptionWithdrawn {
   readonly kind: "subscription-withdrawn";
@@ -1239,10 +2258,191 @@ export const TEAM_METHODS = {
   projectsHistory: "projects.history",
   /** Make a project, or register a repository the author already has. */
   projectsCreate: "projects.create",
-  /** Take a project off this server's list, leaving its repository untouched. */
+  /**
+   * Take a project off this server's list, leaving its repository untouched. Its
+   * owners, or the operators alone where `project.delete_by` says so.
+   */
   projectsForget: "projects.forget",
+  /** Who belongs to one project, and in which role. Any member may ask. */
+  projectsMembersList: "projects.members.list",
+  /**
+   * Give an account a role in a project, or change it, and for an editor the
+   * areas it may change (`areas`: a list, or null for all), or both at once by
+   * a permission `template`. Owners only.
+   */
+  projectsMembersSet: "projects.members.set",
+  /** Take an account out of a project. Owners only; never the last owner. */
+  projectsMembersRemove: "projects.members.remove",
+  /**
+   * The projects the caller has no role in, by name, so it can ask to join one.
+   */
+  projectsDiscover: "projects.discover",
+  /**
+   * The caller's own access requests, and those it decides on (a project's
+   * owners its requests; the operators every one). Pending ones unless `all`.
+   */
+  accessRequestsList: "access.requests.list",
+  /**
+   * Ask for a place in a project or more of one (`kind: "project"`, by
+   * `template` or `role` and `areas`), or for leave to make projects
+   * (`kind: "creator"`). Replaces the caller's own pending request for the same.
+   */
+  accessRequestsCreate: "access.requests.create",
+  /**
+   * Approve or deny a pending request, with a `note`. A project's owner may
+   * grant something other than what was asked, by `template` or `role` and `areas`.
+   */
+  accessRequestsDecide: "access.requests.decide",
+  /** Take back one's own pending request. */
+  accessRequestsWithdraw: "access.requests.withdraw",
+  /** Change a project's name, description, or who may save and restore its versions. Owners only. */
+  projectsUpdate: "projects.update",
+  /** The webhooks that post one project's events. Its owners. */
+  projectsWebhooksList: "projects.webhooks.list",
+  /** Add one for the project; answers its signing secret, once. Its owners. */
+  projectsWebhooksCreate: "projects.webhooks.create",
+  /** Remove one of the project's. Its owners. */
+  projectsWebhooksDelete: "projects.webhooks.delete",
+  /** Post a test event to one of the project's now. Its owners. */
+  projectsWebhooksTest: "projects.webhooks.test",
+  /** The latest deliveries of one of the project's webhooks. Its owners. */
+  projectsWebhooksDeliveries: "projects.webhooks.deliveries",
+  /** Send one of those deliveries again. Its owners. */
+  projectsWebhooksRedeliver: "projects.webhooks.redeliver",
   /** Every account, as a name beside a piece of work. */
   membersList: "members.list",
+  /** The devices the caller is signed in on through the browser sign-in. */
+  accountDevicesList: "account.devices.list",
+  /** Sign one of the caller's own devices out, refusing its tokens at once. */
+  accountDevicesRevoke: "account.devices.revoke",
+  /** An account's profile: name, face, line. */
+  accountProfileGet: "account.profile.get",
+  /** Change the caller's own display name or line. */
+  accountProfileUpdate: "account.profile.update",
+  /** A page of what happened, for one account or one project, newest first. */
+  activityList: "activity.list",
+  /** How much one account did each day, for a contribution graph. */
+  activityHeatmap: "activity.heatmap",
+  /** The caller's to-dos, or one project's. */
+  todosList: "todos.list",
+  /** Review requests in a project, or those the caller asked for or is asked. */
+  reviewsList: "reviews.list",
+  /** Ask somebody to review a range of revisions. */
+  reviewsCreate: "reviews.create",
+  /** Give a verdict (the reviewer), or withdraw (the requester). */
+  reviewsUpdate: "reviews.update",
+  /** A page of a project's channel, newest first. */
+  chatList: "chat.list",
+  /** Write in a project's channel. Members who may comment. */
+  chatSend: "chat.send",
+  /** Take back one's own message. */
+  chatDelete: "chat.delete",
+  /** A project's milestones, newest first. */
+  milestonesList: "milestones.list",
+  /** Put a name on a revision. Owners and editors. */
+  milestonesCreate: "milestones.create",
+  /** Take a name off. Owners, or whoever put it there. */
+  milestonesDelete: "milestones.delete",
+  /** Change a milestone's name, note, due date or gate. Owners, or whoever put it there. */
+  milestonesUpdate: "milestones.update",
+  /** Where every scene and asset of a project stands. */
+  approvalsList: "approvals.list",
+  /** Move one: editors to draft or pending, reviewers and owners to approved or changes. */
+  approvalsSet: "approvals.set",
+  /** Every change one scene or asset went through, oldest first. */
+  approvalsHistory: "approvals.history",
+  /** Who holds which of a project's assets, and until when. */
+  assetsLocks: "assets.locks",
+  /** Hold an asset for a while. Editors who may change assets. */
+  assetsLock: "assets.lock",
+  /** Let go of one: its holder, a project owner, or an operator. */
+  assetsUnlock: "assets.unlock",
+  /** The caller's saved filters, optionally for one list. */
+  filtersList: "filters.list",
+  /** Save a filter under a name, replacing one of that name. */
+  filtersSave: "filters.save",
+  /** Forget a saved filter. */
+  filtersDelete: "filters.delete",
+  /** A project's builds, newest first. Uploading one is an HTTP PUT, not a call. */
+  buildsList: "builds.list",
+  /** Change a build's name, note, revision, platform, or make it the one to play. Editors and owners. */
+  buildsUpdate: "builds.update",
+  /** Remove a build and its file. Owners, or whoever uploaded it. */
+  buildsDelete: "builds.delete",
+  /** Take a picture away from beside its comment. Whoever put it there, or an owner. */
+  attachmentsDelete: "attachments.delete",
+  /** A project's share links. Owners. */
+  sharesList: "shares.list",
+  /** Make a share link; the answer carries the token, which is never shown again. Owners. */
+  sharesCreate: "shares.create",
+  /** Stop a share link working. Owners. */
+  sharesRevoke: "shares.revoke",
+  /** The webhooks this server posts to. Operators. */
+  adminWebhooksList: "admin.webhooks.list",
+  /** Add one; answers its signing secret, once. Operators. */
+  adminWebhooksCreate: "admin.webhooks.create",
+  /** Remove one. Operators. */
+  adminWebhooksDelete: "admin.webhooks.delete",
+  /** Post a test event to one now and answer how it went. Operators. */
+  adminWebhooksTest: "admin.webhooks.test",
+  /** The latest deliveries of one webhook. Operators. */
+  adminWebhooksDeliveries: "admin.webhooks.deliveries",
+  /** Send a delivery again. Operators. */
+  adminWebhooksRedeliver: "admin.webhooks.redeliver",
+  /** Make a to-do. */
+  todosCreate: "todos.create",
+  /** Change a to-do: its status, its assignee, its words. */
+  todosUpdate: "todos.update",
+  /** Delete a to-do. Its owner only. */
+  todosDelete: "todos.delete",
+  /** The caller's notifications, newest first. */
+  notificationsList: "notifications.list",
+  /** Mark notifications read. */
+  notificationsRead: "notifications.read",
+  /** The caller's notification switches, digest frequency and personal address. */
+  notificationsPrefs: "notifications.prefs",
+  /** Change some of them. */
+  notificationsPrefsSet: "notifications.prefs.set",
+  /** Post a line to the caller's personal Feishu or Slack address now, and answer how it went. */
+  notificationsHookTest: "notifications.hook.test",
+  /** Send the caller their digest now, whatever the frequency says. */
+  notificationsDigestNow: "notifications.digest.now",
+  /** This server's VAPID public key, for `PushManager.subscribe`. */
+  pushKey: "push.key",
+  /** Ask for this browser to be pushed to. */
+  pushSubscribe: "push.subscribe",
+  /** Stop pushing to one browser. */
+  pushUnsubscribe: "push.unsubscribe",
+  /** Push a test notification to every browser of the caller's, and answer how many it reached. */
+  pushTest: "push.test",
+  /** What the caller follows, optionally in one project. */
+  watchesList: "watches.list",
+  /** Follow a project or a scene, or stop. */
+  watchesSet: "watches.set",
+  /** The reactions on some of a project's comments or chat messages. */
+  reactionsList: "reactions.list",
+  /** Put an emoji on a comment or a message, or take it back. */
+  reactionsToggle: "reactions.toggle",
+  /** Mail a test letter to an address with the stored SMTP settings, and answer what the server said. Operators. */
+  adminEmailTest: "admin.email.test",
+  /** A project's glossary. */
+  glossaryList: "glossary.list",
+  /** Add a term to a project's glossary, or change one. Whoever may edit the project's localization. */
+  glossarySet: "glossary.set",
+  /** Take a term out of a project's glossary. */
+  glossaryDelete: "glossary.delete",
+  /** Where a project's voiced lines stand, optionally in one language. */
+  voiceList: "voice.list",
+  /** Mark some lines of one language recorded, needing a retake, or not recorded. */
+  voiceSet: "voice.set",
+  /** The project templates on this server. */
+  templatesList: "templates.list",
+  /** Keep a project template, new or changed; or make one from a project as it stands. */
+  templatesSave: "templates.save",
+  /** Take a project template away. */
+  templatesDelete: "templates.delete",
+  /** Put a template's members, milestones and to-dos into a project. Its owners. */
+  templatesApply: "templates.apply",
   /** The threads anchored in one project, newest activity first. */
   threadsList: "threads.list",
   /** One thread and every comment in it. */
@@ -1263,6 +2463,11 @@ export const TEAM_METHODS = {
   clientsWithdraw: "clients.withdraw",
   /** Which installations are connected, optionally only those on one project. */
   clientsList: "clients.list",
+  /**
+   * Answer at once with this server's clock, echoing `sent` when given: what a client times to
+   * show how far away the server is. Touches nothing, so it is cheap enough to ask every few seconds.
+   */
+  serverPing: "server.ping",
   /** The live sessions open on one project. */
   liveList: "live.list",
   /** Open one, and be its first member. */
@@ -1291,12 +2496,39 @@ export const TEAM_METHODS = {
   liveAnswerJoin: "live.answerJoin",
   /** Say something to everybody in one. Kept by nobody. */
   liveSay: "live.say",
+  /**
+   * Where a project's documents stand: the last applied seq, the last saved
+   * version, the kernel this server applies with. Loads the authority.
+   */
+  docHead: "doc.head",
+  /** The applied edits after a seq, oldest first, a page at a time. */
+  docEffects: "doc.effects",
+  /**
+   * The files of the last saved version and the seq they stand at: what a Studio that does not
+   * know where it stands starts from, before following the log. A file comes a chunk at a time.
+   */
+  docBase: "doc.base",
+  /** The project documents of one saved version, a file and a chunk at a time: for previewing and comparing. */
+  docFiles: "doc.files",
+  /**
+   * One file as the project holds it right now, with the seq it stands at, a chunk at a time: how a
+   * Studio puts back a file it could not keep in step - one its author's offline copy collided on.
+   */
+  docFile: "doc.file",
+  /** Ask for one edit; answered with the effect every Studio applies, or a refusal. */
+  docIntent: "doc.intent",
+  /** Save what the project holds now as a history version. */
+  docSnapshot: "doc.snapshot",
+  /** Put one revision back as the current state, as a new version. */
+  docRestore: "doc.restore",
   /** What is attached to one project, and what this server last read its head to be. */
   overlayList: "overlay.list",
   /** Attach something, or replace something one attached before. */
   overlayPut: "overlay.put",
   /** Take one's own record off again. */
   overlayDrop: "overlay.drop",
+  /** The team projects this server holds in memory, and how each one's log and versions stand. Operators. */
+  adminDocumentsStatus: "admin.documents.status",
   /** A page of this server's accounts, newest first. */
   adminUsersList: "admin.users.list",
   /** Make an account, and answer with it. */
@@ -1311,6 +2543,8 @@ export const TEAM_METHODS = {
   adminUsersRevokeAdmin: "admin.users.revokeAdmin",
   /** Refuse every token an account already holds, without disabling it. */
   adminUsersRevokeTokens: "admin.users.revokeTokens",
+  /** Let an account make projects where `project.create_by` is `creators`, or stop it (`creator`). */
+  adminUsersSetCreator: "admin.users.setCreator",
   /** Mint a sign-in token for an account, without knowing its password. */
   adminTokensMint: "admin.tokens.mint",
   /** Everything this server keeps in its settings, and which of it may be changed. */
@@ -1327,6 +2561,68 @@ export const TEAM_METHODS = {
   adminAuditList: "admin.audit.list",
   /** What this server is and what it can reach, as of the moment it was gathered. */
   adminServerStatus: "admin.server.status",
+  /** Set or clear the team's accent colour. The logo is uploaded over HTTP. */
+  adminBrandSet: "admin.brand.set",
+  /** Whether the caller has two-step sign-in, is setting it up, and how many recovery codes are left. */
+  accountTotpStatus: "account.totp.status",
+  /** Start setting two-step sign-in up: a new secret and its otpauth address, not yet in force. */
+  accountTotpBegin: "account.totp.begin",
+  /** Put it in force with a code from the app; answers ten recovery codes, once. */
+  accountTotpConfirm: "account.totp.confirm",
+  /** Turn it off, with a current code or a recovery code. */
+  accountTotpDisable: "account.totp.disable",
+  /** Ten new recovery codes, with a current code; the old ones stop working. */
+  accountTotpRecovery: "account.totp.recovery",
+  /** The caller's API tokens, without the tokens themselves. */
+  accountTokensList: "account.tokens.list",
+  /** Make an API token; the token is in this answer and never again. */
+  accountTokensCreate: "account.tokens.create",
+  /** Revoke one of the caller's API tokens. */
+  accountTokensRevoke: "account.tokens.revoke",
+  /** Archive a project: read-only, and out of lists unless they ask for archived ones. Owners. */
+  projectsArchive: "projects.archive",
+  /** Bring an archived project back. Owners. */
+  projectsRestore: "projects.restore",
+  /** How much one project keeps on this server, and its quota. Members. */
+  projectsStorage: "projects.storage",
+  /** A one-time link, good for a day, that sets a new password for an account. Operators. */
+  adminUsersResetLink: "admin.users.resetLink",
+  /** Take two-step sign-in off an account that lost its phone and its codes. Operators. */
+  adminUsersResetTwoFactor: "admin.users.resetTwoFactor",
+  /** How much every project keeps, against the quota. Operators. */
+  adminStorageList: "admin.storage.list",
+  /** The backups this server has made, newest first. Operators. */
+  adminBackupsList: "admin.backups.list",
+  /** Make a backup now. Operators. */
+  adminBackupsCreate: "admin.backups.create",
+  /** The account policy the caller is under. */
+  accountPolicy: "account.policy",
+  /** What this server keeps of the caller's Studio preferences, and whether they may keep any. */
+  accountStudioConfig: "account.studioConfig",
+  /** Throw away the caller's Studio preferences kept here. */
+  accountStudioConfigDelete: "account.studioConfig.delete",
+  /** The policy templates, with how many accounts follow each. Operators. */
+  adminPoliciesList: "admin.policies.list",
+  /** Make a policy template, or change one (and every account that follows it). Operators. */
+  adminPoliciesSave: "admin.policies.save",
+  /** Remove a template; the accounts that followed it keep its settings as their own. Operators. */
+  adminPoliciesDelete: "admin.policies.delete",
+  /** The policy one account is under. Operators. */
+  adminUsersPolicy: "admin.users.policy",
+  /** Put accounts under a template, give them settings of their own, or clear their policy. Operators. */
+  adminUsersPolicySet: "admin.users.policySet",
+  /**
+   * Delete an account for good. Its name and row stay for the history that names it; its
+   * password, profile, sessions, tokens and memberships go, and it never signs in again. Not
+   * the caller's own account, nor the last operator. Operators.
+   */
+  adminUsersDelete: "admin.users.delete",
+  /** Refuse an account's sign-ins, for `minutes` or until unlocked. Operators. */
+  adminUsersLock: "admin.users.lock",
+  /** Lift a lock, whether an operator put it on or wrong passwords did. Operators. */
+  adminUsersUnlock: "admin.users.unlock",
+  /** Change another account's display name or email address. Operators. */
+  adminUsersUpdate: "admin.users.update",
 } as const;
 
 export type TeamMethodName = (typeof TEAM_METHODS)[keyof typeof TEAM_METHODS];
@@ -1355,12 +2651,24 @@ export const CONTRACT = {
     projectOverlay: "project:{project}/overlay",
     projectClients: "project:{project}/clients",
     projectLive: "project:{project}/live",
+    projectMembers: "project:{project}/members",
+    projectTodos: "project:{project}/todos",
+    projectReviews: "project:{project}/reviews",
+    projectMilestones: "project:{project}/milestones",
+    projectApprovals: "project:{project}/approvals",
+    projectLocks: "project:{project}/locks",
+    projectBuilds: "project:{project}/builds",
+    projectChat: "project:{project}/chat",
+    projectDoc: "project:{project}/doc",
+    accountTodos: "account:{account}/todos",
+    accountNotifications: "account:{account}/notifications",
     live: "live:{session}",
     adminUsers: TOPIC_ADMIN_USERS,
     adminSettings: TOPIC_ADMIN_SETTINGS,
     adminKeys: TOPIC_ADMIN_KEYS,
     adminRefusals: TOPIC_ADMIN_REFUSALS,
   },
+  permissionTemplates: TEAM_PERMISSION_TEMPLATES,
   frames: {
     fromServer: TEAM_SERVER_FRAME_KINDS,
     fromClient: TEAM_CLIENT_FRAME_KINDS,
@@ -1368,9 +2676,12 @@ export const CONTRACT = {
   limits: {
     anchorField: ANCHOR_FIELD_LIMIT,
     commentBody: COMMENT_BODY_LIMIT,
+    chatBody: CHAT_BODY_LIMIT,
+    accessRequestMessage: ACCESS_REQUEST_MESSAGE_LIMIT,
     suggestion: SUGGESTION_LIMIT,
     overlayBody: OVERLAY_BODY_LIMIT,
     livePayload: LIVE_PAYLOAD_LIMIT,
+    docIntent: DOC_INTENT_LIMIT,
     instanceField: INSTANCE_FIELD_LIMIT,
     pageBytes: PAGE_BYTES_LIMIT,
     answerBytes: ANSWER_BYTES_LIMIT,

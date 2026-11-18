@@ -89,6 +89,29 @@ import {
   projectIdFromResourceId,
   resourceIdOf,
 } from "./registry.js";
+import {
+  projectAudience,
+  projectRole,
+  repositoryRefusalOf,
+  repositoryProjectIds,
+  type ProjectRole,
+} from "./members.js";
+
+/**
+ * Why an account was refused a repository, for the audit line.
+ *
+ * A reviewer or viewer is a member who reads the project through Team rather
+ * than through the repository (src/projects/members.ts), and saying so is more
+ * use to an operator than "denied".
+ */
+function repositoryRefusal(role: ProjectRole | undefined, why: "no-role" | "role" | "areas"): string {
+  if (why === "no-role" || role === undefined) {
+    return "not a member of the project";
+  }
+  return why === "areas"
+    ? "editor kept to some areas of the project, who edits it through Team rather than the repository"
+    : `${role} of the project, which reads it through Team rather than the repository`;
+}
 
 /** Everything the service needs to answer a question. */
 export interface AuthorizationContext {
@@ -138,7 +161,7 @@ export interface AuthorizationContext {
    * paths have to leave this server in one state, because which of them a
    * project went by is not something anybody holding a list can see.
    */
-  readonly forgotten?: (projectId: string) => void;
+  readonly forgotten?: (projectId: string, audience: ReadonlySet<string>) => void;
 }
 
 /**
@@ -308,14 +331,28 @@ async function checkUserPermission(
   const allowed: ResourcePermission[] = [];
   const denied: ResourcePermission[] = [];
   for (const resourceId of request.resourceIds) {
-    // Two questions, and only two: is this a project this server holds, and is
-    // the caller an account of this server. `identify` already answered the
-    // second — a disabled account or a stale token never reaches here.
+    // Three questions: is this a project this server holds, is the caller an
+    // account of this server, and does its role open the repository.
+    // `identify` already answered the second — a disabled account or a stale
+    // token never reaches here.
     const projectId = projectIdFromResourceId(resourceId);
     const project = projectId === undefined ? undefined : findProject(context.database, projectId);
     if (project === undefined) {
       denied.push({ resourceId, permission: [] });
       const why = "not a project on this server";
+      decided(context, `auth: check ${caller.user.username} ${forLog(resourceId)}: denied, ${why}`, {
+        username: caller.user.username,
+        resource: resourceName(context, resourceId),
+        allowed: false,
+        detail: why,
+      });
+      continue;
+    }
+    const role = projectRole(context.database, project.id, caller.user);
+    const refusal = repositoryRefusalOf(context.database, project.id, caller.user);
+    if (refusal !== undefined) {
+      denied.push({ resourceId, permission: [] });
+      const why = repositoryRefusal(role, refusal);
       decided(context, `auth: check ${caller.user.username} ${forLog(resourceId)}: denied, ${why}`, {
         username: caller.user.username,
         resource: resourceName(context, resourceId),
@@ -332,7 +369,7 @@ async function checkUserPermission(
       username: caller.user.username,
       resource: resourceName(context, resourceId),
       allowed: true,
-      detail: "account of this server",
+      detail: `${role} of the project`,
     });
   }
 
@@ -363,8 +400,9 @@ async function lookupUserPermissions(
   // wildcard or a category name, would be a pattern language guessed at rather
   // than agreed, and guessing wrong here silently shortens somebody's listing.
   const only = projectIdFromResourceId(request.resourceFilter);
+  const opens = repositoryProjectIds(context.database, caller.user);
   const reachable = listProjects(context.database).filter(
-    (project) => only === undefined || project.id === only,
+    (project) => opens.has(project.id) && (only === undefined || project.id === only),
   );
 
   decided(
@@ -444,10 +482,15 @@ function exchangeExternalToken(context: AuthorizationContext, call: GrpcCall): B
   // that reaches `StorageAuthorizeTask` with no `resources` claim, having
   // decoded it perfectly well. A sign-in token with no resources therefore
   // signs in, resolves a repository, and then cannot read a byte of it.
-  const reachable = listProjects(context.database).map((project) => ({
-    resource_id: resourceIdOf(project.id),
-    permission: [...PROJECT_PERMISSIONS],
-  }));
+  // The projects whose repository this account may open, which is not every
+  // project it has a role in: see src/projects/members.ts.
+  const opens = repositoryProjectIds(context.database, caller.user);
+  const reachable = listProjects(context.database)
+    .filter((project) => opens.has(project.id))
+    .map((project) => ({
+      resource_id: resourceIdOf(project.id),
+      permission: [...PROJECT_PERMISSIONS],
+    }));
 
   // The sign-in lifetime, which is the long one. This token comes back here to
   // be exchanged and is asked about again on every repository access, so
@@ -455,6 +498,9 @@ function exchangeExternalToken(context: AuthorizationContext, call: GrpcCall): B
   const minted = mintToken(caller.user, context.keys.signingKey, mintingConfig(context), {
     purpose: "sign-in",
     resources: reachable,
+    // A token issued to one signed-in device stays that device's, so signing
+    // the device out refuses what it exchanged for as well.
+    ...(caller.claims.grant === undefined ? {} : { grant: caller.claims.grant }),
   });
   decided(
     context,
@@ -559,6 +605,25 @@ function exchangeMultiresourceToken(context: AuthorizationContext, call: GrpcCal
         "one of the resources asked for is not a project on this server",
       );
     }
+    const role = projectRole(context.database, project.id, caller.user);
+    const refusal = repositoryRefusalOf(context.database, project.id, caller.user);
+    if (refusal !== undefined) {
+      const why = repositoryRefusal(role, refusal);
+      decided(
+        context,
+        `auth: multiresource ${caller.user.username} ${forLog(resourceId)}: denied, ${why}`,
+        {
+          username: caller.user.username,
+          resource: resourceName(context, resourceId),
+          allowed: false,
+          detail: why,
+        },
+      );
+      throw new GrpcStatusError(
+        GRPC_PERMISSION_DENIED,
+        "one of the resources asked for is a project this account may not open",
+      );
+    }
     // The id is echoed exactly as it was asked about, for the reason
     // checkUserPermission echoes it: the comparison downstream is on the string.
     granted.push({ resource_id: resourceId, permission: [...PROJECT_PERMISSIONS] });
@@ -569,7 +634,7 @@ function exchangeMultiresourceToken(context: AuthorizationContext, call: GrpcCal
         username: caller.user.username,
         resource: resourceName(context, resourceId),
         allowed: true,
-        detail: "account of this server",
+        detail: `${role} of the project`,
       },
     );
   }
@@ -584,6 +649,7 @@ function exchangeMultiresourceToken(context: AuthorizationContext, call: GrpcCal
   const minted = mintToken(caller.user, context.keys.signingKey, mintingConfig(context), {
     purpose: "repository",
     resources: granted,
+    ...(caller.claims.grant === undefined ? {} : { grant: caller.claims.grant }),
   });
   return encodeExchangeUserTokenForMultiresourceTokenResponse({
     token: {
@@ -735,6 +801,8 @@ async function deleteResource(context: AuthorizationContext, call: GrpcCall): Pr
     return EMPTY_MESSAGE;
   }
 
+  // Who is told it went, read before it goes: the member rows go with it.
+  const audience = projectAudience(context.database, project.id);
   forgetProject(context.database, project.id);
   // Recorded after the project row is gone, and holding the name rather than a
   // reference to it: this is the one decision whose subject no longer exists by
@@ -750,7 +818,7 @@ async function deleteResource(context: AuthorizationContext, call: GrpcCall): Pr
     },
   );
   // Last, so that nothing hears about a project going before it has gone.
-  context.forgotten?.(project.id);
+  context.forgotten?.(project.id, audience);
   return EMPTY_MESSAGE;
 }
 

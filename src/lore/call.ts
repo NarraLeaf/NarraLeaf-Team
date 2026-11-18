@@ -51,6 +51,11 @@ export interface LoreGlobals {
    * every read of the same content fetch it again.
    */
   readonly cache?: boolean;
+  /**
+   * Who a write is recorded as - the account id a commit's `committed-by`
+   * names. Absent for every read, which records nothing.
+   */
+  readonly identity?: string;
 }
 
 export class LoreCallError extends Error {
@@ -77,7 +82,7 @@ function buildGlobals(globals: LoreGlobals): object {
   return {
     repositoryPath: loreString(globals.repositoryPath),
     correlationId: loreString(undefined),
-    identity: loreString(undefined),
+    identity: loreString(globals.identity),
     force: 0,
     offline: loreBool(globals.offline),
     local: 0,

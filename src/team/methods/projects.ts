@@ -13,30 +13,60 @@
  * same JSON is how a field comes to exist on one path and not another.
  */
 import {
-  countProjects,
   eachProject,
   findProject,
   forgetProject,
+  type ProjectRecord,
 } from "../../projects/registry.js";
-import { countUsers, eachUser } from "../../identity/users.js";
+import {
+  findProjectMember,
+  isProjectArea,
+  listProjectMembers,
+  PROJECT_AREAS,
+  ownerCount,
+  PROJECT_ROLES,
+  projectAudience,
+  projectRole,
+  removeProjectMember,
+  setProjectMember,
+  visibleProjectIds,
+  type ProjectArea,
+  type ProjectRole,
+} from "../../projects/members.js";
+import { countUsers, eachUser, findUser, type UserRecord } from "../../identity/users.js";
 import { NOT_READ_YET } from "../../teamview.js";
-import { memberBody, projectBody } from "../../projects/answers.js";
+import { mayRemoveProject, memberBody, projectBody, projectMemberBody } from "../../projects/answers.js";
 import { makeOrAdoptProject } from "../../projects/create.js";
+import { findTemplate } from "../../collab/templates.js";
+import { applyAndAnnounce } from "./planning.js";
+import { setVersionRoles, versionsOf } from "../../authority/versions.js";
+import { storedProjectCreators, storedProjectDeleters } from "../../identity/settings.js";
+import { isOperator, isProjectCreator } from "../../identity/users.js";
+import { recordDecision } from "../../identity/audit.js";
+import { buildLimitBytes, storageView } from "../../collab/builds.js";
 import {
   boundedCount,
+  flag,
   MethodError,
+  oneOf,
   optionalText,
   paramsObject,
+  projectVisible,
   requiredText,
   type MethodContext,
   type TeamMethod,
 } from "../methods.js";
 import {
   PAGE_BYTES_LIMIT,
+  projectMembersTopic,
   projectTopic,
   TEAM_METHODS,
+  TEAM_PERMISSION_TEMPLATES,
+  teamPermissionTemplate,
   TOPIC_PROJECTS,
+  type TeamProjectMembersEvent,
   type TeamProjectsEvent,
+  type TeamVersionRole,
 } from "../protocol.js";
 
 /** The most an id may be, which is more than any id this server issues. */
@@ -47,6 +77,12 @@ const NAME_LIMIT = 128;
 
 /** The most a project description may be: a line about the project, not a document. */
 const DESCRIPTION_LIMIT = 4 * 1024;
+const TITLE_LIMIT = 80;
+
+/** The most a username may be, which is more than the username pattern admits. */
+const USERNAME_LIMIT = 64;
+
+const TEMPLATE_LIMIT = 64;
 
 /** The most a client id may be. Long enough for a UUID and a word, short of a payload. */
 const CLIENT_ID_LIMIT = 128;
@@ -139,12 +175,170 @@ function within<Row, Body>(rows: Iterable<Row>, compose: (row: Row) => Body): Bo
  * Announced from the method rather than from the registry, because the registry
  * is also written by the CLI and by loreserver adopting a repository — and an
  * announcement is about a decision somebody made, not about a row.
+ *
+ * Told only to `audience` — the project's members and the operators — because
+ * the list it changes is only theirs. A project being forgotten takes its rows
+ * with it, so the caller reads the audience before the project goes.
  */
-function announceProjects(context: MethodContext, event: TeamProjectsEvent): void {
-  context.publish(TOPIC_PROJECTS, event);
+function announceProjects(
+  context: MethodContext,
+  event: TeamProjectsEvent,
+  audience: ReadonlySet<string>,
+): void {
+  context.publish(TOPIC_PROJECTS, event, audience);
   if (event.kind === "project-forgotten") {
-    context.publish(projectTopic(event.project), event);
+    context.publish(projectTopic(event.project), event, audience);
   }
+}
+
+/** A project the caller can see, by id or name, or a not-found refusal. */
+function visibleProject(context: MethodContext, reference: string): ProjectRecord {
+  const project = findProject(context.options.database, reference);
+  if (project === undefined || !projectVisible(context, project.id)) {
+    throw new MethodError("not-found", "there is no project of that id on this server");
+  }
+  return project;
+}
+
+/** Refuse anybody who is not an owner of the project (operators are owners of every one). */
+export function requireOwner(context: MethodContext, project: ProjectRecord, doing: string): void {
+  if (projectRole(context.options.database, project.id, context.user) !== "owner") {
+    throw new MethodError("refused", `only an owner of this project may ${doing}`);
+  }
+}
+
+/** Whether the caller may make a project, as `project.create_by` stands now. */
+export function mayCreateProjects(context: MethodContext): boolean {
+  switch (storedProjectCreators(context.options.database)) {
+    case "everyone":
+      return true;
+    case "creators":
+      return isProjectCreator(context.user.groups);
+    case "admins":
+      return isOperator(context.user.groups);
+  }
+}
+
+/** The `areas` of a member call: a list of area names, null for all, or absent to keep them. */
+export function areasParam(read: Record<string, unknown>): readonly ProjectArea[] | null | undefined {
+  const value = read["areas"];
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (!Array.isArray(value) || !value.every(isProjectArea)) {
+    throw new MethodError("bad-params", "areas is a list of story, characters, assets, ui, localization and config, or null");
+  }
+  return value;
+}
+
+/**
+ * What a call grants: a permission `template`, or a `role` and its `areas`
+ * (see {@link areasParam}). Never both, so a call cannot say two things.
+ */
+export function grantParam(
+  read: Record<string, unknown>,
+  fallbackRole?: ProjectRole,
+): { role: ProjectRole; areas: readonly ProjectArea[] | null | undefined; template?: string } {
+  const id = optionalText(read, "template", TEMPLATE_LIMIT);
+  if (id === undefined) {
+    return { role: oneOf(read, "role", PROJECT_ROLES, fallbackRole), areas: areasParam(read) };
+  }
+  if (read["role"] !== undefined || read["areas"] !== undefined) {
+    throw new MethodError("bad-params", "name a template, or a role and areas, and not both");
+  }
+  const template = teamPermissionTemplate(id);
+  if (template === undefined) {
+    const known = TEAM_PERMISSION_TEMPLATES.map((entry) => entry.id).join(", ");
+    throw new MethodError("bad-params", `${id} is not a permission template; it is one of ${known}`);
+  }
+  return {
+    role: template.role,
+    // An editor template naming no areas is every area, said as null so a
+    // narrower list held before is widened rather than kept.
+    areas: template.role === "editor" ? (template.areas ?? null) : undefined,
+    template: template.id,
+  };
+}
+
+/** Whether a member's stored areas already say what a call asks for. */
+function sameAreas(stored: readonly ProjectArea[] | undefined, asked: readonly ProjectArea[] | null): boolean {
+  const all = (list: readonly ProjectArea[] | null | undefined) => list === null || list === undefined || new Set(list).size === PROJECT_AREAS.length;
+  if (all(stored) || all(asked)) {
+    return all(stored) && all(asked);
+  }
+  const a = new Set(stored);
+  const b = new Set(asked);
+  return a.size === b.size && [...a].every((area) => b.has(area));
+}
+
+/** The account a member method names, by username. */
+export function namedAccount(context: MethodContext, read: Record<string, unknown>): UserRecord {
+  const username = requiredText(read, "username", USERNAME_LIMIT);
+  const user = findUser(context.options.database, username);
+  if (user === undefined) {
+    throw new MethodError("not-found", `there is no account called ${username} on this server`);
+  }
+  return user;
+}
+
+/**
+ * Refuse to leave a project with no owner of its own.
+ *
+ * The operators would still own it, so nobody would be locked out; but a
+ * project whose last owner demoted themselves by mistake would need an operator
+ * to put it right, and refusing here costs the owner one call to promote
+ * somebody first.
+ */
+export function keepAnOwner(context: MethodContext, project: ProjectRecord, user: UserRecord): void {
+  const current = findProjectMember(context.options.database, project.id, user.id);
+  if (current?.role === "owner" && ownerCount(context.options.database, project.id) <= 1) {
+    throw new MethodError(
+      "refused",
+      `${user.username} is this project's only owner; make somebody else an owner first`,
+    );
+  }
+}
+
+/** Say who belongs changed: on the project's members topic, and to the account it is about. */
+export function announceMembers(
+  context: MethodContext,
+  project: ProjectRecord,
+  event: TeamProjectMembersEvent,
+  user: UserRecord,
+): void {
+  context.publish(projectMembersTopic(project.id), event, projectAudience(context.options.database, project.id));
+  const changed: TeamProjectsEvent = { kind: "project-access-changed", project: project.id };
+  context.publish(TOPIC_PROJECTS, changed, new Set([user.id]));
+}
+
+/** Tell everybody who sees a project that its row changed, so lists redraw. */
+function announceProjectChange(context: MethodContext, projectId: string): void {
+  const event: TeamProjectsEvent = { kind: "project-access-changed", project: projectId };
+  context.publish(TOPIC_PROJECTS, event, projectAudience(context.options.database, projectId));
+}
+
+/**
+ * Archive a project, or bring it back.
+ *
+ * An archived project is read-only through this server: every method that
+ * changes it is refused (see gateCall in session.ts) until an owner restores it.
+ */
+function setArchived(context: MethodContext, params: unknown, archived: boolean): { project: unknown } {
+  const project = visibleProject(context, requiredText(paramsObject(params), "project", ID_LIMIT));
+  requireOwner(context, project, archived ? "archive it" : "restore it");
+  const database = context.options.database;
+  if ((project.archivedAt !== undefined) !== archived) {
+    database.prepare("UPDATE projects SET archived_at = ? WHERE id = ?").run(archived ? Date.now() : null, project.id);
+    recordDecision(database, {
+      username: context.user.username,
+      resource: `project:${project.name}`,
+      allowed: true,
+      detail: archived ? "archived" : "restored",
+    });
+    announceProjectChange(context, project.id);
+  }
+  const updated = findProject(database, project.id) ?? project;
+  return { project: projectBody(context.options, updated, context.user) };
 }
 
 export function projectMethods(): TeamMethod[] {
@@ -155,15 +349,25 @@ export function projectMethods(): TeamMethod[] {
       // with the socket and no projects list would be a server with a socket
       // and nothing to say.
       capability: "session",
-      handle: (_params: unknown, context: MethodContext) => ({
-        projects: within(eachProject(context.options.database), (project) =>
-          projectBody(context.options, project),
-        ),
-        // What this server holds, whatever the ceiling above left out. A list
-        // shorter than this was cut, and saying so is the whole of what a client
-        // is owed in place of a cursor it would have had to learn.
-        total: countProjects(context.options.database),
-      }),
+      handle: (params: unknown, context: MethodContext) => {
+        // The projects the caller has a role in, or every one for an operator.
+        const visible = visibleProjectIds(context.options.database, context.user);
+        // Archived projects are left out unless asked for: they are finished, not gone.
+        const includeArchived = params !== undefined && params !== null && flag(paramsObject(params), "includeArchived", false);
+        return {
+          projects: within(
+            onlyVisible(eachProject(context.options.database), visible, includeArchived),
+            (project) => projectBody(context.options, project, context.user),
+          ),
+          // What the caller may see, whatever the ceiling above left out. A list
+          // shorter than this was cut, and saying so is the whole of what a
+          // client is owed in place of a cursor it would have had to learn.
+          total: visible.size,
+          // Whether the caller may make one, as `project.create_by` stands now,
+          // so a client offers the button only to somebody it would work for.
+          mayCreate: mayCreateProjects(context),
+        };
+      },
     },
     {
       name: TEAM_METHODS.projectsGet,
@@ -172,17 +376,13 @@ export function projectMethods(): TeamMethod[] {
         // By id or by name: a client has both in front of it - the id every row
         // carries, and the name the remote address ends with - and neither is more
         // correct than the other.
-        const reference = requiredText(paramsObject(params), "project", ID_LIMIT);
-        const project = findProject(context.options.database, reference);
-        if (project === undefined) {
-          throw new MethodError("not-found", "there is no project of that id on this server");
-        }
+        const project = visibleProject(context, requiredText(paramsObject(params), "project", ID_LIMIT));
         // The project file, read out of the repository and therefore the part that
         // may be absent. A file this server could not make sense of degrades to
         // `readable: false` with a sentence, never a refusal - and so does one
         // whose first clone has not landed.
         const read = context.options.readings?.get(project.id) ?? NOT_READ_YET;
-        return { project: projectBody(context.options, project), file: read.file };
+        return { project: projectBody(context.options, project, context.user), file: read.file };
       },
     },
     {
@@ -190,11 +390,7 @@ export function projectMethods(): TeamMethod[] {
       capability: "session",
       handle: async (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
-        const reference = requiredText(read, "project", ID_LIMIT);
-        const project = findProject(context.options.database, reference);
-        if (project === undefined) {
-          throw new MethodError("not-found", "there is no project of that id on this server");
-        }
+        const project = visibleProject(context, requiredText(read, "project", ID_LIMIT));
         const readings = context.options.readings;
         if (readings?.revisions === undefined) {
           // A build that reads no repositories has no history to page. An empty
@@ -231,8 +427,14 @@ export function projectMethods(): TeamMethod[] {
           return { revisions: [] };
         }
         const last = page.revisions.at(-1);
+        // A version the project authority wrote is committed under the account the server reads
+        // as; what it knows about who saved it and whose edits it holds goes beside it.
+        const versions = versionsOf(context.options.database, project.id, page.revisions.map((revision) => revision.id));
         return {
-          revisions: page.revisions,
+          revisions: page.revisions.map((revision) => {
+            const version = versions.get(revision.id);
+            return version === undefined ? revision : { ...revision, version };
+          }),
           // Where to carry on from, present only when a page follows this one.
           // The last revision's id rather than the `<updatedAt>:<id>` a thread
           // list pages by: a revision has no updated-at that is always there to
@@ -247,10 +449,22 @@ export function projectMethods(): TeamMethod[] {
       capability: "session",
       handle: async (params: unknown, context: MethodContext) => {
         const read = paramsObject(params);
+        if (!mayCreateProjects(context)) {
+          throw new MethodError(
+            "refused",
+            storedProjectCreators(context.options.database) === "admins"
+              ? "on this server, projects are made by its operators"
+              : "on this server, projects are made by the accounts its operators allow to",
+          );
+        }
         const name = requiredText(read, "name", NAME_LIMIT);
         const description = optionalText(read, "description", DESCRIPTION_LIMIT);
         const repositoryId = optionalText(read, "repositoryId", ID_LIMIT);
         const clientId = optionalText(read, "clientId", CLIENT_ID_LIMIT);
+        const template = optionalText(read, "template", ID_LIMIT);
+        if (template !== undefined && findTemplate(context.options.database, template) === undefined) {
+          throw new MethodError("not-found", "there is no template of that id");
+        }
 
         // The one call that makes or adopts a project: it writes the row before it
         // asks loreserver and rolls the row back if loreserver refuses, adopts
@@ -288,10 +502,24 @@ export function projectMethods(): TeamMethod[] {
             // The create already happened; this is the project it made. Nothing
             // changed, so - like every idempotent write here - nothing is
             // announced.
-            return { project: projectBody(context.options, result.project) };
-          case "made":
-            announceProjects(context, { kind: "project-created", project: result.project.id });
-            return { project: projectBody(context.options, result.project) };
+            return { project: projectBody(context.options, result.project, context.user) };
+          case "made": {
+            announceProjects(
+              context,
+              { kind: "project-created", project: result.project.id },
+              projectAudience(context.options.database, result.project.id),
+            );
+            // The project is made either way; a template that could not be put in is said, not thrown.
+            let applied: ReturnType<typeof applyAndAnnounce> | { error: string } | undefined;
+            if (template !== undefined) {
+              try {
+                applied = applyAndAnnounce(context, template, result.project.id);
+              } catch (error) {
+                applied = { error: error instanceof Error ? error.message : String(error) };
+              }
+            }
+            return { project: projectBody(context.options, result.project, context.user), ...(applied === undefined ? {} : { template: applied }) };
+          }
         }
       },
     },
@@ -302,16 +530,27 @@ export function projectMethods(): TeamMethod[] {
         // By id or by name: a client holding a stray row has both, and neither is
         // more correct than the other.
         const reference = requiredText(paramsObject(params), "project", ID_LIMIT);
-        const project = findProject(context.options.database, reference);
+        const found = findProject(context.options.database, reference);
+        // A project the caller cannot see is, to them, one that is not there.
+        const project = found !== undefined && projectVisible(context, found.id) ? found : undefined;
         if (project === undefined) {
           // Idempotent, and this is the whole of it: a project that is already
           // gone is the state the caller asked for, so a second forget - or one
           // after somebody else's - is an empty object rather than a refusal.
-          // Any account may forget any project, which is why nothing here is a
-          // role check: the standing rule is that every account reaches every
-          // project on this server.
           return {};
         }
+        // Only an owner (or an operator, who owns every project) may take a
+        // project off the list: it takes every member's access with it.
+        if (!mayRemoveProject(context.options, context.user, projectRole(context.options.database, project.id, context.user))) {
+          throw new MethodError(
+            "refused",
+            storedProjectDeleters(context.options.database) === "admins"
+              ? "on this server, projects are removed by its operators"
+              : "only an owner of this project may remove it from the list",
+          );
+        }
+        // Read before the row goes, because the member rows go with it.
+        const audience = projectAudience(context.options.database, project.id);
         // The row goes; the repository does not. loreserver keeps the store and
         // every revision in it, exactly as they were - forgetting is this
         // server's list forgetting a project, not a way of destroying one.
@@ -323,9 +562,146 @@ export function projectMethods(): TeamMethod[] {
         // so a project forgotten another way left connected clients on a stale
         // list. Said on the list's topic and the project's own, the second
         // because anybody holding it is watching something that is not there.
-        announceProjects(context, { kind: "project-forgotten", project: project.id });
+        announceProjects(context, { kind: "project-forgotten", project: project.id }, audience);
         // An object rather than null: a method with nothing to report says {}.
         return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsMembersList,
+      capability: "session",
+      handle: (params: unknown, context: MethodContext) => {
+        const project = visibleProject(context, requiredText(paramsObject(params), "project", ID_LIMIT));
+        const bodies = listProjectMembers(context.options.database, project.id)
+          .map((member) => projectMemberBody(context.options, member))
+          .filter((body) => body !== undefined);
+        return {
+          members: within(bodies, (body) => body),
+          total: bodies.length,
+          // The caller's own role, which for an operator without a row is
+          // owner and is in no row above.
+          role: projectRole(context.options.database, project.id, context.user),
+        };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsMembersSet,
+      capability: "session",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const project = visibleProject(context, requiredText(read, "project", ID_LIMIT));
+        requireOwner(context, project, "change who belongs to it");
+        const user = namedAccount(context, read);
+        const { role, areas } = grantParam(read);
+        const database = context.options.database;
+        const before = findProjectMember(database, project.id, user.id);
+        if (before?.role === role && (areas === undefined || role !== "editor" || sameAreas(before.areas, areas))) {
+          // Already so. Nothing changed, so - like every idempotent write here -
+          // nothing is announced.
+          return { member: projectMemberBody(context.options, before) };
+        }
+        if (role !== "owner") {
+          keepAnOwner(context, project, user);
+        }
+        const member = setProjectMember(database, {
+          projectId: project.id,
+          userId: user.id,
+          role,
+          addedBy: context.user.id,
+          ...(areas === undefined ? {} : { areas }),
+        });
+        // An editor whose areas narrowed may no longer open the repository, and
+        // one whose widened now may: whatever its sessions hold is judged again.
+        context.recheck?.(user.id);
+        const body = projectMemberBody(context.options, member);
+        if (body !== undefined) {
+          announceMembers(context, project, { kind: "member-set", member: body }, user);
+        }
+        return { member: body };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsMembersRemove,
+      capability: "session",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const project = visibleProject(context, requiredText(read, "project", ID_LIMIT));
+        requireOwner(context, project, "change who belongs to it");
+        const user = namedAccount(context, read);
+        keepAnOwner(context, project, user);
+        if (!removeProjectMember(context.options.database, project.id, user.id)) {
+          // Not a member is the state the caller asked for.
+          return {};
+        }
+        announceMembers(context, project, { kind: "member-removed", username: user.username }, user);
+        // Whatever that account's sessions hold on this project is taken back
+        // now rather than at their next call. An operator loses nothing: they
+        // own every project with or without a row.
+        context.recheck?.(user.id);
+        return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsUpdate,
+      capability: "session",
+      handle: (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        const project = visibleProject(context, requiredText(read, "project", ID_LIMIT));
+        requireOwner(context, project, "change its settings");
+        // The name is not changed here: it is part of the address every clone of the project
+        // reaches its repository at, so renaming it would leave every Studio pointing nowhere.
+        if (read["name"] !== undefined) {
+          throw new MethodError("bad-params", "a project's name is part of its repository's address and is not changed");
+        }
+        const description = optionalText(read, "description", DESCRIPTION_LIMIT);
+        // The title is what people see; the name stays the address. Empty clears it.
+        const title = optionalText(read, "title", TITLE_LIMIT);
+        const role = (field: string): TeamVersionRole | undefined => {
+          const value = read[field];
+          if (value === undefined) return undefined;
+          if (value !== "editor" && value !== "owner") {
+            throw new MethodError("bad-params", `${field} is editor or owner`);
+          }
+          return value;
+        };
+        const saveRole = role("saveRole");
+        const restoreRole = role("restoreRole");
+        const database = context.options.database;
+        if (description !== undefined) {
+          database.prepare("UPDATE projects SET description = ? WHERE id = ?").run(description, project.id);
+        }
+        if (title !== undefined) {
+          const cleaned = title.trim();
+          database.prepare("UPDATE projects SET title = ? WHERE id = ?").run(cleaned === "" ? null : cleaned, project.id);
+        }
+        setVersionRoles(database, project.id, {
+          ...(saveRole === undefined ? {} : { save: saveRole }),
+          ...(restoreRole === undefined ? {} : { restore: restoreRole }),
+        });
+        const updated = findProject(database, project.id) ?? project;
+        if (title !== undefined) announceProjectChange(context, project.id);
+        return { project: projectBody(context.options, updated, context.user) };
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsArchive,
+      capability: "archive",
+      handle: (params: unknown, context: MethodContext) => setArchived(context, params, true),
+    },
+    {
+      name: TEAM_METHODS.projectsRestore,
+      capability: "archive",
+      handle: (params: unknown, context: MethodContext) => setArchived(context, params, false),
+    },
+    {
+      name: TEAM_METHODS.projectsStorage,
+      capability: "storage",
+      handle: (params: unknown, context: MethodContext) => {
+        const project = visibleProject(context, requiredText(paramsObject(params), "project", ID_LIMIT));
+        return {
+          storage: storageView(context.options.database, project.id),
+          buildLimitBytes: buildLimitBytes(context.options.database),
+        };
       },
     },
     {
@@ -340,4 +716,13 @@ export function projectMethods(): TeamMethod[] {
       }),
     },
   ];
+}
+
+/** The projects in a sequence that the caller may see, in the same order. */
+function* onlyVisible(projects: Iterable<ProjectRecord>, visible: ReadonlySet<string>, includeArchived = true): Generator<ProjectRecord> {
+  for (const project of projects) {
+    if (visible.has(project.id) && (includeArchived || project.archivedAt === undefined)) {
+      yield project;
+    }
+  }
 }

@@ -41,25 +41,33 @@ them.
 Both are decisions rather than omissions, and a deployment is planned around
 them.
 
-**Every account on a server reaches every project on it.** There is no
-per-project grant to give or take away. The question asked on each repository
-access is answered from the account alone: an account of this server, not
-disabled, holding a token this server has not refused.
+**Access is per project.** Each project has members, each with a role: owner,
+editor, reviewer or viewer. Owners and editors open the repository; reviewers and viewers do not, and read
+the project through Team instead. The version-control server was measured not to
+tell reading from writing — anybody it lets open a repository can push to it — so
+a role that may not write is a role that may not open it. An operator owns every
+project. A new project starts with its creator as owner and every other account
+as editor, and a new account starts as an editor of every project, so a server
+upgraded to this behaves as it did before until somebody narrows a project.
+An owner changes who belongs with `projects.members.set` and
+`projects.members.remove`; a project always keeps at least one owner of its own,
+and somebody taken out loses their subscriptions to it at once, not at their next
+call. Events about a project — it being made, forgotten, or its members
+changing — are told only to its members and the operators.
 
-The way to stop somebody is to stop the account, with `nlteam user disable` or
-`nlteam user revoke-tokens`. One project a contractor should not see is a second
-server rather than a setting. The same rule is why `members.list` gives every
-account on a server the username, display name and recorded email address of
-every other.
+A project somebody has no role in is, to them, not there: it is missing from the
+list, and every method and topic about it answers "not found" rather than "you
+may not". `members.list` still gives every account on a server the username,
+display name and recorded email address of every other.
 
-It is also why the four-digit code a live session is joined by is not a secret.
-Ten thousand values is a range an account on this server could work through. The
-code lets somebody join without knowing whose room they are looking for; it does
+The four-digit code a live session is joined by is not a secret either. Ten
+thousand values is a range an account with a role in the project could work
+through. The code lets somebody join without knowing whose room they are looking for; it does
 not keep anybody out.
 
-**Any account may take any project off the list.** `projects.forget` is gated by
-the session and by nothing else. What goes is the row. The repository stays in
-the store with every branch and every revision. What is destroyed is this
+**Only an owner may take a project off the list.** `projects.forget` is refused
+to anybody but the project's owners and the operators. What goes is the row.
+The repository stays in the store with every branch and every revision. What is destroyed is this
 server's record that the repository is a project of its, and, by cascade, the
 threads and comments hanging off that row. Nobody can open the project
 afterwards, because a repository with no row is not one of this server's
@@ -131,10 +139,13 @@ that window.
 Each topic taken back is reported on that topic to that session alone. The
 session stays open and keeps everything else it asked for.
 
-### One network door takes a password
+### Two network doors take a password, held as one
 
-`POST /api/studio/v1/sign-in` is the only route this server serves besides the
-two documents about itself, and it is where `nlteam login` goes.
+`POST /api/studio/v1/sign-in` answers a token, and is where Studio's password
+sign-in and `nlteam login` go. `POST /api/console/v1/sign-in` answers a session
+cookie, for the web console. Both run the same check (`checkSignIn` in
+src/web/studio.ts) under the same limiter and the same refusal, so neither is
+the weaker door.
 
 Checking a password is the most expensive thing this server does for somebody who
 has presented nothing: scrypt at OWASP's 2026 parameters, N = 2^17, r = 8, p = 1,
@@ -149,7 +160,65 @@ name exists but is disabled is learning that the password was right.
 Every refusal answers one sentence, the same for a wrong password, an account
 that is not there, one that is disabled and one belonging to a machine, and is
 held half a second before it is answered. A request whose `origin` names another
-site is refused outright.
+site is refused outright; the console's door also refuses one with no `origin`,
+because what it answers is a cookie and its only client is a browser.
+
+### A console session
+
+Built in 0.2 (src/identity/websessions.ts). The cookie is
+`__Host-nlteam=…; Secure; HttpOnly; SameSite=Lax; Path=/`: a page's script cannot
+read it, and the `__Host-` prefix makes a browser refuse it unless it is Secure,
+host-only and on `/`. The database holds the SHA-256 of the cookie, never the
+cookie. A session ends after seven days unused and thirty days in any case; it
+also ends when the account is disabled or its tokens are revoked, because the
+session records the account's `token_epoch` when it began. Sign-out deletes the
+row.
+
+The socket accepts the cookie in place of a bearer, and only on an upgrade whose
+`origin` is this server: a browser attaches cookies to a WebSocket handshake any
+site can start, and the origin is the one header such a site cannot set. Pages
+of the console are served under a policy that admits nothing but this origin —
+no inline script, no third-party anything — because they render text other
+people wrote.
+
+On HTTP/2, which browsers negotiate on this port, a request reaches gRPC only if
+it says `application/grpc`; everything else reaches the same handler HTTP/1.1
+does.
+
+### Studio signs in through the browser
+
+Built in 0.2 (src/identity/oauth.ts, src/web/oauth.ts). Team is an OAuth 2.0
+authorization server for one public client, `narraleaf-studio`: authorization
+code with PKCE (S256 only) to a loopback redirect by IP on any port (RFC 8252;
+`localhost` and anything not loopback are refused), and the device flow
+(RFC 8628) for a Studio that cannot open a browser on its own machine.
+Approving happens in the console, behind the console session and a same-origin
+check; an error about the client or the redirect is shown, never redirected, so
+the endpoint is not an open redirector.
+
+What Studio receives is the token it always received, plus a refresh token.
+Every token issued this way carries a `grant` claim naming one signed-in
+device, both exchanges carry it through, and Team refuses a token whose grant is
+revoked — so signing a device out (`account.devices.revoke`, or an operator's
+`admin.users.revokeTokens`) is immediate and touches no other device. Refresh
+tokens are single use and rotated; a replayed old one revokes the grant for
+both holders. Codes, refresh tokens and device codes are stored as SHA-256
+hashes. Codes live five minutes and are deleted on the first redemption attempt,
+right or wrong.
+
+### Decided for 0.2: what the web console adds
+
+The session and the cross-site rules are built (above). The rest is recorded so
+the implementation is held to it.
+- **Raw file reads.** Files are served out of Team's checkout to members of the
+  project only, by a path normalised and then looked up in the revision's tree.
+  Types outside a short list are served as attachments, SVG and HTML under
+  `Content-Security-Policy: sandbox`.
+- **OAuth for Studio** — built, see below.
+- **Deep links.** `narraleaf://` links open only servers and projects Studio is
+  already connected to, and ask before they do anything.
+- **Avatars and logos** are decoded and re-encoded on the server before they are
+  stored or served, which strips metadata and refuses what is not an image.
 
 ## Bounds
 

@@ -16,6 +16,17 @@ import {
   isLifetimeKey,
   isPublishLineageRule,
   PUBLISH_LINEAGE_KEY,
+  PROJECT_CREATE_KEY,
+  PROJECT_CREATORS,
+  PROJECT_DELETE_KEY,
+  PROJECT_ACCESS_KEY,
+  PROJECT_ACCESSES,
+  isProjectAccess,
+  PROJECT_DELETERS,
+  isProjectDeleters,
+  DOCUMENT_RETENTION_KEY,
+  isProjectCreators,
+  readRetentionDays,
   PUBLISH_LINEAGE_RULES,
   isSettingKey,
   SETTING_KEYS,
@@ -103,6 +114,10 @@ export type Invocation =
       readonly displayName: string | undefined;
       readonly email: string | undefined;
     }
+  /** Take a backup of the storage root, into its backups directory. */
+  | { readonly kind: "backup"; readonly root: string }
+  /** Put a backup back, with the server stopped. */
+  | { readonly kind: "restore"; readonly root: string; readonly archive: string; readonly force: boolean }
   /** List the accounts. */
   | { readonly kind: "user-list"; readonly target: CommandTarget }
   /**
@@ -941,6 +956,37 @@ function parseInit(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation 
   };
 }
 
+/** Parse the arguments that follow `backup`. */
+function parseBackup(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
+  const result = readTokens(argv, ["--root"]);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  if (result.tokens.positionals[0] !== undefined) {
+    return error(`unexpected argument: ${result.tokens.positionals[0]}`);
+  }
+  const root = rootOf(result.tokens, env);
+  return root === undefined ? missingRoot("backup") : { kind: "backup", root };
+}
+
+/** Parse the arguments that follow `restore`. */
+function parseRestore(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
+  const result = readTokens(argv, ["--root"], ["--force"]);
+  if (result.kind !== "tokens") {
+    return result.kind === "help" ? { kind: "help" } : error(result.message);
+  }
+  const { tokens } = result;
+  const archive = tokens.positionals[0];
+  if (archive === undefined) {
+    return error("restore needs the backup file to put back");
+  }
+  if (tokens.positionals[1] !== undefined) {
+    return error(`unexpected argument: ${tokens.positionals[1]}`);
+  }
+  const root = rootOf(tokens, env);
+  return root === undefined ? missingRoot("restore") : { kind: "restore", root, archive, force: tokens.flags.has("--force") };
+}
+
 /** Parse the arguments that follow `user`. */
 function parseUser(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const [verb, ...rest] = argv;
@@ -1330,6 +1376,31 @@ function parseSettings(argv: readonly string[], env: NodeJS.ProcessEnv): Invocat
         change: { key, rule: value.trim() as "merge" | "refuse" },
       };
     }
+    if (key === PROJECT_CREATE_KEY) {
+      if (!isProjectCreators(value)) {
+        return error(`${PROJECT_CREATE_KEY} is one of ${PROJECT_CREATORS.join(" or ")}, not ${value}.`);
+      }
+      return { kind: "settings-set", target, change: { key, creators: value.trim() as "everyone" | "creators" | "admins" } };
+    }
+    if (key === PROJECT_DELETE_KEY) {
+      if (!isProjectDeleters(value)) {
+        return error(`${PROJECT_DELETE_KEY} is one of ${PROJECT_DELETERS.join(" or ")}, not ${value}.`);
+      }
+      return { kind: "settings-set", target, change: { key, deleters: value.trim() as "owners" | "admins" } };
+    }
+    if (key === PROJECT_ACCESS_KEY) {
+      if (!isProjectAccess(value)) {
+        return error(`${PROJECT_ACCESS_KEY} is one of ${PROJECT_ACCESSES.join(" or ")}, not ${value}.`);
+      }
+      return { kind: "settings-set", target, change: { key, access: value.trim() as "editor" | "viewer" | "none" } };
+    }
+    if (key === DOCUMENT_RETENTION_KEY) {
+      const days = readRetentionDays(value);
+      if (days === undefined) {
+        return error(`${DOCUMENT_RETENTION_KEY} is a whole number of days from 1 to 3650, not ${value}.`);
+      }
+      return { kind: "settings-set", target, change: { key, days } };
+    }
     // A word out of a closed set as well, and read the same way for the same
     // reason. Nothing about what closing a deployment means is settled here:
     // this is a command line reading a word.
@@ -1546,6 +1617,10 @@ export function parseArgs(
       return parseUp(rest, env);
     case "init":
       return parseInit(rest, env);
+    case "backup":
+      return parseBackup(rest, env);
+    case "restore":
+      return parseRestore(rest, env);
     case "login":
       return parseLogin(rest, env);
     case "logout":

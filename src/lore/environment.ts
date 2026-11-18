@@ -113,9 +113,10 @@ export interface LoreEnvironment {
 export function prepareLoreEnvironment(
   root: string,
   env: NodeJS.ProcessEnv = process.env,
+  anchor?: string,
 ): LoreEnvironment {
   return {
-    ...trust(root, env),
+    ...trust(root, env, anchor),
     credentials: store(root, env),
   };
 }
@@ -125,9 +126,15 @@ function named(env: NodeJS.ProcessEnv, variable: string): boolean {
   return value !== undefined && value !== "";
 }
 
+/**
+ * `anchor` is the file to name in place of the bare authority, where `up` has
+ * written one that also holds a supplied certificate's chain
+ * (src/loreserver/trust.ts). Every other command reads with the authority alone.
+ */
 function trust(
   root: string,
   env: NodeJS.ProcessEnv,
+  anchor?: string,
 ): Pick<LoreEnvironment, "trustAnchor" | "withoutAuthority"> {
   if (named(env, TRUST_ANCHOR_VARIABLE)) {
     return { trustAnchor: undefined, withoutAuthority: undefined };
@@ -145,8 +152,9 @@ function trust(
         "repositories cannot be read until up has run once against this root",
     };
   }
-  env[TRUST_ANCHOR_VARIABLE] = caCertPath;
-  return { trustAnchor: caCertPath, withoutAuthority: undefined };
+  const file = anchor !== undefined && existsSync(anchor) ? anchor : caCertPath;
+  env[TRUST_ANCHOR_VARIABLE] = file;
+  return { trustAnchor: file, withoutAuthority: undefined };
 }
 
 function store(root: string, env: NodeJS.ProcessEnv): string | undefined {

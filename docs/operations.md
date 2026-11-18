@@ -107,13 +107,14 @@ others follow it, and the key carries no passphrase. The pair is read before any
 port is bound, and a key that does not belong to its certificate is refused at
 startup.
 
-Team continues to issue and serve its own certificate as well. The version-control
-server asks Team who a caller is at `https://127.0.0.1`, and no certificate from
-a public authority carries the loopback address. Each connection is answered with
-one of the two: a client that asks for a name the supplied certificate covers is
-given that certificate, and everything else, including the loopback, is given
-Team's own. The fingerprint, `nlteam trust`, and clients reaching the server by
-any other name are unaffected.
+Team continues to issue and serve its own certificate as well. Each connection is
+answered with one of the two: a client that asks for a name the supplied
+certificate covers is given that certificate, and everything else, including the
+loopback, is given Team's own. The fingerprint, `nlteam trust`, and clients
+reaching the server by any other name are unaffected. The version-control server
+and Team's own reader reach the endpoint by its public name too, so `up` writes
+`<root>/tls/loreserver-trust.pem`, Team's authority followed by the supplied
+chain, and points both at it.
 
 Renewal is a restart. Replace the files and run `docker compose restart team`.
 
@@ -265,6 +266,35 @@ server, or a caller Team no longer admits.
 Both tokens carry a `resources` claim naming the projects and what the bearer may
 do to each. The version-control server refuses a token that arrives without it.
 
+## The web console
+
+`nlteam up` serves a web console at `https://<host>:41402/console/`, on the same
+port and certificate as everything else. People sign in with the same account
+and password they would give Studio; the browser keeps a session cookie for up
+to thirty days (seven unused), and `nlteam user disable` or
+`nlteam user revoke-tokens` ends it as it ends tokens.
+
+The page is built into `dist/console` by `npm run build` (or
+`npm run build:console` alone). A server built without it answers
+`/console/` with a 503 saying so. `NLTEAM_CONSOLE_ROOT` points the server at
+another directory, for working on the page.
+
+Studio signs in through the console too: a server that announces `oauth` (every
+0.2 server does) is offered "Sign in with browser", which opens
+`/oauth/authorize`, has the person sign in and approve the device, and returns
+to Studio. Where Studio's machine has no browser, the device flow shows a code
+to type at `/console/device` from any device. Each signed-in Studio is a device
+its owner can sign out from the console, and `nlteam user revoke-tokens` signs
+out all of them. The password sign-in stays for Studio builds that predate this.
+
+A link of the form `narraleaf://team/connect?server=https://<host>:41402` opens
+Studio's Add Server dialog with the address filled in.
+
+A browser has to trust the certificate the way Studio does. With Team's own
+authority that means installing `tls/ca.crt` on the machine, which is the same
+step as `nlteam trust`; a certificate supplied with `--tls-cert` from an
+authority browsers already trust needs nothing.
+
 ## Trusting the certificate
 
 Studio verifies the endpoint's certificate against its own host's trust store and
@@ -366,11 +396,20 @@ server has stored, then the environment, then the command line.
 
 ### The version-control server's trust anchor
 
-The version-control server asks Team who a caller is over the loopback, at
-`https://127.0.0.1`, and verifies the certificate it is shown. Team starts it
-with `SSL_CERT_FILE` naming `<root>/tls/ca.crt`, so no trust store on the server
-machine is touched. Only that process is affected, and only while Team is running
-it.
+The version-control server asks Team who a caller is at the address clients sign
+in at, because it hands that same address to every client as where its sign-in
+lives, and a client looks its session up under it. It verifies the certificate it
+is shown. Team starts it with `SSL_CERT_FILE` naming `<root>/tls/ca.crt` (or
+`<root>/tls/loreserver-trust.pem` with a supplied certificate), so no trust store
+on the server machine is touched. Only that process is affected, and only while
+Team is running it.
+
+That address has to be reachable from the server machine itself. Behind a router
+that does not loop a public address back to the machine behind it, it is not,
+and every repository call fails with `Failed to connect to rebac service`. `up`
+checks this before starting the version-control server and prints what to change:
+map the name to `127.0.0.1` in `/etc/hosts`, or under `extra_hosts` in a
+container, as `compose.yaml` does.
 
 A version-control server started this way trusts Team's authority and no other.
 Everything it reaches is on the same machine. A configuration giving it a remote
@@ -723,6 +762,23 @@ nlteam settings set server.collaboration closed --root /srv/team
 A lifetime is written as `30m`, `48h`, `7d`, or a bare number of seconds.
 `server.name` takes the name a person reads in Studio. `server.collaboration`
 takes `open` or `closed`; see [Collaboration](#collaboration).
+`project.create_by` takes `everyone` (the default), `creators` or `admins`, and
+says who may make a project: everybody, the operators plus the accounts in the
+`project-creator` group (an operator puts somebody there with
+`admin.users.setCreator`, or the "allow creating projects" button in the web
+console's back office), or the operators alone. `project.delete_by` takes
+`owners` (the default) or `admins`, and says who may take a project off the
+list: any owner of it, or the operators alone. `project.default_access` takes
+`editor` (the default), `viewer` or `none`, and says what everybody else is
+given in a project they were not put in by hand: when a project is made (its
+maker always owns it), and in every project when an account is made. With
+`none` a project starts with its maker alone, and others join by being added
+or by asking (`access.requests.create`; the web console's "join other
+projects"), which its owners or an operator answer. Changing it moves nobody
+already in a project. `documents.retain_days` (default 30) is how long a team
+project's applied edits are kept once a saved version holds them; a Studio away
+longer starts again from the last version, and its offline edits based on
+anything older come back as conflicts.
 
 `settings list` reports whether each value is the default or was set on this
 server. Both commands take `--server` in place of `--root`, and a value written
@@ -855,13 +911,31 @@ nlteam project list --server team.example.com:41402
 nlteam project create harbour --repository 19c0d42... --root /srv/team --as ada
 ```
 
-**Every account on a server reaches every project on it.** There is no
-per-project access to grant or remove. The question asked on each repository
-access is answered from the account alone: an account of this server, not
-disabled, holding a token this server has not refused. A resource that is not one
-of this server's projects is refused.
+**Access is per project.** Each project has members, each with a role: owner,
+editor, reviewer or viewer. Owners and editors open the repository; reviewers and viewers do not, and read
+the project through Team instead. The version-control server was measured not to
+tell reading from writing — anybody it lets open a repository can push to it — so
+a role that may not write is a role that may not open it. An operator owns every
+project. A new project starts with its creator as owner and every other account
+as editor, and a new account starts as an editor of every project, so a server
+upgraded to this behaves as it did before until somebody narrows a project.
+An owner of a project, or an operator, changes who belongs and in which role over
+the session, with `projects.members.set` and `projects.members.remove`; there is
+no command for it yet. A project always keeps one owner of its own, and taking
+somebody out takes their access at once. The web console has the same table in a
+project's settings, for its owners, and in the back office, for operators.
 
-To stop somebody, stop the account: `nlteam user disable`, or
+**Editors can be kept to some areas.** An owner ticks which parts of the project
+an editor may change: story, characters, assets, UI, localization and game
+config. All six are ticked to begin with. Owners always change everything;
+reviewers and viewers change nothing. Team decides the area of every edit from
+the file it reaches, and anything it does not recognise counts as game config,
+so a new kind of file is guarded rather than left open. An editor kept to some
+areas no longer opens the repository, since the version-control server would let
+them push any file, and edits through Team instead, as Studio does for every
+team project. Restoring a version changes every area, so it needs all six.
+
+To stop somebody everywhere, stop the account: `nlteam user disable`, or
 `nlteam user revoke-tokens` for a token that has been exposed.
 
 `project create` generates the repository id, asks the version-control server to

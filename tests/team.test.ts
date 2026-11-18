@@ -14,12 +14,13 @@
  * HTTP/2 secure listener that `allowHTTP1` puts in front of the same port. What
  * is left over is the protocol, and the protocol does not know which it is on.
  */
+import { POLICIES } from "../src/identity/policy.js";
 import { randomUUID } from "node:crypto";
 import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { DatabaseSync } from "node:sqlite";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { identityConfig, type IdentityConfig } from "../src/identity/config.js";
 import { openMigratedDatabase } from "../src/identity/database.js";
@@ -59,6 +60,27 @@ import {
 } from "../src/identity/users.js";
 import { ProjectReadings } from "../src/projects/refresh.js";
 import {
+  editableAreas,
+  mayOpenRepository,
+  removeProjectMember,
+  repositoryRefusalOf,
+  seedProjectMembers,
+  setProjectMember,
+} from "../src/projects/members.js";
+import { TEAM_PERMISSION_TEMPLATES, TEAM_PROJECT_AREAS, teamTemplateOf } from "../protocol/src/index.js";
+import { versionsOf } from "../src/authority/versions.js";
+import { setWebhookFetch } from "../src/collab/webhooks.js";
+import { setProjectAccess, setProjectCreators, setProjectDeleters } from "../src/identity/settings.js";
+import { ProjectAuthorities } from "../src/authority/manager.js";
+import {
+  approveAuthorization,
+  checkAuthorizeRequest,
+  grantIsLive,
+  redeemCode,
+  type AuthorizeRequest,
+} from "../src/identity/oauth.js";
+import { createHash } from "node:crypto";
+import {
   createProject,
   forgetProject,
   listProjects,
@@ -78,6 +100,7 @@ import {
   TEAM_SOCKET_PATH,
   liveTopic,
   projectClientsTopic,
+  projectDocTopic,
   projectLiveTopic,
   projectOverlayTopic,
   projectThreadsTopic,
@@ -443,13 +466,39 @@ describe("opening a session", () => {
     // No history here, because this harness has read no repositories. Announced
     // from what the build serves rather than written down beside it.
     expect([...(client.hello?.capabilities ?? [])].sort()).toEqual([
+      "account-policy",
+      "activity",
       "admin",
+      "api-tokens",
+      "approvals",
+      "archive",
+      "attachments",
+      "builds",
+      "chat",
       "clients",
       "comments",
+      "digests",
+      "glossary",
       "live",
+      "locks",
+      "milestones",
+      "notifications",
+      "oauth",
       "overlay",
       "password-sign-in",
+      "push",
+      "reactions",
+      "reviews",
       "session",
+      "shares",
+      "storage",
+      "studio-config",
+      "templates",
+      "todos",
+      "two-factor",
+      "voice",
+      "watches",
+      "webhooks",
     ]);
   });
 });
@@ -1110,6 +1159,287 @@ describe("making a project over the socket", () => {
     const answer = await maker.call(TEAM_METHODS.projectsCreate, { name: "driftwood" });
     expect(answer.code).toBe("unavailable");
     expect(listProjects(team.database)).toEqual([]);
+  });
+});
+
+describe("what a project's members see over the socket", () => {
+  it("lists and opens only the projects the caller has a role in", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const nora = await account(team.database, "nora");
+    const rita = await account(team.database, "rita");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    removeProjectMember(team.database, project.id, nora);
+    setProjectMember(team.database, { projectId: project.id, userId: rita, role: "reviewer" });
+
+    const outsider = await team.connect(team.tokenFor("nora"));
+    const listed = await outsider.value(TEAM_METHODS.projectsList);
+    expect(listed["projects"]).toEqual([]);
+    expect(listed["total"]).toBe(0);
+    // Not there, rather than refused: "you may not" would say it exists.
+    expect((await outsider.call(TEAM_METHODS.projectsGet, { project: project.id })).code).toBe("not-found");
+    expect((await outsider.call(TEAM_METHODS.threadsList, { project: project.id })).code).toBe("not-found");
+    expect((await outsider.send("subscribe", { topic: `project:${project.id}/threads` })).code).toBe("not-found");
+
+    // A reviewer cannot open the repository, and sees the project here.
+    const reviewer = await team.connect(team.tokenFor("rita"));
+    const seen = (await reviewer.value(TEAM_METHODS.projectsList))["projects"] as { id: string }[];
+    expect(seen.map((row) => row.id)).toEqual([project.id]);
+  });
+
+  it("lets only an owner take a project off the list", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    await account(team.database, "bob");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+
+    const editor = await team.connect(team.tokenFor("bob"));
+    expect((await editor.call(TEAM_METHODS.projectsForget, { project: project.id })).code).toBe("refused");
+    expect(listProjects(team.database)).toHaveLength(1);
+
+    const owner = await team.connect(team.tokenFor("ada"));
+    expect(await owner.value(TEAM_METHODS.projectsForget, { project: project.id })).toEqual({});
+    expect(listProjects(team.database)).toEqual([]);
+  });
+});
+
+describe("changing who belongs to a project over the socket", () => {
+  async function lighthouse() {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const bob = await account(team.database, "bob");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+    return { team, ada, bob, project };
+  }
+
+  it("lists the members and the caller's own role to any member", async () => {
+    const { team, project } = await lighthouse();
+    const editor = await team.connect(team.tokenFor("bob"));
+
+    const listed = await editor.value(TEAM_METHODS.projectsMembersList, { project: project.id });
+    const members = listed["members"] as { username: string; role: string }[];
+    expect(members.map((member) => [member.username, member.role])).toEqual([
+      ["ada", "owner"],
+      ["bob", "editor"],
+    ]);
+    expect(listed["role"]).toBe("editor");
+    expect(listed["total"]).toBe(2);
+
+    // The project rows carry the caller's role too, so a client can leave out
+    // what that role cannot do.
+    const rows = (await editor.value(TEAM_METHODS.projectsList))["projects"] as { role?: string }[];
+    expect(rows[0]?.role).toBe("editor");
+  });
+
+  it("lets an owner keep an editor to some areas, and keeps them out of the repository for it", async () => {
+    const { team, project } = await lighthouse();
+    const owner = await team.connect(team.tokenFor("ada"));
+
+    const narrowed = await owner.value(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "bob",
+      role: "editor",
+      areas: ["story", "localization"],
+    });
+    expect(narrowed["member"]).toMatchObject({ username: "bob", role: "editor", areas: ["story", "localization"] });
+    expect(editableAreas(team.database, project.id, requireUser(team.database, "bob"))).toEqual(["story", "localization"]);
+    expect(mayOpenRepository(team.database, project.id, requireUser(team.database, "bob"))).toBe(false);
+    expect(repositoryRefusalOf(team.database, project.id, requireUser(team.database, "bob"))).toBe("areas");
+
+    // Unknown areas are refused rather than dropped.
+    const bad = await owner.call(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "bob",
+      role: "editor",
+      areas: ["story", "music"],
+    });
+    expect(bad.code).toBe("bad-params");
+
+    // Every area again is the same as no list at all.
+    const widened = await owner.value(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "bob",
+      role: "editor",
+      areas: [...TEAM_PROJECT_AREAS],
+    });
+    expect((widened["member"] as { areas?: unknown }).areas).toBeUndefined();
+    expect(mayOpenRepository(team.database, project.id, requireUser(team.database, "bob"))).toBe(true);
+  });
+
+  it("lets an owner change a role, and refuses everybody else", async () => {
+    const { team, project } = await lighthouse();
+    await account(team.database, "rita");
+
+    const editor = await team.connect(team.tokenFor("bob"));
+    const refused = await editor.call(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "rita",
+      role: "viewer",
+    });
+    expect(refused.code).toBe("refused");
+
+    const owner = await team.connect(team.tokenFor("ada"));
+    const set = await owner.value(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "rita",
+      role: "reviewer",
+    });
+    expect(set["member"]).toMatchObject({ username: "rita", role: "reviewer", addedBy: "ada" });
+
+    expect(
+      (await owner.call(TEAM_METHODS.projectsMembersSet, { project: project.id, username: "rita", role: "admin" }))
+        .code,
+    ).toBe("bad-params");
+    expect(
+      (await owner.call(TEAM_METHODS.projectsMembersSet, { project: project.id, username: "nobody", role: "viewer" }))
+        .code,
+    ).toBe("not-found");
+  });
+
+  it("never leaves a project without an owner of its own", async () => {
+    const { team, project } = await lighthouse();
+    const owner = await team.connect(team.tokenFor("ada"));
+
+    const demoted = await owner.call(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "ada",
+      role: "editor",
+    });
+    expect(demoted.code).toBe("refused");
+    expect((await owner.call(TEAM_METHODS.projectsMembersRemove, { project: project.id, username: "ada" })).code).toBe(
+      "refused",
+    );
+
+    // With a second owner, the first may step down.
+    await owner.value(TEAM_METHODS.projectsMembersSet, { project: project.id, username: "bob", role: "owner" });
+    const stepped = await owner.value(TEAM_METHODS.projectsMembersSet, {
+      project: project.id,
+      username: "ada",
+      role: "editor",
+    });
+    expect(stepped["member"]).toMatchObject({ username: "ada", role: "editor" });
+  });
+
+  it("takes a removed member's project away at once, and tells only those it concerns", async () => {
+    const { team, project } = await lighthouse();
+    await account(team.database, "nora");
+    removeProjectMember(team.database, project.id, (findUser(team.database, "nora") as { id: string }).id);
+
+    const removed = await team.connect(team.tokenFor("bob"));
+    await removed.send("subscribe", { topic: TOPIC_PROJECTS });
+    await removed.send("subscribe", { topic: `project:${project.id}/threads` });
+    const outsider = await team.connect(team.tokenFor("nora"));
+    await outsider.send("subscribe", { topic: TOPIC_PROJECTS });
+    const owner = await team.connect(team.tokenFor("ada"));
+    await owner.send("subscribe", { topic: `project:${project.id}/members` });
+
+    expect(await owner.value(TEAM_METHODS.projectsMembersRemove, { project: project.id, username: "bob" })).toEqual(
+      {},
+    );
+    // Removing somebody who is not a member is the state asked for.
+    expect(await owner.value(TEAM_METHODS.projectsMembersRemove, { project: project.id, username: "bob" })).toEqual(
+      {},
+    );
+
+    await owner.until(() => owner.events.length > 0);
+    expect(owner.events[0]?.payload).toEqual({ kind: "member-removed", username: "bob" });
+
+    await removed.until(() => removed.events.length >= 2);
+    const payloads = removed.events.map((event) => event.payload as { kind: string; topic?: string });
+    expect(payloads).toContainEqual({ kind: "project-access-changed", project: project.id });
+    expect(payloads).toContainEqual(
+      expect.objectContaining({ kind: "subscription-withdrawn", topic: `project:${project.id}/threads` }),
+    );
+    expect((await removed.value(TEAM_METHODS.projectsList))["projects"]).toEqual([]);
+
+    // The project being made and forgotten is told to its members, not to nora.
+    await owner.value(TEAM_METHODS.projectsForget, { project: project.id });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(outsider.events).toEqual([]);
+  });
+});
+
+describe("a thread outlives nobody's membership", () => {
+  it("refuses a thread, by id, to an account taken out of its project, and writing to a viewer", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    const bob = await account(team.database, "bob");
+    const vic = await account(team.database, "vic");
+    const project = createProject(team.database, { id: newProjectId(), name: "lighthouse", description: "", createdBy: ada });
+    setProjectMember(team.database, { projectId: project.id, userId: vic, role: "viewer" });
+
+    const author = await team.connect(team.tokenFor("ada"));
+    const opened = await author.value(TEAM_METHODS.threadsCreate, {
+      project: project.id,
+      anchor: { document: "story:main", element: "scene/row" },
+      body: "first",
+    });
+    const threadId = (opened["thread"] as { id: string }).id;
+
+    const viewer = await team.connect(team.tokenFor("vic"));
+    expect((await viewer.call(TEAM_METHODS.threadsGet, { thread: threadId })).code).toBeUndefined();
+    expect((await viewer.call(TEAM_METHODS.threadsReply, { thread: threadId, body: "hi" })).code).toBe("refused");
+
+    removeProjectMember(team.database, project.id, bob);
+    const outsider = await team.connect(team.tokenFor("bob"));
+    expect((await outsider.call(TEAM_METHODS.threadsGet, { thread: threadId })).code).toBe("not-found");
+    expect((await outsider.call(TEAM_METHODS.threadsReply, { thread: threadId, body: "still here" })).code).toBe("not-found");
+    expect((await outsider.call(TEAM_METHODS.threadsResolve, { thread: threadId })).code).toBe("not-found");
+  });
+});
+
+describe("the caller's own devices", () => {
+  it("lists the devices signed in through the browser, and signs one out", async () => {
+    const team = await harness();
+    await account(team.database, "ada");
+    await account(team.database, "bob");
+    const verifier = "v".repeat(43);
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const grantFor = (username: string): string => {
+      const request = checkAuthorizeRequest(
+        new URLSearchParams({
+          client_id: "narraleaf-studio",
+          redirect_uri: "http://127.0.0.1:5000/cb",
+          response_type: "code",
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          device_name: `${username}'s laptop`,
+        }),
+      ) as AuthorizeRequest;
+      const code = new URL(approveAuthorization(team.database, requireUser(team.database, username), request)).searchParams.get("code") ?? "";
+      const issued = redeemCode(team.database, { code, clientId: "narraleaf-studio", redirectUri: "http://127.0.0.1:5000/cb", verifier });
+      if ("error" in issued) throw new Error(issued.description);
+      return issued.grantId;
+    };
+    const mine = grantFor("ada");
+    const theirs = grantFor("bob");
+
+    const ada = await team.connect(team.tokenFor("ada"));
+    const listed = (await ada.value(TEAM_METHODS.accountDevicesList))["devices"] as { id: string; name: string; client: string }[];
+    expect(listed.map((device) => [device.name, device.client])).toEqual([["ada's laptop", "NarraLeaf Studio"]]);
+
+    // Somebody else's device is not the caller's to sign out.
+    await ada.value(TEAM_METHODS.accountDevicesRevoke, { device: theirs });
+    expect(grantIsLive(team.database, theirs, requireUser(team.database, "bob").id)).toBe(true);
+
+    await ada.value(TEAM_METHODS.accountDevicesRevoke, { device: mine });
+    expect(grantIsLive(team.database, mine, requireUser(team.database, "ada").id)).toBe(false);
+    expect((await ada.value(TEAM_METHODS.accountDevicesList))["devices"]).toEqual([]);
   });
 });
 
@@ -3251,7 +3581,15 @@ const ADMIN_READS = [
   TEAM_METHODS.adminKeysList,
   TEAM_METHODS.adminAuditList,
   TEAM_METHODS.adminServerStatus,
+  TEAM_METHODS.adminWebhooksList,
+  TEAM_METHODS.adminDocumentsStatus,
+  TEAM_METHODS.adminStorageList,
+  TEAM_METHODS.adminBackupsList,
+  TEAM_METHODS.adminPoliciesList,
 ];
+
+/** Reads that need an account named, so are only tested at the gate. */
+const ADMIN_LOOKUPS = [TEAM_METHODS.adminUsersPolicy];
 
 /** Every method of the family that changes something. */
 const ADMIN_WRITES = [
@@ -3260,15 +3598,33 @@ const ADMIN_WRITES = [
   TEAM_METHODS.adminUsersEnable,
   TEAM_METHODS.adminUsersGrantAdmin,
   TEAM_METHODS.adminUsersRevokeAdmin,
+  TEAM_METHODS.adminUsersSetCreator,
   TEAM_METHODS.adminUsersRevokeTokens,
   TEAM_METHODS.adminTokensMint,
   TEAM_METHODS.adminSettingsSet,
   TEAM_METHODS.adminKeysRotate,
   TEAM_METHODS.adminKeysRetire,
+  TEAM_METHODS.adminBrandSet,
+  TEAM_METHODS.adminWebhooksCreate,
+  TEAM_METHODS.adminWebhooksDelete,
+  TEAM_METHODS.adminWebhooksTest,
+  TEAM_METHODS.adminWebhooksDeliveries,
+  TEAM_METHODS.adminWebhooksRedeliver,
+  TEAM_METHODS.adminEmailTest,
+  TEAM_METHODS.adminUsersResetLink,
+  TEAM_METHODS.adminUsersResetTwoFactor,
+  TEAM_METHODS.adminBackupsCreate,
+  TEAM_METHODS.adminPoliciesSave,
+  TEAM_METHODS.adminPoliciesDelete,
+  TEAM_METHODS.adminUsersPolicySet,
+  TEAM_METHODS.adminUsersDelete,
+  TEAM_METHODS.adminUsersLock,
+  TEAM_METHODS.adminUsersUnlock,
+  TEAM_METHODS.adminUsersUpdate,
 ];
 
 /** Both halves, which is what the gate has to cover. */
-const ADMIN_METHODS = [...ADMIN_READS, ...ADMIN_WRITES];
+const ADMIN_METHODS = [...ADMIN_READS, ...ADMIN_LOOKUPS, ...ADMIN_WRITES];
 
 describe("who may administer a server", () => {
   it("names every method of the family in the lists the gate is tested against", () => {
@@ -3557,8 +3913,13 @@ describe("the settings, as an operator reads them", () => {
       "name",
       "collaboration",
       "repeat publishes",
+      "who makes projects",
+      "who removes projects",
+      "others in a new project",
+      "edit log kept (days)",
       "sign-in token",
       "repository token",
+      ...POLICIES.map((policy) => policy.label),
     ]);
   });
 
@@ -4086,6 +4447,60 @@ describe("changing an account over the session", () => {
     expect((await ada.call(TEAM_METHODS.adminUsersDisable, { username: "nobody" })).code).toBe(
       "not-found",
     );
+  });
+});
+
+describe("deleting, locking and editing an account", () => {
+  it("deletes an account, takes it off the list and keeps its name", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+
+    const answer = await ada.value(TEAM_METHODS.adminUsersDelete, { username: "bob" });
+
+    expect(answer["deleted"]).toMatchObject({ username: "bob" });
+    const bob = requireUser(team.database, "bob");
+    expect(bob.deletedAt).toBeTypeOf("number");
+    expect(bob.disabledAt).toBeTypeOf("number");
+    expect(bob.groups).toEqual([]);
+    await watcher.until(() => watcher.events.length > 0);
+    expect(firstEventKind(watcher)).toBe("user-deleted");
+    const listed = (await ada.value(TEAM_METHODS.adminUsersList, {}))["users"] as { username: string }[];
+    expect(listed.map((user) => user.username)).not.toContain("bob");
+    // Gone for every other change, and not to be brought back.
+    expect((await ada.call(TEAM_METHODS.adminUsersEnable, { username: "bob" })).code).toBe("not-found");
+  });
+
+  it("will not delete the caller's own account", async () => {
+    const { ada, team } = await administered();
+    setAdmin(team.database, "bob", true);
+
+    expect((await ada.call(TEAM_METHODS.adminUsersDelete, { username: "ada" })).code).toBe("refused");
+  });
+
+  it("locks an account for a while and unlocks it again", async () => {
+    const { ada, watcher, team } = await watchingAccounts();
+
+    const locked = answered(await ada.value(TEAM_METHODS.adminUsersLock, { username: "bob", minutes: 30 }));
+    expect(locked["lockedUntil"]).toBeGreaterThan(Date.now() + 29 * 60_000);
+    await watcher.until(() => watcher.events.length > 0);
+    expect(firstEventKind(watcher)).toBe("user-locked");
+
+    const unlocked = answered(await ada.value(TEAM_METHODS.adminUsersUnlock, { username: "bob" }));
+    expect(unlocked["lockedUntil"]).toBeUndefined();
+    expect(requireUser(team.database, "bob").lockedUntil).toBeUndefined();
+    expect((await ada.call(TEAM_METHODS.adminUsersLock, { username: "bob", minutes: 0 })).code).toBe("bad-params");
+  });
+
+  it("changes another account's name and address", async () => {
+    const { ada, team } = await administered();
+
+    const changed = answered(
+      await ada.value(TEAM_METHODS.adminUsersUpdate, { username: "bob", displayName: "Bob Li", email: "bob@example.com" }),
+    );
+    expect(changed).toMatchObject({ displayName: "Bob Li", email: "bob@example.com" });
+
+    await ada.value(TEAM_METHODS.adminUsersUpdate, { username: "bob", email: "" });
+    expect(requireUser(team.database, "bob").email).toBeUndefined();
+    expect((await ada.call(TEAM_METHODS.adminUsersUpdate, { username: "bob", email: "not an address" })).code).toBe("bad-params");
   });
 });
 
@@ -4851,5 +5266,681 @@ describe("a management subscription and the operator who took it", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(ada.events).toEqual([]);
+  });
+});
+
+describe("a team project's documents, with this server as their authority", () => {
+  const STORY = "00000000-0000-4000-8000-000000000001";
+  const SCENE = "00000000-0000-4000-8000-000000000102";
+  const STAMP = "2026-11-14T00:00:00.000Z";
+
+  function storyDocument(): object {
+    return {
+      schemaVersion: 31,
+      id: STORY,
+      name: "Story",
+      entrySceneId: SCENE,
+      chapters: [{ id: "c1", name: "Chapter 1", sceneIds: [SCENE], meta: { createdAt: STAMP, updatedAt: STAMP } }],
+      scenes: {
+        [SCENE]: {
+          id: SCENE,
+          name: "Scene 1",
+          runtimeName: "scene_1",
+          description: "",
+          rootBlockIds: [],
+          blocks: {},
+          meta: { createdAt: STAMP, updatedAt: STAMP },
+        },
+      },
+      meta: { createdAt: STAMP, updatedAt: STAMP },
+    };
+  }
+
+  async function withDocuments() {
+    const commits: string[] = [];
+    let authorities: ProjectAuthorities | undefined;
+    const two = await withTwo();
+    authorities = new ProjectAuthorities({
+      database: two.team.database,
+      open: async () => ({
+        files: new Map<string, unknown>([[`editor/story/stories/${STORY}/storydoc.json`, storyDocument()]]),
+        unreadable: [],
+      }),
+      openAt: async () => undefined,
+      commit: async (_project, _files, message) => {
+        commits.push(message);
+        return { revision: `rev-${commits.length}` };
+      },
+      publish: (projectId, event) => {
+        two.team.socket.hub.publish(projectDocTopic(projectId), event);
+      },
+    });
+    (two.team.service as { authorities?: ProjectAuthorities }).authorities = authorities;
+    return { ...two, commits };
+  }
+
+  const insertRow = (project: string, id: string) => ({
+    project,
+    clientId: `client-${id}`,
+    document: { doc: "story", storyId: STORY },
+    op: {
+      op: "insert-block",
+      sceneId: SCENE,
+      block: {
+        id,
+        kind: "nodeAction",
+        parentId: null,
+        childrenIds: [],
+        payload: { action: "narration", text: { textId: `t-${id}`, role: "narration", value: id } },
+      },
+      target: { parentId: null },
+    },
+  });
+
+  it("applies an edit and publishes it to everybody following the project, the asker included", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    for (const client of [ada, bob]) {
+      expect((await client.send("subscribe", { topic: projectDocTopic(project) })).code).toBeUndefined();
+    }
+
+    const head = await ada.value(TEAM_METHODS.docHead, { project });
+    expect(head).toMatchObject({ seq: 0, mayEdit: true });
+
+    const answer = await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect(answer).toMatchObject({ kind: "effect", effect: { seq: 1, by: "bob" } });
+
+    for (const client of [ada, bob]) {
+      await client.until(() => client.events.some((event) => event.topic === projectDocTopic(project)));
+      expect(client.events.find((event) => event.topic === projectDocTopic(project))?.payload).toMatchObject({
+        kind: "doc-effect",
+        effect: { seq: 1 },
+      });
+    }
+
+    const page = await ada.value(TEAM_METHODS.docEffects, { project, after: 0 });
+    expect((page["effects"] as { seq: number }[]).map((effect) => effect.seq)).toEqual([1]);
+  });
+
+  it("lets a reviewer follow the project and refuses their edits", async () => {
+    const { bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "reviewer" });
+    expect(await bob.value(TEAM_METHODS.docHead, { project })).toMatchObject({ mayEdit: false });
+    const refused = await bob.call(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect(refused.code).toBe("refused");
+  });
+
+  it("keeps an editor to the areas an owner gave them", async () => {
+    const { bob, project, team } = await withDocuments();
+    const bobId = requireUser(team.database, "bob").id;
+    setProjectMember(team.database, { projectId: project, userId: bobId, role: "editor", areas: ["characters"] });
+    expect(await bob.value(TEAM_METHODS.docHead, { project })).toMatchObject({
+      mayEdit: true,
+      areas: ["characters"],
+    });
+
+    // The story is not theirs to change, and neither is the game's configuration.
+    const story = await bob.call(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect(story.code).toBe("refused");
+    expect(story.message).toMatch(/story/);
+    const config = await bob.call(TEAM_METHODS.docIntent, {
+      project,
+      clientId: "client-config",
+      document: { doc: "file", path: "project.json" },
+      op: { op: "put", value: {} },
+    });
+    expect(config.code).toBe("refused");
+    expect(config.message).toMatch(/config/);
+
+    // Restoring a version changes every area at once.
+    const restore = await bob.call(TEAM_METHODS.docRestore, { project, revision: "rev-1" });
+    expect(restore.code).toBe("refused");
+
+    // Given the story back, the same edit goes through.
+    setProjectMember(team.database, { projectId: project, userId: bobId, role: "editor", areas: ["story", "characters"] });
+    expect(await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"))).toMatchObject({ kind: "effect" });
+  });
+
+  it("refuses an edit to an asset somebody else holds, and lets it through once they let go", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    const editAsset = {
+      project,
+      clientId: "client-asset",
+      document: { doc: "assets", assetType: "image" },
+      op: { op: "update-asset", assetId: "bg-1", patch: { name: "Harbour" } },
+    };
+    expect(await ada.value(TEAM_METHODS.assetsLock, { project, asset: "bg-1", minutes: 30 })).toMatchObject({ lock: { holder: "ada" } });
+    expect(await bob.value(TEAM_METHODS.assetsLocks, { project })).toMatchObject({ locks: [{ asset: "bg-1", holder: "ada" }] });
+    const refused = await bob.call(TEAM_METHODS.docIntent, editAsset);
+    expect(refused.code).toBe("refused");
+    expect(refused.message).toMatch(/holds asset bg-1/);
+    // A story edit touches no asset, and goes through.
+    expect(await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"))).toMatchObject({ kind: "effect" });
+    // The holder is not kept out of their own asset.
+    expect((await ada.call(TEAM_METHODS.docIntent, { ...editAsset, clientId: "client-asset-ada" })).message ?? "").not.toMatch(/holds asset/);
+
+    expect((await bob.call(TEAM_METHODS.assetsUnlock, { project, asset: "bg-1" })).code).toBe("refused");
+    await ada.value(TEAM_METHODS.assetsUnlock, { project, asset: "bg-1" });
+    expect((await bob.call(TEAM_METHODS.docIntent, { ...editAsset, clientId: "client-asset-2" })).message ?? "").not.toMatch(/holds asset/);
+  });
+
+  it("saves a version on request, with the label an author gave it", async () => {
+    const { ada, project, commits } = await withDocuments();
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    const saved = await ada.value(TEAM_METHODS.docSnapshot, { project, label: "Demo 1" });
+    expect(saved).toEqual({ revision: "rev-1", seq: 1 });
+    expect(commits[0]).toMatch(/^Demo 1\n/);
+  });
+
+  it("takes a whole file and hands back what the project holds now", async () => {
+    const { ada, project } = await withDocuments();
+    const answer = await ada.value(TEAM_METHODS.docIntent, {
+      project,
+      clientId: "file-1",
+      document: { doc: "file", path: "editor/save-schema.json" },
+      op: { op: "put-file", content: { encoding: "utf8", data: "{\"slots\":3}" } },
+      basedOn: 0,
+    });
+    expect(answer).toMatchObject({ kind: "effect", effect: { seq: 1 } });
+    const now = await ada.value(TEAM_METHODS.docFile, { project, path: "editor/save-schema.json" });
+    expect(now).toMatchObject({ seq: 1, size: 11, offset: 0 });
+    expect(Buffer.from(now["chunk"] as string, "base64").toString("utf8")).toBe("{\"slots\":3}");
+    expect(await ada.value(TEAM_METHODS.docFile, { project, path: "editor/transform-presets.json" })).toEqual({
+      seq: 1,
+      path: "editor/transform-presets.json",
+      absent: true,
+    });
+  });
+
+  it("hides the capability from a server holding no authorities", async () => {
+    const { ada, project } = await withTwo();
+    expect(ada.hello?.capabilities).not.toContain("documents");
+    expect((await ada.call(TEAM_METHODS.docHead, { project })).code).toBe("unavailable");
+  });
+
+  it("counts each person's edits as one stretch of work, and keeps who a saved version is down to", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r2"));
+    await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r3"));
+    // A resend lands once and is counted once.
+    await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r3"));
+    await ada.value(TEAM_METHODS.docSnapshot, { project, label: "Demo 1" });
+
+    const rows = team.database
+      .prepare("SELECT kind, account_id, count, summary FROM activity WHERE project_id = ? ORDER BY id")
+      .all(project) as Array<{ kind: string; account_id: string; count: number; summary: string | null }>;
+    const adaId = requireUser(team.database, "ada").id;
+    const bobId = requireUser(team.database, "bob").id;
+    expect(rows).toEqual([
+      { kind: "edit", account_id: adaId, count: 2, summary: null },
+      { kind: "edit", account_id: bobId, count: 1, summary: null },
+      { kind: "version", account_id: adaId, count: 1, summary: "Demo 1" },
+    ]);
+    const version = versionsOf(team.database, project, ["rev-1"]).get("rev-1");
+    expect(version).toMatchObject({ label: "Demo 1", auto: false, savedBy: "ada", seq: 3 });
+    expect([...(version?.participants ?? [])].sort()).toEqual(["ada", "bob"]);
+
+    const page = await ada.value(TEAM_METHODS.activityList, { project });
+    expect((page["activity"] as Array<{ kind: string; count?: number }>).find((row) => row.kind === "edit" && row.count === 2)).toBeDefined();
+  });
+
+  it("marks a version the server saved on its own as automatic, and makes no news of it", async () => {
+    const { ada, project, team } = await withDocuments();
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    const authorities = (team.service as { authorities?: ProjectAuthorities }).authorities!;
+    await authorities.snapshot(project);
+    expect(versionsOf(team.database, project, ["rev-1"]).get("rev-1")).toMatchObject({ auto: true, participants: ["ada"] });
+    expect(team.database.prepare("SELECT COUNT(*) AS n FROM activity WHERE kind = 'version'").get()).toEqual({ n: 0 });
+  });
+
+  it("posts a saved version to a project's webhook, and nothing for an automatic one", async () => {
+    const posted: string[] = [];
+    setWebhookFetch(async (_url, init) => {
+      posted.push(init.body);
+      return { status: 204 };
+    });
+    try {
+      const { ada, project, team } = await withDocuments();
+      await ada.value(TEAM_METHODS.projectsWebhooksCreate, { project, url: "https://hooks.example.com/x", events: ["version", "commit"] });
+      await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+      await (team.service as { authorities?: ProjectAuthorities }).authorities!.snapshot(project);
+      await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r2"));
+      await ada.value(TEAM_METHODS.docSnapshot, { project, label: "Demo 2" });
+      await vi.waitFor(() => expect(posted).toHaveLength(1));
+      expect(JSON.parse(posted[0] ?? "{}")).toMatchObject({ event: "version", actor: "ada", ref: "rev-2" });
+      expect(posted[0]).toContain("Demo 2");
+    } finally {
+      setWebhookFetch(undefined);
+    }
+  });
+
+  it("lets an owner keep saving and restoring to owners, and change the description but not the name", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    expect((await bob.call(TEAM_METHODS.projectsUpdate, { project, saveRole: "owner" })).code).toBe("refused");
+    const updated = await ada.value(TEAM_METHODS.projectsUpdate, { project, description: "a lighthouse", saveRole: "owner", restoreRole: "owner" });
+    expect(updated["project"]).toMatchObject({ description: "a lighthouse", saveRole: "owner", restoreRole: "owner" });
+    expect((await ada.call(TEAM_METHODS.projectsUpdate, { project, name: "beacon" })).code).toBe("bad-params");
+
+    await bob.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect((await bob.call(TEAM_METHODS.docSnapshot, { project })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.docRestore, { project, revision: "rev-1" })).code).toBe("refused");
+    expect(await ada.value(TEAM_METHODS.docSnapshot, { project })).toMatchObject({ revision: "rev-1" });
+  });
+
+  it("gives a project's webhooks to its owners and nobody else", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "editor" });
+    expect((await bob.call(TEAM_METHODS.projectsWebhooksCreate, { project, url: "https://hooks.example.com/x", events: ["version"] })).code).toBe("refused");
+    const made = await ada.value(TEAM_METHODS.projectsWebhooksCreate, { project, url: "https://hooks.example.com/x", events: ["version"], format: "discord" });
+    const id = (made["webhook"] as { id: string; project?: string }).id;
+    expect(made["webhook"]).toMatchObject({ project });
+    expect(typeof made["secret"]).toBe("string");
+    expect((await ada.value(TEAM_METHODS.projectsWebhooksList, { project }))["webhooks"]).toHaveLength(1);
+    expect((await bob.call(TEAM_METHODS.projectsWebhooksDelete, { webhook: id })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.projectsWebhooksList, { project })).code).toBe("refused");
+    await ada.value(TEAM_METHODS.projectsWebhooksDelete, { webhook: id });
+    expect((await ada.value(TEAM_METHODS.projectsWebhooksList, { project }))["webhooks"]).toHaveLength(0);
+  });
+
+  it("keeps making projects to the operators when the server says so", async () => {
+    const { bob, team } = await withTwo();
+    setProjectCreators(team.database, "admins");
+    expect((await bob.call(TEAM_METHODS.projectsCreate, { name: "skiff" })).code).toBe("refused");
+    expect((await bob.value(TEAM_METHODS.projectsList))["mayCreate"]).toBe(false);
+  });
+
+  it("lets the accounts an operator named make projects when the server keeps it to them", async () => {
+    const { ada, bob, team } = await withTwo();
+    await account(team.database, "root", { groups: [ADMIN_ROLE] });
+    const root = await team.connect(team.tokenFor("root"));
+    setProjectCreators(team.database, "creators");
+    expect((await bob.call(TEAM_METHODS.projectsCreate, { name: "skiff" })).code).toBe("refused");
+
+    // Only an operator hands the permission out.
+    expect((await ada.call(TEAM_METHODS.adminUsersSetCreator, { username: "bob", creator: true })).code).toBe("refused");
+    const granted = await root.value(TEAM_METHODS.adminUsersSetCreator, { username: "bob", creator: true });
+    expect((granted["user"] as { groups: string[] }).groups).toContain("project-creator");
+    expect((await bob.value(TEAM_METHODS.projectsList))["mayCreate"]).toBe(true);
+    // Past the gate: this harness has no repository to make it in, which is a different answer.
+    expect((await bob.call(TEAM_METHODS.projectsCreate, { name: "skiff" })).code).toBe("unavailable");
+    expect((await ada.call(TEAM_METHODS.projectsCreate, { name: "dinghy" })).code).toBe("refused");
+
+    await root.value(TEAM_METHODS.adminUsersSetCreator, { username: "bob", creator: false });
+    expect((await bob.call(TEAM_METHODS.projectsCreate, { name: "raft" })).code).toBe("refused");
+  });
+
+  it("keeps removing projects to the operators when the server says so", async () => {
+    const { ada, project, team } = await withTwo();
+    await account(team.database, "root", { groups: [ADMIN_ROLE] });
+    const root = await team.connect(team.tokenFor("root"));
+    setProjectDeleters(team.database, "admins");
+    const refused = await ada.call(TEAM_METHODS.projectsForget, { project });
+    expect(refused.code).toBe("refused");
+    expect(refused.message).toMatch(/operators/);
+    expect(await root.value(TEAM_METHODS.projectsForget, { project })).toEqual({});
+  });
+
+  it("tells an operator how each project's log and versions stand", async () => {
+    const { ada, bob, project, team } = await withDocuments();
+    await account(team.database, "root", { groups: [ADMIN_ROLE] });
+    const root = await team.connect(team.tokenFor("root"));
+    await ada.value(TEAM_METHODS.docIntent, insertRow(project, "r1"));
+    expect((await bob.call(TEAM_METHODS.adminDocumentsStatus)).code).toBe("refused");
+    const status = await root.value(TEAM_METHODS.adminDocumentsStatus);
+    expect(status).toMatchObject({ held: true, retainDays: 30 });
+    expect((status["projects"] as unknown[])[0]).toMatchObject({ project, loaded: true, seq: 1, savedSeq: 0, logRows: 1, versions: 0 });
+  });
+});
+
+describe("how far away the server is", () => {
+  it("answers server.ping at once with its clock, echoing what the caller sent", async () => {
+    const { ada } = await withTwo();
+    const before = Date.now();
+    const answer = await ada.value(TEAM_METHODS.serverPing, { sent: 1234 });
+    expect(answer["sent"]).toBe(1234);
+    expect(answer["at"] as number).toBeGreaterThanOrEqual(before);
+    expect(Object.keys(await ada.value(TEAM_METHODS.serverPing))).toEqual(["at"]);
+    expect((await ada.call(TEAM_METHODS.serverPing, { sent: "soon" })).code).toBe("bad-params");
+  });
+});
+
+describe("permission templates and asking for access", () => {
+  it("lets an owner grant a member by template, and refuses one it does not know", async () => {
+    const { ada, project } = await withTwo();
+    const set = await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "writer" });
+    expect(set["member"]).toMatchObject({ username: "bob", role: "editor", areas: ["story", "characters"] });
+    // An editor template naming no areas widens a narrower list rather than keeping it.
+    const widened = await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "editor" });
+    expect((widened["member"] as { areas?: unknown }).areas).toBeUndefined();
+    expect((await ada.call(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "wizard" })).code).toBe("bad-params");
+    expect(
+      (await ada.call(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "viewer", role: "editor" })).code,
+    ).toBe("bad-params");
+  });
+
+  it("names every template's grant exactly once", () => {
+    for (const template of TEAM_PERMISSION_TEMPLATES) {
+      expect(teamTemplateOf(template.role, "areas" in template ? template.areas : undefined)?.id).toBe(template.id);
+    }
+    expect(teamTemplateOf("editor", ["story"])).toBeUndefined();
+    expect(teamTemplateOf("editor", [...TEAM_PROJECT_AREAS])?.id).toBe("editor");
+  });
+
+  it("gives others what project.default_access says, in new accounts and new projects", async () => {
+    const { project, team } = await withTwo();
+    setProjectAccess(team.database, "viewer");
+    await account(team.database, "vic");
+    const vic = requireUser(team.database, "vic").id;
+    expect(team.database.prepare("SELECT role FROM project_members WHERE project_id = ? AND user_id = ?").get(project, vic)).toEqual({ role: "viewer" });
+    setProjectAccess(team.database, "none");
+    await account(team.database, "nell");
+    const nell = requireUser(team.database, "nell").id;
+    expect(team.database.prepare("SELECT role FROM project_members WHERE user_id = ?").all(nell)).toEqual([]);
+    // A project made now starts with its maker alone.
+    team.database.prepare("DELETE FROM project_members WHERE project_id = ?").run(project);
+    seedProjectMembers(team.database, project, requireUser(team.database, "ada").id);
+    const roles = team.database.prepare("SELECT user_id, role FROM project_members WHERE project_id = ?").all(project);
+    expect(roles).toEqual([{ user_id: requireUser(team.database, "ada").id, role: "owner" }]);
+    expect(() => setProjectAccess(team.database, "everyone")).toThrow();
+  });
+
+  it("lets a newcomer find a project, ask to join it, and be let in by its owner", async () => {
+    const { ada, project, team } = await withTwo();
+    setProjectAccess(team.database, "none");
+    await account(team.database, "nora");
+    const nora = await team.connect(team.tokenFor("nora"));
+    await nora.send("subscribe", { topic: TOPIC_PROJECTS });
+    await ada.send("subscribe", { topic: `account:${requireUser(team.database, "ada").id}/notifications` });
+
+    const found = (await nora.value(TEAM_METHODS.projectsDiscover))["projects"] as { id: string; name: string }[];
+    expect(found).toEqual([{ id: project, name: "lighthouse" }]);
+    // A member is not offered what it is already in.
+    expect((await ada.value(TEAM_METHODS.projectsDiscover))["projects"]).toEqual([]);
+
+    const asked = await nora.value(TEAM_METHODS.accessRequestsCreate, { project, template: "translator", message: "I speak Japanese" });
+    expect(asked["request"]).toMatchObject({
+      kind: "project",
+      project,
+      projectName: "lighthouse",
+      requester: "nora",
+      role: "editor",
+      areas: ["localization"],
+      template: "translator",
+      status: "pending",
+    });
+    const id = (asked["request"] as { id: number }).id;
+    // Asking again replaces the first question rather than adding a second.
+    const again = await nora.value(TEAM_METHODS.accessRequestsCreate, { project, template: "writer" });
+    expect((again["request"] as { id: number }).id).toBe(id);
+
+    await ada.until(() => ada.events.some((event) => (event.payload as { kind?: string }).kind === "notification"));
+    const listed = await ada.value(TEAM_METHODS.accessRequestsList);
+    expect((listed["toDecide"] as { id: number; template: string }[]).map((r) => [r.id, r.template])).toEqual([[id, "writer"]]);
+    expect((await nora.value(TEAM_METHODS.accessRequestsList))["mine"]).toHaveLength(1);
+
+    // Bob is an editor, not an owner, and decides nothing.
+    const bob = await team.connect(team.tokenFor("bob"));
+    expect((await bob.value(TEAM_METHODS.accessRequestsList))["toDecide"]).toEqual([]);
+    expect((await bob.call(TEAM_METHODS.accessRequestsDecide, { id, approve: true })).code).toBe("not-found");
+
+    const decided = await ada.value(TEAM_METHODS.accessRequestsDecide, { id, approve: true, note: "welcome" });
+    expect(decided["request"]).toMatchObject({ status: "approved", decidedBy: "ada", note: "welcome", grantedRole: "editor", grantedAreas: ["story", "characters"] });
+    expect(editableAreas(team.database, project, requireUser(team.database, "nora"))).toEqual(["story", "characters"]);
+    expect((await ada.call(TEAM_METHODS.accessRequestsDecide, { id, approve: false })).code).toBe("conflict");
+
+    await nora.until(() => nora.events.some((event) => (event.payload as { kind?: string }).kind === "project-access-changed"));
+    expect(nora.events.map((event) => (event.payload as { kind: string }).kind)).toContain("access-request");
+    expect(((await nora.value(TEAM_METHODS.projectsList))["projects"] as unknown[]).length).toBe(1);
+    const notes = (await nora.value(TEAM_METHODS.notificationsList))["notifications"] as { kind: string; project?: string }[];
+    expect(notes[0]).toMatchObject({ kind: "access-decided", project });
+  });
+
+  it("lets an owner grant something other than what was asked, or say no", async () => {
+    const { ada, bob, project } = await withTwo();
+    await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", role: "viewer" });
+    const asked = await bob.value(TEAM_METHODS.accessRequestsCreate, { project, role: "owner" });
+    const id = (asked["request"] as { id: number }).id;
+    expect(asked["request"]).toMatchObject({ currentRole: "viewer", role: "owner" });
+    const decided = await ada.value(TEAM_METHODS.accessRequestsDecide, { id, approve: true, template: "reviewer" });
+    expect(decided["request"]).toMatchObject({ status: "approved", grantedRole: "reviewer" });
+
+    const second = await bob.value(TEAM_METHODS.accessRequestsCreate, { project, role: "editor", areas: ["assets"] });
+    const denied = await ada.value(TEAM_METHODS.accessRequestsDecide, { id: (second["request"] as { id: number }).id, approve: false, note: "not now" });
+    expect(denied["request"]).toMatchObject({ status: "denied", note: "not now" });
+    expect((await bob.value(TEAM_METHODS.projectsMembersList, { project }))["role"]).toBe("reviewer");
+  });
+
+  it("refuses asking for what one already has, and lets the asker withdraw", async () => {
+    const { ada, bob, project, team } = await withTwo();
+    expect((await ada.call(TEAM_METHODS.accessRequestsCreate, { project, role: "editor" })).code).toBe("conflict");
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { project, role: "reviewer" })).code).toBe("conflict");
+    await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", template: "writer" });
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { project, role: "editor", areas: ["story"] })).code).toBe("conflict");
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { project, role: "editor", areas: [] })).code).toBe("bad-params");
+    const asked = await bob.value(TEAM_METHODS.accessRequestsCreate, { project, role: "editor", areas: ["story", "ui"] });
+    const id = (asked["request"] as { id: number }).id;
+    expect((await ada.call(TEAM_METHODS.accessRequestsWithdraw, { id })).code).toBe("refused");
+    expect(await bob.value(TEAM_METHODS.accessRequestsWithdraw, { id })).toMatchObject({ request: { status: "withdrawn" } });
+    expect((await ada.value(TEAM_METHODS.accessRequestsList))["toDecide"]).toEqual([]);
+    expect((await ada.value(TEAM_METHODS.accessRequestsList, { all: true }))["toDecide"]).toHaveLength(1);
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { project: "nowhere", role: "viewer" })).code).toBe("not-found");
+    void team;
+  });
+
+  it("lets somebody ask the operators to make projects, where the server keeps it to the creators", async () => {
+    const { ada, bob, team } = await withTwo();
+    await account(team.database, "root", { groups: [ADMIN_ROLE] });
+    const root = await team.connect(team.tokenFor("root"));
+    // Everybody may already.
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { kind: "creator" })).code).toBe("conflict");
+    setProjectCreators(team.database, "admins");
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { kind: "creator" })).code).toBe("refused");
+    setProjectCreators(team.database, "creators");
+
+    const asked = await bob.value(TEAM_METHODS.accessRequestsCreate, { kind: "creator", message: "a side project" });
+    const id = (asked["request"] as { id: number }).id;
+    expect((await ada.value(TEAM_METHODS.accessRequestsList))["toDecide"]).toEqual([]);
+    expect((await ada.call(TEAM_METHODS.accessRequestsDecide, { id, approve: true })).code).toBe("not-found");
+    expect(((await root.value(TEAM_METHODS.accessRequestsList))["toDecide"] as unknown[]).length).toBe(1);
+    await root.value(TEAM_METHODS.accessRequestsDecide, { id, approve: true });
+    expect((await bob.value(TEAM_METHODS.projectsList))["mayCreate"]).toBe(true);
+    expect((await bob.call(TEAM_METHODS.accessRequestsCreate, { kind: "creator" })).code).toBe("conflict");
+  });
+});
+
+describe("account policies", () => {
+  it("fixes what a template says, keeps the account from changing it, and lets it go when cleared", async () => {
+    const { ada, bob } = await administered();
+
+    const saved = await ada.value(TEAM_METHODS.adminPoliciesSave, {
+      name: "contractors",
+      policy: { displayName: { value: "Contractor" }, digest: { value: "daily" }, apiTokens: "off", studioConfig: "read" },
+    });
+    const template = saved["template"] as { id: string; accounts: number };
+    expect(template.accounts).toBe(0);
+    await ada.value(TEAM_METHODS.adminUsersPolicySet, { username: "bob", template: template.id });
+
+    const view = await bob.value(TEAM_METHODS.accountPolicy);
+    expect(view["template"]).toEqual({ id: template.id, name: "contractors" });
+    expect((view["policy"] as Record<string, unknown>)["apiTokens"]).toBe("off");
+
+    // Written onto the account, then held there.
+    expect(((await bob.value(TEAM_METHODS.accountProfileGet))["profile"] as Record<string, unknown>)["displayName"]).toBe("Contractor");
+    expect((await bob.call(TEAM_METHODS.accountProfileUpdate, { displayName: "Bobby" })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountProfileUpdate, { displayName: "Contractor" })).code).toBeUndefined();
+    expect((await bob.call(TEAM_METHODS.notificationsPrefsSet, { digest: "weekly" })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci" })).code).toBe("refused");
+    expect((await bob.value(TEAM_METHODS.accountStudioConfig))["access"]).toBe("read");
+
+    const listed = await ada.value(TEAM_METHODS.adminUsersList);
+    const row = (listed["users"] as { username: string; policy?: { templateName?: string } }[]).find((user) => user.username === "bob");
+    expect(row?.policy?.templateName).toBe("contractors");
+
+    // Deleting the template leaves bob with its settings as his own.
+    await ada.value(TEAM_METHODS.adminPoliciesDelete, { id: template.id });
+    const after = await ada.value(TEAM_METHODS.adminUsersPolicy, { username: "bob" });
+    expect(after["template"]).toBeUndefined();
+    expect(after["custom"]).toBe(true);
+    expect((after["policy"] as Record<string, unknown>)["apiTokens"]).toBe("off");
+
+    await ada.value(TEAM_METHODS.adminUsersPolicySet, { username: "bob", clear: true });
+    expect((await bob.call(TEAM_METHODS.accountProfileUpdate, { displayName: "Bobby" })).code).toBeUndefined();
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci" })).code).toBeUndefined();
+  });
+
+  it("caps an API token's lifetime and its reach, and refuses a policy it cannot read", async () => {
+    const { ada, bob } = await administered();
+    await ada.value(TEAM_METHODS.adminUsersPolicySet, { usernames: ["bob"], policy: { apiTokens: "read", apiTokenMaxDays: 30 } });
+
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci", write: true })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci", expiresInDays: 60 })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.accountTokensCreate, { name: "ci", expiresInDays: 30 })).code).toBeUndefined();
+
+    expect((await ada.call(TEAM_METHODS.adminUsersPolicySet, { username: "bob", policy: { apiTokens: "sometimes" } })).code).toBe("bad-params");
+    expect((await ada.call(TEAM_METHODS.adminPoliciesSave, { name: "", policy: {} })).code).toBe("bad-params");
+    await ada.value(TEAM_METHODS.adminPoliciesSave, { name: "same", policy: {} });
+    expect((await ada.call(TEAM_METHODS.adminPoliciesSave, { name: "same", policy: {} })).code).toBe("bad-params");
+  });
+});
+
+describe("presence and live rooms stay inside their project", () => {
+  /** ada's project, bob in it as an editor, and nora with an account and no role in it. */
+  async function withOutsider(): Promise<{ team: Harness; project: string; ada: Client; bob: Client; nora: Client }> {
+    const { team, project, ada, bob } = await withTwo();
+    const noraId = await account(team.database, "nora");
+    removeProjectMember(team.database, project, noraId);
+    return { team, project, ada, bob, nora: await team.connect(team.tokenFor("nora")) };
+  }
+
+  it("lists nobody on a project the caller cannot see, scoped or not", async () => {
+    const { project, ada, nora } = await withOutsider();
+    await ada.value(TEAM_METHODS.clientsAnnounce, { ...announcement("nomen", project), editing: "story-1" });
+    await nora.value(TEAM_METHODS.clientsAnnounce, announcement("the-imac"));
+
+    expect((await nora.value(TEAM_METHODS.clientsList, { project }))["clients"]).toEqual([]);
+    // Unscoped, nora still sees who is connected without a project - herself -
+    // and nothing of who has ada's project open or what they are editing.
+    const everyone = (await nora.value(TEAM_METHODS.clientsList, {}))["clients"] as { id: string }[];
+    expect(everyone.map((each) => each.id)).toEqual(["the-imac"]);
+    expect(((await ada.value(TEAM_METHODS.clientsList, {}))["clients"] as unknown[]).length).toBe(2);
+  });
+
+  it("will not let somebody outside the project listen to a room in it", async () => {
+    const { project, ada, nora } = await withOutsider();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1", rule: "code" });
+    const session = (opened["session"] as { id: string }).id;
+
+    // The four digits are enough to learn the room's id, and that is all they are enough for.
+    const found = await nora.value(TEAM_METHODS.liveByCode, { code: opened["code"] });
+    expect((found["session"] as { id: string }).id).toBe(session);
+    expect((await nora.send("subscribe", { topic: `live:${session}` })).code).toBe("not-found");
+  });
+
+  it("takes a removed member out of the room's topic and out of the room", async () => {
+    const { team, project, ada, bob } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("the-imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
+    const session = (opened["session"] as { id: string }).id;
+    await bob.value(TEAM_METHODS.liveJoin, { session });
+    expect((await bob.send("subscribe", { topic: `live:${session}` })).code).toBeUndefined();
+
+    await ada.value(TEAM_METHODS.projectsMembersRemove, { project, username: "bob" });
+    await bob.until(() =>
+      bob.events.some(
+        (event) => (event.payload as { kind?: string; topic?: string }).kind === "subscription-withdrawn" &&
+          (event.payload as { topic?: string }).topic === `live:${session}`,
+      ),
+    );
+    const room = (await ada.value(TEAM_METHODS.liveList, { project }))["sessions"] as {
+      members: { instance: string }[];
+    }[];
+    expect(room[0]?.members.map((member) => member.instance)).toEqual(["nomen"]);
+    expect(((await ada.value(TEAM_METHODS.clientsList, { project }))["clients"] as unknown[]).length).toBe(1);
+    void team;
+  });
+});
+
+describe("a viewer watches a live room and does not take part in it", () => {
+  /** ada's room on her project, open to walk in, with bob announced on it as a viewer. */
+  async function withViewer(): Promise<{ team: Harness; project: string; session: string; ada: Client; bob: Client }> {
+    const { team, project, ada, bob } = await withTwo();
+    setProjectMember(team.database, { projectId: project, userId: requireUser(team.database, "bob").id, role: "viewer" });
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("the-imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
+    return { team, project, session: (opened["session"] as { id: string }).id, ada, bob };
+  }
+
+  it("refuses a viewer opening, joining, asking into or speaking in a room", async () => {
+    const { project, session, bob } = await withViewer();
+    expect((await bob.call(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.liveJoin, { session })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.liveRequestJoin, { session })).code).toBe("refused");
+    expect((await bob.call(TEAM_METHODS.liveSay, { session, payload: { op: "set" } })).code).toBe("refused");
+  });
+
+  it("still lets a viewer see the room and listen to it", async () => {
+    const { project, session, bob } = await withViewer();
+    const listed = (await bob.value(TEAM_METHODS.liveList, { project }))["sessions"] as { id: string }[];
+    expect(listed.map((one) => one.id)).toEqual([session]);
+    expect((await bob.send("subscribe", { topic: `live:${session}` })).code).toBeUndefined();
+  });
+
+  it("takes a member made a viewer out of the room it is in", async () => {
+    const { project, ada, bob } = await withTwo();
+    await ada.value(TEAM_METHODS.clientsAnnounce, announcement("nomen", project));
+    await bob.value(TEAM_METHODS.clientsAnnounce, announcement("the-imac", project));
+    const opened = await ada.value(TEAM_METHODS.liveOpen, { project, revision: "rev-1", story: "story-1" });
+    const session = (opened["session"] as { id: string }).id;
+    await bob.value(TEAM_METHODS.liveJoin, { session });
+
+    await ada.value(TEAM_METHODS.projectsMembersSet, { project, username: "bob", role: "viewer" });
+    const members = async () =>
+      (((await ada.value(TEAM_METHODS.liveList, { project }))["sessions"] as { members: { instance: string }[] }[])[0]?.members ?? [])
+        .map((member) => member.instance);
+    expect(await members()).toEqual(["nomen"]);
+    expect((await bob.call(TEAM_METHODS.liveSay, { session, payload: null })).code).toBe("refused");
+    // Still on the project, as a viewer is: the instance stays where the room went.
+    expect(((await ada.value(TEAM_METHODS.clientsList, { project }))["clients"] as unknown[]).length).toBe(2);
+  });
+});
+
+describe("an operator taking an account's access away ends what it has open", () => {
+  it("says goodbye to a disabled account at once, not at its next call", async () => {
+    const { ada, bob } = await administered();
+    await ada.value(TEAM_METHODS.adminUsersDisable, { username: "bob" });
+    await bob.until(() => bob.byes.length > 0);
+    expect(bob.byes[0]?.code).toBe("unauthenticated");
+  });
+
+  it("says goodbye to an account whose tokens were revoked", async () => {
+    const { ada, bob } = await administered();
+    await ada.value(TEAM_METHODS.adminUsersRevokeTokens, { username: "bob" });
+    await bob.until(() => bob.byes.length > 0);
+    expect(bob.byes[0]?.code).toBe("unauthenticated");
+  });
+
+  it("takes the admin topics back from an operator who is one no longer", async () => {
+    const team = await harness();
+    await account(team.database, "ada", { groups: [ADMIN_ROLE] });
+    await account(team.database, "cy", { groups: [ADMIN_ROLE] });
+    const ada = await team.connect(team.tokenFor("ada"));
+    const cy = await team.connect(team.tokenFor("cy"));
+    expect((await cy.send("subscribe", { topic: "admin/users" })).code).toBeUndefined();
+
+    await ada.value(TEAM_METHODS.adminUsersRevokeAdmin, { username: "cy" });
+    await cy.until(() =>
+      cy.events.some(
+        (event) => (event.payload as { kind?: string; topic?: string }).kind === "subscription-withdrawn" &&
+          (event.payload as { topic?: string }).topic === "admin/users",
+      ),
+    );
+    expect(cy.byes).toEqual([]);
   });
 });

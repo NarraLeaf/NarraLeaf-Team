@@ -114,6 +114,23 @@ export interface LoreTreeChildPayload {
   address: { hash: LoreHex; context: LoreHex };
 }
 
+/** A revision a commit made. */
+export interface LoreCommitRevisionPayload {
+  revision: LoreHex;
+  revisionNumber: number;
+  parent?: LoreHex;
+}
+
+/** What a push did. */
+export interface LoreBranchPushPayload {
+  remote: string;
+  branchName: string;
+  localRevision?: LoreHex;
+  remoteRevision?: LoreHex;
+  /** The remote already had the local tip; nothing was sent. */
+  alreadyPushed: boolean;
+}
+
 export interface LoreEvent<T = unknown> {
   tag: number;
   data?: T;
@@ -143,6 +160,8 @@ const PAYLOAD_STRUCTS: Readonly<Record<number, LoreStructName>> = {
   [LoreTag.STORAGE_GET_ITEM_COMPLETE]: "LoreStorageGetItemCompleteEventData",
   [LoreTag.REVISION_TREE_LOADED]: "LoreRevisionTreeLoadedEventData",
   [LoreTag.REVISION_TREE_CHILD]: "LoreRevisionTreeChildEventData",
+  [LoreTag.REVISION_COMMIT_REVISION]: "LoreRevisionCommitRevisionEventData",
+  [LoreTag.BRANCH_PUSH]: "LoreBranchPushEventData",
 };
 
 /**
@@ -289,6 +308,27 @@ function readerTable(library: LoreLibrary): Map<number, Reader> {
         hash: decodeHash(nested(address, "hash")),
         context: decodeHash(nested(address, "context")),
       },
+    };
+  });
+
+  table.set(LoreTag.REVISION_COMMIT_REVISION, (raw): LoreCommitRevisionPayload => {
+    const parent = decodeOptionalHash(nested(raw, "parent"));
+    return {
+      revision: decodeHash(nested(raw, "revision")),
+      revisionNumber: decodeCount(raw["revisionNumber"]),
+      ...(parent === undefined ? {} : { parent }),
+    };
+  });
+
+  table.set(LoreTag.BRANCH_PUSH, (raw): LoreBranchPushPayload => {
+    const local = decodeOptionalHash(nested(raw, "localRevision"));
+    const remote = decodeOptionalHash(nested(raw, "remoteRevision"));
+    return {
+      remote: decodeString(nested(raw, "remote")),
+      branchName: decodeString(nested(raw, "branchName")),
+      ...(local === undefined ? {} : { localRevision: local }),
+      ...(remote === undefined ? {} : { remoteRevision: remote }),
+      alreadyPushed: decodeBool(raw["flagAlreadyPushed"]),
     };
   });
 

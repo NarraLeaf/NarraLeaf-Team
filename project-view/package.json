@@ -1,0 +1,11 @@
+{
+  "name": "@narraleaf/project-view",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read-only readers for NarraLeaf Studio project files (stories, characters, assets, UI blueprints), for the Team web console",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

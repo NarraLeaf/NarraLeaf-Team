@@ -23,7 +23,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { TEAM_PROTOCOL_VERSION } from "@narraleaf/team-protocol";
 
-import { storedPublishLineage, storedServerName, type PublishLineageRule } from "./settings.js";
+import { storedBrand, storedPublishLineage, storedServerName, type PublishLineageRule } from "./settings.js";
 
 /** The path this document is served at, and the only path the HTTP/1.1 side answers. */
 export const DISCOVERY_PATH = "/.well-known/nlteam";
@@ -117,6 +117,19 @@ export interface DiscoveryDocument {
     /** What to do with a repository this server already holds. See `settings.ts`. */
     readonly publishLineage: PublishLineageRule;
   };
+  /**
+   * Where Studio signs in through the browser, present when `oauth` is among the
+   * capabilities. Absolute addresses on the auth endpoint, in the names RFC 8414
+   * gives them, and the client id Studio is known by.
+   */
+  /** How the team looks, where an operator chose: an accent colour and a logo. Studio and the console draw them. */
+  readonly brand?: { readonly accent?: string; readonly logoUrl?: string };
+  readonly oauth?: {
+    readonly clientId: string;
+    readonly authorizationEndpoint: string;
+    readonly tokenEndpoint: string;
+    readonly deviceAuthorizationEndpoint: string;
+  };
 }
 
 /**
@@ -164,6 +177,33 @@ export function discoveryDocument(source: DiscoverySource): DiscoveryDocument {
     capabilities: source.capabilities(),
     authority: source.authority,
     version: source.version,
+    ...oauthOf(source),
+    ...brandOf(source),
+  };
+}
+
+function brandOf(source: DiscoverySource): Pick<DiscoveryDocument, "brand"> {
+  const brand = storedBrand(source.database);
+  if (brand.accent === undefined && brand.logo === undefined) return {};
+  return {
+    brand: {
+      ...(brand.accent === undefined ? {} : { accent: brand.accent }),
+      ...(brand.logo === undefined ? {} : { logoUrl: `${source.auth.url}/api/team/v1/brand/logo/${brand.logo}` }),
+    },
+  };
+}
+
+function oauthOf(source: DiscoverySource): Pick<DiscoveryDocument, "oauth"> {
+  if (!source.capabilities().includes("oauth")) {
+    return {};
+  }
+  return {
+    oauth: {
+      clientId: "narraleaf-studio",
+      authorizationEndpoint: `${source.auth.url}/oauth/authorize`,
+      tokenEndpoint: `${source.auth.url}/oauth/token`,
+      deviceAuthorizationEndpoint: `${source.auth.url}/oauth/device`,
+    },
   };
 }
 
