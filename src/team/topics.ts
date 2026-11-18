@@ -99,6 +99,12 @@ export function projectOfTopic(topic: string): string | undefined {
   return separator === -1 ? rest : rest.slice(0, separator);
 }
 
+/** The project whose documents `topic` carries (`project:{id}/doc`), or undefined for any other topic. */
+export function docTopicProject(topic: string): string | undefined {
+  const project = projectOfTopic(topic);
+  return project !== undefined && topic === `${PROJECT_PREFIX}${project}/doc` ? project : undefined;
+}
+
 /** The live session a `live:{session}` topic is about, or undefined for any other topic. */
 export function liveSessionOfTopic(topic: string): string | undefined {
   return topic.startsWith(LIVE_PREFIX) ? topic.slice(LIVE_PREFIX.length) : undefined;
