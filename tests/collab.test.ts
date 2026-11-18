@@ -25,7 +25,7 @@ import { identityLayout } from "../src/identity/layout.js";
 import { ScryptPasswordHasher, type ScryptParameters } from "../src/identity/passwords.js";
 import { createUser, requireUser } from "../src/identity/users.js";
 import { createWebSession, WEB_SESSION_COOKIE } from "../src/identity/websessions.js";
-import { removeProjectMember } from "../src/projects/members.js";
+import { removeProjectMember, setProjectMember } from "../src/projects/members.js";
 import { createProject, newProjectId } from "../src/projects/registry.js";
 import { judgeTopic } from "../src/team/topics.js";
 import type { TeamService } from "../src/team/service.js";
@@ -169,6 +169,29 @@ describe("to-dos", () => {
     expect(() =>
       createTodo(database, user("ada"), { title: "x", projectId: project.id, visibility: "project", assigneeId: user("nora").id }),
     ).toThrow(TodoRefusal);
+  });
+
+  it("keeps a viewer's to-dos private, while letting them move one given to them", async () => {
+    const { database, user, project } = await team();
+    setProjectMember(database, { projectId: project.id, userId: user("bob").id, role: "viewer" });
+    const shown = (fn: () => unknown) => {
+      try {
+        fn();
+      } catch (error) {
+        return (error as TodoRefusal).code;
+      }
+      return "allowed";
+    };
+    expect(shown(() => createTodo(database, user("bob"), { title: "x", projectId: project.id, visibility: "project" }))).toBe("refused");
+    expect(shown(() => createTodo(database, user("bob"), { title: "x", projectId: project.id, visibility: "project", assigneeId: user("ada").id }))).toBe("refused");
+
+    const note = createTodo(database, user("bob"), { title: "my note", projectId: project.id });
+    expect(note.visibility).toBe("private");
+    expect(shown(() => updateTodo(database, user("bob"), note.id, { visibility: "project" }))).toBe("refused");
+    expect(updateTodo(database, user("bob"), note.id, { status: "done" }).status).toBe("done");
+
+    const given = createTodo(database, user("ada"), { title: "look at it", projectId: project.id, visibility: "project", assigneeId: user("bob").id });
+    expect(updateTodo(database, user("bob"), given.id, { status: "done" }).status).toBe("done");
   });
 });
 

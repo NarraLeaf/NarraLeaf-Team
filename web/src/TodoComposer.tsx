@@ -460,16 +460,21 @@ export interface TodoComposerProps {
   readonly face: (member: Member, size: number) => ReactNode;
   /** Sends the parameters of todos.create; a refusal is shown as a toast. */
   readonly create: (fields: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Only private to-dos may be added — a viewer's, which the server refuses to show to the project — so a
+   * project to-do here is a plain task for the account alone, with no assignee, milestone or kind to choose.
+   */
+  readonly privateOnly?: boolean;
 }
 
-export function TodoComposer({ project, members, milestones, knownLabels, defaultKind = "task", face, create }: TodoComposerProps) {
+export function TodoComposer({ project, members, milestones, knownLabels, defaultKind = "task", face, create, privateOnly = false }: TodoComposerProps) {
   const [text, setText] = useState("");
   const [due, setDue] = useState<number | undefined>(undefined);
   const [priority, setPriority] = useState<TeamTodoPriority>(0);
   const [assignee, setAssignee] = useState<string | undefined>(undefined);
   const [labels, setLabels] = useState<readonly string[]>([]);
   const [milestone, setMilestone] = useState<string | undefined>(undefined);
-  const [kind, setKind] = useState<TeamTodoKind>(defaultKind);
+  const [chosenKind, setKind] = useState<TeamTodoKind>(defaultKind);
   const [locale, setLocale] = useState("");
   const [onlyMe, setOnlyMe] = useState(false);
   const [smart, setSmart] = useState(smartOn);
@@ -496,7 +501,9 @@ export function TodoComposer({ project, members, milestones, knownLabels, defaul
 
   useEffect(() => setKind(defaultKind), [defaultKind]);
 
-  const inProject = project !== undefined;
+  // What a project to-do may carry beyond a personal one: an assignee, a milestone, a kind, the project seeing it.
+  const inProject = project !== undefined && !privateOnly;
+  const kind: TeamTodoKind = privateOnly ? "task" : chosenKind;
   const needsLocale = kind === "translation" || kind === "voice";
   // Somebody else's work, or an asset, translation or voice request, is for the project to see.
   const forcedShared = kind !== "task" || assignee !== undefined;
@@ -648,7 +655,7 @@ export function TodoComposer({ project, members, milestones, knownLabels, defaul
       localeInput.current?.focus();
       return;
     }
-    const shared = forcedShared || picked.assignee !== undefined || !onlyMe;
+    const shared = !privateOnly && (forcedShared || picked.assignee !== undefined || !onlyMe);
     const fields: Record<string, unknown> = {
       title,
       ...(picked.due === undefined ? {} : { dueAt: picked.due }),
@@ -745,6 +752,12 @@ export function TodoComposer({ project, members, milestones, knownLabels, defaul
   if (inProject && !forcedShared && onlyMe) {
     chips.push(
       <Chip key="private" icon={<Icon name="lock" size={13} />} onRemove={() => setOnlyMe(false)}>
+        {t("todoOnlyMe")}
+      </Chip>,
+    );
+  } else if (privateOnly && project !== undefined && (focused || text !== "")) {
+    chips.push(
+      <Chip key="private" icon={<Icon name="lock" size={13} />}>
         {t("todoOnlyMe")}
       </Chip>,
     );
@@ -878,14 +891,17 @@ export function labelHue(name: string): number {
   return hash;
 }
 
-function Chip({ icon, className, hue, onRemove, children }: { icon?: ReactNode; className?: string; hue?: number; onRemove: () => void; children: ReactNode }) {
+/** A chip without `onRemove` is one the composer holds to, with nothing to take away. */
+function Chip({ icon, className, hue, onRemove, children }: { icon?: ReactNode; className?: string; hue?: number; onRemove?: () => void; children: ReactNode }) {
   return (
     <span className={`composer-chip${className === undefined ? "" : ` ${className}`}`} style={hue === undefined ? undefined : { ["--label-hue" as string]: String(hue) }}>
       {icon}
       <span className="composer-chip-text">{children}</span>
-      <button type="button" className="composer-chip-remove" aria-label={t("remove")} onClick={onRemove}>
-        <Icon name="close" size={12} />
-      </button>
+      {onRemove === undefined ? null : (
+        <button type="button" className="composer-chip-remove" aria-label={t("remove")} onClick={onRemove}>
+          <Icon name="close" size={12} />
+        </button>
+      )}
     </span>
   );
 }
