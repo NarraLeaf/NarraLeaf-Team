@@ -18,7 +18,7 @@ unpacked, so nothing is downloaded on first start.
 ```yaml
 services:
   team:
-    image: ghcr.io/narraleaf/team:0.1.0
+    image: ghcr.io/narraleaf/team:1.0.0
     restart: unless-stopped
     environment:
       NLTEAM_HOSTNAME: team.example.com
@@ -434,7 +434,7 @@ GET /.well-known/nlteam
   "data": { "url": "lore://team.example.com:41337" },
   "capabilities": ["session", "comments", "clients", "live", "overlay", "admin"],
   "authority": { "sha256": "3D:38:9F:E6:..." },
-  "version": "0.1.0"
+  "version": "1.0.0"
 }
 ```
 
@@ -574,7 +574,7 @@ nlteam status --server team.example.com:41402
 ```
 
 ```
-nlteam 0.1.0 under /srv/team
+nlteam 1.0.0 under /srv/team
 as of 2026-08-27T09:12:33.001Z, and an answer is kept for 10 seconds
 
 loreserver 0.8.6, answering

@@ -62,7 +62,7 @@ downloaded on first start. Write this `compose.yaml`, changing
 ```yaml
 services:
   team:
-    image: ghcr.io/narraleaf/team:0.1.0
+    image: ghcr.io/narraleaf/team:1.0.0
     restart: unless-stopped
     environment:
       NLTEAM_HOSTNAME: team.example.com
