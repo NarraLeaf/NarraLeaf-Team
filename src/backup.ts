@@ -15,7 +15,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { readdir, rename, rm, stat, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { Writable } from "node:stream";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -32,6 +32,8 @@ const MANIFEST = "nlteam-backup.json";
 /** Top-level names under the root a backup leaves out. */
 const LEFT_OUT = new Set([BACKUP_DIR, "cache", "logs", DATABASE_FILE, `${DATABASE_FILE}-wal`, `${DATABASE_FILE}-shm`, PID_FILE]);
 const BACKUP_NAME = /^nlteam-backup-\d{8}-\d{6}\.tar\.gz$/;
+/** Where `restore --force` moves what a root held, inside that root. */
+const ASIDE_PREFIX = "before-restore-";
 
 export interface BackupInfo {
   readonly name: string;
@@ -53,7 +55,7 @@ async function* walk(root: string, relative: string, top: boolean): AsyncGenerat
     return;
   }
   for (const name of names) {
-    if (top && LEFT_OUT.has(name)) continue;
+    if (top && (LEFT_OUT.has(name) || name.startsWith(ASIDE_PREFIX))) continue;
     if (name.endsWith(".lock") || name.endsWith(".part")) continue;
     const path = relative === "" ? name : `${relative}/${name}`;
     let info;
@@ -184,6 +186,9 @@ export async function runningServer(root: string): Promise<number | undefined> {
     return undefined;
   }
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  // Ourselves: a server stopped without removing its file, in a container where
+  // every process is pid 1 and this one, run to restore, has inherited its number.
+  if (pid === process.pid) return undefined;
   try {
     process.kill(pid, 0);
     return pid;
@@ -204,7 +209,13 @@ export type RestoreOutcome =
  *
  * Refused while a server runs there. A root with files in it is refused too,
  * unless `force`, in which case what was there is moved aside rather than
- * deleted, to `<root>.before-restore-<time>`.
+ * deleted, to `<root>/before-restore-<time>/`. Inside the root rather than
+ * beside it: in the container the root is a mounted volume, which cannot be
+ * renamed, under a parent the server's account cannot write. A backup taken
+ * afterwards leaves that directory out.
+ *
+ * The archive may be one of the root's own backups; it moves aside with the
+ * rest and is read from where it went.
  */
 export async function restoreBackup(archive: string, root: string, force: boolean, now = Date.now()): Promise<RestoreOutcome> {
   const target = resolve(root);
@@ -212,8 +223,9 @@ export async function restoreBackup(archive: string, root: string, force: boolea
   if (pid !== undefined) {
     return { kind: "refused", reason: `a server is running under ${target} (pid ${pid}); stop it first` };
   }
+  let source = resolve(archive);
   try {
-    await stat(archive);
+    await stat(source);
   } catch {
     return { kind: "refused", reason: `there is no file at ${archive}` };
   }
@@ -228,11 +240,19 @@ export async function restoreBackup(archive: string, root: string, force: boolea
     if (!force) {
       return { kind: "refused", reason: `${target} is not empty; pass --force to move what is there aside first` };
     }
-    movedAside = `${target}.before-restore-${stamp(now)}`;
-    await rename(target, movedAside);
+    const aside = `${ASIDE_PREFIX}${stamp(now)}`;
+    movedAside = join(target, aside);
+    await mkdir(movedAside, { mode: 0o700 });
+    for (const name of existing) {
+      await rename(join(target, name), join(movedAside, name));
+    }
+    const within = relative(target, source);
+    if (within !== "" && !within.startsWith("..") && !isAbsolute(within)) {
+      source = join(movedAside, within);
+    }
   }
   await mkdir(target, { recursive: true, mode: 0o700 });
-  const result = await extractTarGz(archive, target);
+  const result = await extractTarGz(source, target);
   try {
     const manifest = JSON.parse(await readFile(join(target, MANIFEST), "utf-8")) as { format?: string };
     if (manifest.format !== "nlteam-backup") throw new Error("not a backup");

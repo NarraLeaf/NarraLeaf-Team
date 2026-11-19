@@ -13,7 +13,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { parseArgs } from "../src/args.js";
-import { createBackup, exportProject, listBackups, pruneBackups, restoreBackup, writePidFile } from "../src/backup.js";
+import { createBackup, exportProject, listBackups, PID_FILE, pruneBackups, restoreBackup, writePidFile } from "../src/backup.js";
 import { recordBuild, storageRoom, storageView } from "../src/collab/builds.js";
 import { createApiToken, identifyApiToken, listApiTokens, revokeApiToken } from "../src/identity/apitokens.js";
 import { pageDecisions, recordDecision } from "../src/identity/audit.js";
@@ -265,9 +265,46 @@ describe("backups", () => {
 
     const again = await restoreBackup(archive, elsewhere, false);
     expect(again).toMatchObject({ kind: "refused" });
-    await writePidFile(elsewhere);
+    // Another live process, standing in for the server: restore ignores a pid
+    // file naming its own pid, which in a container is a stopped server's pid 1.
+    await writeFile(join(elsewhere, PID_FILE), `${process.ppid}\n`);
     const running = await restoreBackup(archive, elsewhere, true);
     expect(running.kind === "refused" && running.reason).toMatch(/running/);
+    await writePidFile(elsewhere);
+    const ourselves = await restoreBackup(archive, elsewhere, true);
+    expect(ourselves.kind).toBe("restored");
+  });
+
+  it("restores a root from one of its own backups, moving what was there inside it", async () => {
+    const { root, database } = await team();
+    await mkdir(join(root, "repos", "harbour"), { recursive: true });
+    await writeFile(join(root, "repos", "harbour", "HEAD"), "ref: main\n");
+    const made = await createBackup(root, database, 1_000);
+    databases.splice(databases.indexOf(database), 1);
+    database.close();
+    await writeFile(join(root, "repos", "harbour", "HEAD"), "ref: broken\n");
+
+    const archive = join(root, "backups", made.name);
+    expect(await restoreBackup(archive, root, false)).toMatchObject({ kind: "refused" });
+    const done = await restoreBackup(archive, root, true, 5_000);
+    expect(done.kind).toBe("restored");
+    const aside = done.kind === "restored" ? done.movedAside : undefined;
+    expect(aside).toBe(join(root, "before-restore-19700101-000005"));
+    expect(await readFile(join(root, "repos", "harbour", "HEAD"), "utf-8")).toBe("ref: main\n");
+    expect(await readFile(join(aside!, "repos", "harbour", "HEAD"), "utf-8")).toBe("ref: broken\n");
+    expect(await readFile(join(aside!, "backups", made.name))).toBeTruthy();
+
+    const reopened = await openMigratedDatabase(identityLayout(root).databasePath);
+    databases.push(reopened);
+    const next = await createBackup(root, reopened, 9_000);
+    const names: string[] = [];
+    const sink = createGunzip();
+    sink.on("data", (chunk: Buffer) => names.push(chunk.toString("latin1")));
+    const ended = new Promise((resolve) => sink.on("end", resolve));
+    sink.end(await readFile(join(root, "backups", next.name)));
+    await ended;
+    expect(names.join("")).toContain("repos/harbour/HEAD");
+    expect(names.join("")).not.toContain("before-restore-");
   });
 
   it("exports a project without secrets", async () => {
