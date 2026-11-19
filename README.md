@@ -6,7 +6,7 @@
 
 # NarraLeaf-Team
 
-Current release: `1.0.0`.
+Current release: `1.0.5`.
 
 NarraLeaf Team is a self-hosted project server for teams working in NarraLeaf
 Studio. One organization runs one server, on its own network or in a container
@@ -73,7 +73,7 @@ downloaded on first start. Write this `compose.yaml`, changing
 ```yaml
 services:
   team:
-    image: ghcr.io/narraleaf/team:1.0.0
+    image: ghcr.io/narraleaf/team:1.0.5
     restart: unless-stopped
     environment:
       NLTEAM_HOSTNAME: team.example.com
@@ -94,7 +94,9 @@ docker compose exec team nlteam status
 ```
 
 `init` runs once. It creates the first account, puts it in the `admin` group, and
-is refused from the moment the server has an account. `admin-password` is a file
+is refused from the moment the server has an account. The same account can be
+made in a browser instead: while a server has no accounts, `up` prints a
+`/console/setup` address and a setup code for it. `admin-password` is a file
 holding that password and nothing else, ten characters or more; delete it
 afterwards. Team reads it from standard input because a password given as an
 argument stands in the process list and in the shell history.
@@ -177,8 +179,9 @@ printf '%s' 'their password' | nlteam user create bob --root /srv/team --role au
 nlteam project create harbour --root /srv/team --as ada
 ```
 
-Each project has members with a role (owner, editor, reviewer, viewer); new
-accounts and projects start out reaching everything, as before. An account that should
+Each project has members with a role (owner, editor, reviewer, viewer). By
+default every account is an editor of every project it was not put in by hand;
+`project.default_access` narrows that to viewer or to nothing. An account that should
 never hold a password is given a token instead, with `nlteam token mint`; Studio
 takes one in place of a username under **Use an access token instead**.
 
@@ -204,6 +207,8 @@ takes one in place of a username under **Use an access token instead**.
 | `nlteam audit` | Read the record of repository access decisions |
 | `nlteam key list \| rotate` | Show the signing keys, or sign with a new one |
 | `nlteam key retire <kid>` | Stop publishing one, refusing every token it signed |
+| `nlteam backup` | Write a backup of the storage root into its `backups/` directory |
+| `nlteam restore <file>` | Put a backup back, with the server stopped |
 
 Most commands take `--root <path>`, the directory the server keeps its files in,
 which requires a terminal on the machine it runs on. `login` is the alternative:
@@ -221,7 +226,7 @@ expect instead, for a deployment that trusts nothing it was not told to. Every
 command above then takes `--server` in place of `--root` and prints the same
 output either way.
 
-`up`, `init` and `trust` take `--root` only. They are what a server is recovered
+`up`, `init`, `trust`, `backup` and `restore` take `--root` only. They are what a server is recovered
 with, and a recovery path that ran over the thing being recovered would be
 unusable at the moment it is needed. `trust` is for a machine administering this
 server from the command line; Studio needs none of it, because a fingerprint
@@ -236,7 +241,8 @@ The same checkout as [Without a container](#without-a-container).
 
 | Command | Description |
 | --- | --- |
-| `npm run build` | Bundle the executable into `dist/` |
+| `npm run build` | Bundle the executable and the web console into `dist/` |
+| `npm run build:console` | Build the web console alone, into `dist/console` |
 | `npm run dev` | Rebuild whenever a source file changes |
 | `npm run lint` | Run the linter |
 | `npm run typecheck` | Check types without emitting anything |
@@ -250,10 +256,11 @@ of a change; [Internals](docs/internals.md) covers how the parts work.
 
 ## Status
 
-Team supervises the version-control server, issues identity, holds the projects,
-answers the permission question behind every repository access, and serves the
-protocol Studio uses to list and create projects, to comment, and to administer
-the server. Real-time collaboration is in development. Upgrading between pinned
+Team supervises the version-control server, issues identity, holds a team
+project's current documents and keeps every open Studio window in step with
+them, answers the permission question behind every repository access, and
+serves the protocol Studio and the web console use for projects, collaboration
+and administration. The web console is a beta. Upgrading between pinned
 versions of the version-control server is not implemented.
 
 ## License

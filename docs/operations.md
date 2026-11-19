@@ -18,7 +18,7 @@ unpacked, so nothing is downloaded on first start.
 ```yaml
 services:
   team:
-    image: ghcr.io/narraleaf/team:1.0.0
+    image: ghcr.io/narraleaf/team:1.0.5
     restart: unless-stopped
     environment:
       NLTEAM_HOSTNAME: team.example.com
@@ -48,7 +48,13 @@ given as an argument appears in the process list and in the shell history.
 server: the address and the certificate fingerprint. The address is a host and a
 port, `nlteam://team.example.com:54080`; `status` writes it as an `https://` URL
 on its `sign in` line, and Studio does not take that spelling. Accounts, projects
-and administration are managed from NarraLeaf Studio.
+and administration are managed from NarraLeaf Studio or from the
+[web console](#the-web-console).
+
+The first account can also be made in a browser. While a server has no
+accounts, `up` prints a `/console/setup` address and a setup code beside the
+`init` command; `docker compose logs team` shows it. The code is new on every
+start and stops working once an account exists.
 
 `NLTEAM_HOSTNAME` is the value that has to be correct. It goes into the
 certificate, into the audience of every token, and into the address the discovery
@@ -77,9 +83,12 @@ check are bound to the loopback inside the container.
 `NLTEAM_HOSTNAME`, `--data-port` is `NLTEAM_DATA_PORT`, and so on. The storage
 root and the binary cache are already set in the image.
 
-**Upgrading.** `docker compose pull && docker compose up -d`. The database
-migrates on start and the certificate authority is kept, so no machine is asked
-to trust anything again.
+**Upgrading.** Change the tag in `compose.yaml`, then
+`docker compose pull && docker compose up -d`. The database migrates on start
+and the certificate authority is kept, so no machine is asked to trust anything
+again. A server coming from 1.0.0 moves its sign-in port from 41402 to 54080:
+change the published port with the tag and give authors the new address, or set
+`NLTEAM_AUTH_TLS_PORT: "41402"` and publish `41402:41402` to stay where it was.
 
 **Image tags.** A release publishes `X.Y.Z` and moves `latest`. `develop`
 follows the integration branch. A deployment names the version it means: both
@@ -138,7 +147,12 @@ default, and everything Team writes goes underneath it:
 <root>/keys/                the RSA private keys tokens are signed with
 <root>/tls/                 the certificate authority and the endpoint certificate
 <root>/credentials/         the session Team signs in to its own repositories with
+<root>/authority/owed/      asset files a team project has not yet put in a snapshot
+<root>/builds/              builds uploaded from Studio, one directory per project
+<root>/attachments/         files attached to threads, one directory per project
+<root>/backups/             what nlteam backup and the scheduled backups write
 <root>/cache/projects/      Team's own checkouts, disposable at any moment
+<root>/cache/authority/     the checkouts team project snapshots are committed from
 ```
 
 `<root>/keys/`, `<root>/tls/` and `<root>/team.db` are what to guard. Together
@@ -147,7 +161,9 @@ them, and the authority every machine that trusted this server believes. Key
 files are written `0600` where the platform supports it.
 
 Deleting `<root>/credentials/` costs one sign-in and nothing else.
-`<root>/cache/projects/` may be deleted at any time.
+`<root>/cache/` may be deleted while the server is stopped. `<root>/authority/owed/`
+may not: an asset file in it is the only copy the server has until the next
+snapshot.
 
 The binaries are kept outside the storage root, one copy per version per machine:
 
@@ -432,7 +448,7 @@ GET /.well-known/nlteam
   "data": { "url": "lore://team.example.com:41337" },
   "capabilities": ["session", "comments", "clients", "live", "overlay", "admin"],
   "authority": { "sha256": "3D:38:9F:E6:..." },
-  "version": "1.0.0"
+  "version": "1.0.5"
 }
 ```
 
@@ -516,11 +532,12 @@ refused on its next command.
 
 ### Commands that require the storage root
 
-`up`, `init` and `trust` take `--root` and nothing else.
+`up`, `init`, `trust`, `backup` and `restore` take `--root` and nothing else.
 
 They are the recovery path. `up` brings a server up. `init` creates the first
 account on a server that has none, and there is nobody to sign in as until it has
 run. `trust` prints the fingerprint a person compares before trusting anything.
+`backup` copies the root and `restore` puts a copy back; see [Backups](#backups).
 Each of them is what an operator reaches for when the protocol is not answering.
 They are guarded by access to the storage root and by nothing else.
 
@@ -572,7 +589,7 @@ nlteam status --server team.example.com:54080
 ```
 
 ```
-nlteam 1.0.0 under /srv/team
+nlteam 1.0.5 under /srv/team
 as of 2026-08-27T09:12:33.001Z, and an answer is kept for 10 seconds
 
 loreserver 0.8.6, answering
@@ -1001,6 +1018,54 @@ address this server advertises for work that has not moved.
 The row that comes back is a new row: today's date, and the account `--as` named
 as its creator. What an author opens is unchanged, because none of it was in the
 row.
+
+## Backups
+
+```sh
+nlteam backup --root /srv/team
+```
+
+`backup` writes `<root>/backups/nlteam-backup-<YYYYMMDD>-<HHMMSS>.tar.gz` and
+prints its path; the time is UTC. It can be taken while the server runs: the
+database is copied with `VACUUM INTO`, a consistent copy, and everything else
+under the root is copied file by file. `cache/`, `logs/` and `backups/`
+themselves are left out. A repository written during the backup may contribute
+half of a push, which is an object nothing points to yet.
+
+Two server policies, set in the web console's back office, govern the rest:
+`backup.every_hours` (default `0`, off) has the running server take one on that
+interval, and `backup.keep` (default `7`) is how many are kept. Older ones are
+removed after each backup, scheduled or by hand. The console's storage page takes
+and lists backups too; there is no `nlteam` command for the policies. A backup under `<root>/backups/` is on the same disk as
+what it protects, so copy it somewhere else.
+
+### Restoring
+
+```sh
+nlteam restore /srv/team/backups/nlteam-backup-20261119-030000.tar.gz --root /srv/team --force
+```
+
+`restore` is refused while a server runs under the root. Into an empty or
+missing directory it unpacks the archive; into one that holds anything it is
+refused unless `--force` is given, and then what was there is moved, not deleted,
+into `<root>/before-restore-<YYYYMMDD>-<HHMMSS>/` first. The archive may be one of
+the root's own backups: it moves aside with the rest and is read from there.
+Once the restored server is confirmed, delete that directory; later backups
+leave it out either way. Start the server with `up` afterwards.
+
+In a container, stop the service and run `restore` in a one-off container on the
+same volume. The image's entry point is `nlteam`, so the command starts at
+`restore`:
+
+```sh
+docker compose stop team
+docker compose run --rm team restore /var/lib/nlteam/backups/nlteam-backup-20261119-030000.tar.gz --force
+docker compose start team
+```
+
+A backup kept outside the volume is mounted for the one run, for example with
+`-v "$PWD/nlteam-backup-20261119-030000.tar.gz:/tmp/backup.tar.gz:ro"` and
+`restore /tmp/backup.tar.gz`.
 
 ## Administrators
 

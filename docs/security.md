@@ -30,7 +30,7 @@ its own. What it adds is a check, and when that check is made is what this serve
 claims about withdrawing access.
 
 **The rescue plane** is off the protocol and is guarded by access to the storage
-root. `up`, `init` and `trust` take `--root` and never `--server`. Whoever holds
+root. `up`, `init`, `trust`, `backup` and `restore` take `--root` and never `--server`. Whoever holds
 that directory holds `<root>/keys/`, and whoever holds the signing keys can issue
 a token for any account on the server, and can create the account first with
 `nlteam user create --root`. The file modes below do not protect anything from

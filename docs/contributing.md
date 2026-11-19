@@ -167,7 +167,7 @@ does it. Then one question decides where it may live:
 - **Does the protocol have this verb?** If it does, the command works against a
   server with `--server` as well as a storage root with `--root`, and the two
   print the same thing. The CLI grows no verb the protocol lacks.
-- **Is it rescue?** `up`, `init` and `trust` take `--root` only. They are
+- **Is it rescue?** `up`, `init`, `trust`, `backup` and `restore` take `--root` only. They are
   reached by somebody holding the storage root, who holds the signing keys with
   it, and the protocol is not involved. That plane is guarded by filesystem
   permissions and by nothing else, on purpose.

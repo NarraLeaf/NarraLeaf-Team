@@ -13,15 +13,17 @@ more than one person works on the same project.
 
 Team keeps a team's projects, decides who may reach them, and carries the
 messages people exchange while they work. It is not a general backend, not a
-build service and not a chat system, and it does not read Studio's document
-formats.
+build service and not a chat system. It applies a team project's edits with
+Studio's own kernel and hands project files to the console's viewers as bytes,
+but it does not parse Studio's formats itself: no rule on the server depends on
+what a scene or a blueprint says.
 
 Team's responsibilities fall into four planes. Each has one protocol, one kind of
 listener, and one rule about who is trusted on it.
 
 ## The content plane
 
-The work itself, and for a team project Team is now where it lives.
+The work itself, and for a team project Team is where it lives.
 
 **A team project's current state is held by Team** (the `documents`
 capability). Every Studio that opens the project sends its edits to Team as
@@ -75,32 +77,39 @@ authority rather than by a second port. The methods are the `admin.*` family on
 that one session, and the authority behind them is read as each call arrives. An
 account taken out of the admin group is refused on its next call.
 
-The surface an operator uses is Studio, the same application authors run. The
-command line reaches this plane as a client of the same methods.
+The surfaces an operator uses are Studio, the same application authors run, and
+the web console. The command line reaches this plane as a client of the same
+methods.
 
 ## The rescue plane
 
 Not on the protocol. Whoever holds the server's storage root can bring the server
 up and reach the accounts and the settings underneath the protocol, and it is the
-plane a backup is taken from and restored onto. It works when the protocol does
+plane a backup is restored onto. (An operator can also take one over the
+protocol, from the console; putting one back is only ever done here.) It works when the protocol does
 not answer or nobody can sign in.
 
 It is guarded by access to the storage root and by nothing else.
 
 Which plane a command is on is decided by one option: `--server` puts it on the
-management plane, `--root` on the rescue plane. `up`, `init` and `trust` take
-`--root` only. The management plane will not take the last operator's
+management plane, `--root` on the rescue plane. `up`, `init`, `trust`,
+`backup` and `restore` take `--root` only. The management plane will not take the last operator's
 administration away or disable their account, and names the rescue command that
 will.
 
 ## Hosts
 
-There are two hosts, divided by who is asking.
+There are three hosts, divided by who is asking.
 
 **Studio** is the host for people. Authors reach the coordination and content
 planes through it, and operators reach the management plane through it. Studio
 holds one sealed token per server and never lets the renderer touch the network;
 every remote byte passes through its main process.
+
+**The web console** is the host for looking across projects, for review and for
+administration from a browser. It reads project content and writes threads,
+to-dos and settings, never a project's documents; see
+[The web console](#the-web-console).
 
 **The command line** is the host for programs and for recovery: the operations an
 operator wants without opening an application, an output a script can read, and
@@ -177,7 +186,7 @@ are lost on restart and rebuilt by whoever reconnects.
 This section records the decisions the web console is held to. The plan, with
 what was measured behind it, is [refactor-plan.zh.md](refactor-plan.zh.md).
 
-**A third host.** Studio edits, the command line scripts and rescues, and a
+**The third host.** Studio edits, the command line scripts and rescues, and a
 web console served by the server itself looks, comments and administers. The
 reason the web interface was removed earlier still holds against what it was —
 a second place to list and open projects — and does not hold against this one,
@@ -220,7 +229,7 @@ with the cookie; REST grows sign-in, OAuth, file reads and uploads, and no data
 methods.
 
 
-## The web console's viewers (0.2, P3)
+## The web console's viewers
 
 The console reads a project at any revision through the two file routes in
 docs/protocol.md (Project files), and interprets the bytes in the browser with
