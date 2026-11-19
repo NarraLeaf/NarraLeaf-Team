@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.5]
 
 ### _Changes_
 
@@ -21,6 +21,20 @@
   read it as offline. The key now sits in `<root>/credentials` beside the
   sessions. An operator who set `LORE_AUTH_PATH` or `LORE_AUTH_STORE` keeps
   their own.
+- **Restoring a backup works in a container, and from the root's own
+  backups.** `restore --force` renamed the storage root aside and recreated it,
+  which a mounted volume refuses and which lost an archive kept under that
+  root's `backups/`. It now moves what was there into
+  `<root>/before-restore-<time>/` inside the root, reads the archive from where
+  it went, and leaves those directories out of later backups. In a container,
+  restore with `docker compose run --rm team restore <file> --force` while the
+  server is stopped.
+
+### _Documentation_
+
+- The deployment guide covers backups and restoring, in Docker as well, the
+  browser setup page for the first account, the per-project default access,
+  the web console, and the port change on upgrade from 1.0.0.
 
 ## [1.0.0]
 
