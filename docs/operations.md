@@ -283,7 +283,9 @@ do to each. The version-control server refuses a token that arrives without it.
 ## The web console
 
 `nlteam up` serves a web console at `https://<host>:54080/console/`, on the same
-port and certificate as everything else. People sign in with the same account
+port and certificate as everything else. The port speaks only HTTPS; an `http://`
+address, which is what a browser assumes when no scheme is typed, is redirected to
+the same address over `https://`. People sign in with the same account
 and password they would give Studio; the browser keeps a session cookie for up
 to thirty days (seven unused), and `nlteam user disable` or
 `nlteam user revoke-tokens` ends it as it ends tokens.

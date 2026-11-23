@@ -20,7 +20,7 @@
  */
 import { X509Certificate } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Socket } from "node:net";
+import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { createSecureContext, type SecureContext } from "node:tls";
 import {
@@ -57,6 +57,109 @@ export interface GrpcCall {
 
 /** What a method does with a call: answer with one message, or fail. */
 export type GrpcMethod = (call: GrpcCall) => Buffer | Promise<Buffer>;
+
+/** The most of a plaintext request read before answering it, so a client cannot make it grow. */
+const PLAINTEXT_HEAD_LIMIT = 8192;
+
+/** How long a plaintext connection may take to send its request line and headers. */
+const PLAINTEXT_HEAD_TIMEOUT_MS = 10_000;
+
+/**
+ * Send one connection to the TLS server, or answer it as the plaintext request it is.
+ *
+ * A browser given `192.168.1.100:54080` with no scheme asks for `http://`, and a TLS listener
+ * that is sent an HTTP request line instead of a ClientHello can only drop the connection: the
+ * browser shows an empty response and says nothing about why. The first byte tells the two
+ * apart. A TLS record that opens a handshake starts with 0x16; every HTTP method starts with
+ * an ASCII letter. Anything else still goes to TLS, which fails it and says so as it always did.
+ *
+ * The byte is read and put back, so the TLS socket built over this one sees the whole stream:
+ * node feeds whatever the socket already buffered into the handshake before it reads on.
+ */
+function routeByFirstByte(socket: Socket, tlsServer: Http2SecureServer): void {
+  // Until a TLS socket owns it, a reset here has no other listener, and an unlistened `error`
+  // takes the process down.
+  socket.on("error", () => socket.destroy());
+  const onReadable = (): void => {
+    const first = socket.read(1) as Buffer | null;
+    if (first === null) {
+      socket.once("readable", onReadable);
+      return;
+    }
+    socket.unshift(first);
+    const byte = first[0]!;
+    const isLetter = (byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a);
+    if (isLetter) {
+      redirectToHttps(socket);
+    } else {
+      tlsServer.emit("connection", socket);
+    }
+  };
+  socket.once("readable", onReadable);
+}
+
+/** A Host header that can go into a Location as it is: a name or address, and a port. */
+const HOST_HEADER = /^[A-Za-z0-9.-]+(?::\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](?::\d{1,5})?$/;
+
+/** A request target that can go into a Location as it is. */
+const REQUEST_TARGET = /^\/[\x21-\x7e]*$/;
+
+/**
+ * Answer a plaintext HTTP request on the TLS port with a redirect to the same address over https.
+ *
+ * Read by hand rather than by node's HTTP server: all it needs is the request line and the Host
+ * header, it never reads a body, and it closes the connection once it has answered. The
+ * redirect is temporary (307), so nothing caches a port number as meaning https for ever.
+ */
+function redirectToHttps(socket: Socket): void {
+  let head = Buffer.alloc(0);
+  socket.setTimeout(PLAINTEXT_HEAD_TIMEOUT_MS, () => socket.destroy());
+  const onData = (chunk: Buffer): void => {
+    head = Buffer.concat([head, chunk]);
+    const end = head.indexOf("\r\n\r\n");
+    if (end === -1 && head.length < PLAINTEXT_HEAD_LIMIT) {
+      return;
+    }
+    socket.removeListener("data", onData);
+    socket.setTimeout(0);
+    const lines = head
+      .subarray(0, end === -1 ? head.length : end)
+      .toString("latin1")
+      .split("\r\n");
+    const target = lines[0]?.split(" ")[1] ?? "/";
+    const host = lines
+      .slice(1)
+      .find((line) => /^host:/i.test(line))
+      ?.slice("host:".length)
+      .trim();
+    socket.end(plaintextAnswer(host, target));
+  };
+  socket.on("data", onData);
+}
+
+/** The bytes of the answer to one plaintext request. */
+function plaintextAnswer(host: string | undefined, target: string): string {
+  if (host === undefined || !HOST_HEADER.test(host)) {
+    const body = "This port speaks HTTPS only. Open it with an https:// address.\n";
+    return (
+      "HTTP/1.1 400 Bad Request\r\n" +
+      "content-type: text/plain; charset=utf-8\r\n" +
+      `content-length: ${Buffer.byteLength(body)}\r\n` +
+      "connection: close\r\n\r\n" +
+      body
+    );
+  }
+  const location = `https://${host}${REQUEST_TARGET.test(target) ? target : "/"}`;
+  const body = `This port speaks HTTPS only: ${location}\n`;
+  return (
+    "HTTP/1.1 307 Temporary Redirect\r\n" +
+    `location: ${location}\r\n` +
+    "content-type: text/plain; charset=utf-8\r\n" +
+    `content-length: ${Buffer.byteLength(body)}\r\n` +
+    "connection: close\r\n\r\n" +
+    body
+  );
+}
 
 /** Whether this listener has anything to say to a client that does not speak h2. */
 function speaksHttp1(options: GrpcServerOptions): boolean {
@@ -319,7 +422,8 @@ function isGrpcRequest(headers: { readonly [name: string]: unknown }): boolean {
 
 /** A gRPC server, listening. */
 export class GrpcServer {
-  readonly #server: Http2Server | Http2SecureServer;
+  /** What listens: the HTTP/2 server itself, or, for TLS, the socket server in front of it. */
+  readonly #listener: NetServer | Http2Server | Http2SecureServer;
   readonly #sessions: Set<ServerHttp2Session>;
   readonly #sockets: Set<Socket>;
   readonly #host: string;
@@ -327,14 +431,14 @@ export class GrpcServer {
   readonly #scheme: "http" | "https";
 
   private constructor(
-    server: Http2Server | Http2SecureServer,
+    listener: NetServer | Http2Server | Http2SecureServer,
     sessions: Set<ServerHttp2Session>,
     sockets: Set<Socket>,
     host: string,
     port: number,
     scheme: "http" | "https",
   ) {
-    this.#server = server;
+    this.#listener = listener;
     this.#sessions = sessions;
     this.#sockets = sockets;
     this.#host = host;
@@ -426,6 +530,19 @@ export class GrpcServer {
       });
     }
 
+    // A TLS listener is fronted by a plain socket server, which looks at each connection's first
+    // byte and answers a plaintext HTTP request with a redirect rather than handing it to a
+    // handshake that can only drop it. routeByFirstByte says how.
+    const secure = options.tls === undefined ? undefined : (server as Http2SecureServer);
+    const listener: NetServer | Http2Server | Http2SecureServer =
+      secure === undefined
+        ? server
+        : createNetServer((socket) => {
+            sockets.add(socket);
+            socket.on("close", () => sockets.delete(socket));
+            routeByFirstByte(socket, secure);
+          });
+
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error): void => {
         reject(
@@ -436,24 +553,24 @@ export class GrpcServer {
         ),
       );
       };
-      server.once("error", onError);
+      listener.once("error", onError);
       const listening = (): void => {
-        server.removeListener("error", onError);
+        listener.removeListener("error", onError);
         resolve();
       };
       if (options.anyInterface === true) {
-        server.listen(options.port, listening);
+        listener.listen(options.port, listening);
       } else {
-        server.listen(options.port, host, listening);
+        listener.listen(options.port, host, listening);
       }
     });
 
     // Port 0 means "any free port", and which one it landed on is only knowable
     // afterwards, which is how a test gets an address that cannot collide.
-    const address = server.address();
+    const address = listener.address();
     const port = typeof address === "object" && address !== null ? address.port : options.port;
     return new GrpcServer(
-      server,
+      listener,
       sessions,
       sockets,
       host,
@@ -481,7 +598,7 @@ export class GrpcServer {
    */
   async close(): Promise<void> {
     await new Promise<void>((resolve) => {
-      this.#server.close(() => resolve());
+      this.#listener.close(() => resolve());
       for (const session of this.#sessions) {
         session.destroy();
       }
