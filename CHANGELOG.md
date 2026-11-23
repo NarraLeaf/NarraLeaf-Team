@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### _Fixes_
+
+- **An `http://` address on the sign-in port is redirected, not dropped.** A
+  browser given `192.168.1.100:54080` with no scheme asks for `http://`, and
+  the port, which speaks only TLS, closed the connection without a byte: the
+  browser showed `ERR_EMPTY_RESPONSE` and the log filled with failed
+  handshakes. A plaintext request is now answered with a temporary redirect
+  (307) to the same address over `https://`.
+
 ## [1.0.5]
 
 ### _Changes_
