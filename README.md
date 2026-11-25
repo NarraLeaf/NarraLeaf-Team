@@ -6,7 +6,7 @@
 
 # NarraLeaf-Team
 
-Current release: `1.1.0`.
+Current release: `1.1.1`.
 
 NarraLeaf Team is a self-hosted project server for teams working in NarraLeaf
 Studio. One organization runs one server, on its own network or in a container
@@ -73,7 +73,7 @@ downloaded on first start. Write this `compose.yaml`, changing
 ```yaml
 services:
   team:
-    image: ghcr.io/narraleaf/team:1.1.0
+    image: ghcr.io/narraleaf/team:1.1.1
     restart: unless-stopped
     environment:
       NLTEAM_HOSTNAME: team.example.com
