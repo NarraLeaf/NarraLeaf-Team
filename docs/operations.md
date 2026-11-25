@@ -1000,6 +1000,28 @@ announces it, with whoever created it as its creator.
 repository to be created. Given, Team records the row under that id and asks for
 nothing.
 
+### Making a project from a Studio project package
+
+A local project becomes a team project from the console, not from Studio's
+project window. Its author exports it in Studio (File › Export Project, a
+`.nlspkg`), and on the console's Projects page "Import a project package" makes
+the project and uploads the package to it. The button is shown to accounts the
+server lets create projects.
+
+```
+PUT /api/team/v1/projects/{project}/package    the package's bytes, for an owner of the project
+```
+
+The package is streamed to `<root>/imports/` and removed once it is read, then
+copied file by file into the project's working copy and committed and pushed as
+the repository's first revision. It is taken only by a project whose repository
+has no revision and whose log holds no edit; anything else is refused with 409,
+so a package never writes over a project's history. A package larger than
+8 GB is refused with 413, and one that is damaged, from an older Studio, or
+holds no `.nlproj` at its top is refused with 400 and the reason. What a project
+never carries (`.lore/`, `.nlstudio/`, `dist/`, `node_modules/`) is left out
+whatever the package says.
+
 ### Removing a project from the list
 
 Removing a project takes the row away and nothing else. The repository stays in

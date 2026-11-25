@@ -4,6 +4,7 @@
  *
  *     PUT    /api/team/v1/projects/{project}/builds?name=&file=&note=&revision=&platform=&latest=   upload a build
  *     GET    /api/team/v1/projects/{project}/builds/{id}                                            download it
+ *     PUT    /api/team/v1/projects/{project}/package                                                a Studio project package, as an empty project's first version
  *     PUT    /api/team/v1/projects/{project}/attachments                                            a picture for a comment
  *     GET    /api/team/v1/projects/{project}/attachments/{id}                                       that picture
  *
@@ -51,7 +52,9 @@ import { recordDecision } from "../identity/audit.js";
 import { identifyCaller } from "../identity/bearer.js";
 import type { UserRecord } from "../identity/users.js";
 import { identifyWebSession, webSessionCookie } from "../identity/websessions.js";
-import { maySeeProject } from "../projects/members.js";
+import { maySeeProject, projectRole } from "../projects/members.js";
+import { copyPackageFiles, readProjectPackage, ProjectPackageError, type ProjectPackage } from "../projects/package.js";
+import { RepositoryNotEmptyError } from "../projects/workingCopy.js";
 import { findProject } from "../projects/registry.js";
 import {
   ATTACHMENT_MAX_BYTES,
@@ -68,6 +71,12 @@ import { answering, refuse, sendJson } from "./studio.js";
 const PROJECTS = "/api/team/v1/projects/";
 const SHARE = "/api/team/v1/share/";
 const IMAGE_TYPES: Readonly<Record<string, string>> = { png: "image/png", jpg: "image/jpeg", webp: "image/webp" };
+
+/**
+ * The largest project package taken. A package is a whole project, assets and all, and it is
+ * streamed to disk and copied file by file, so this bounds disk rather than memory.
+ */
+export const PACKAGE_MAX_BYTES = 8 * 1024 * 1024 * 1024;
 
 /** How many notes one link takes in an hour, so an open link is not a firehose. */
 const GUEST_NOTES_PER_HOUR = 30;
@@ -104,7 +113,8 @@ export function serveUploads(service: TeamService, publish: Publish | undefined,
   }
   if (!path.startsWith(PROJECTS)) return false;
   const [projectRef, kind, id, ...more] = path.slice(PROJECTS.length).split("/");
-  if (projectRef === undefined || (kind !== "builds" && kind !== "attachments") || more.length > 0) return false;
+  if (projectRef === undefined || (kind !== "builds" && kind !== "attachments" && kind !== "package") || more.length > 0) return false;
+  if (kind === "package" && id !== undefined && id !== "") return false;
   answering(service, response, project(service, publish, request, response, projectRef, kind, id === "" ? undefined : id));
   return true;
 }
@@ -115,7 +125,7 @@ async function project(
   request: IncomingMessage,
   response: ServerResponse,
   projectRef: string,
-  kind: "builds" | "attachments",
+  kind: "builds" | "attachments" | "package",
   id: string | undefined,
 ): Promise<void> {
   const write = id === undefined;
@@ -142,13 +152,122 @@ async function project(
     request.resume();
     return;
   }
-  if (kind === "builds") {
+  if (kind === "package") {
+    await uploadPackage(service, request, response, found.id, who.user);
+  } else if (kind === "builds") {
     if (write) await uploadBuild(service, publish, request, response, found.id, who.user);
     else await downloadBuild(service, request, response, found.id, decode(id) ?? "");
   } else if (write) {
     await uploadAttachment(service, request, response, found.id, who.user);
   } else {
     await servePicture(service, request, response, found.id, decode(id) ?? "");
+  }
+}
+
+/* --------------------------------------------------------------- package */
+
+/**
+ * Make an empty project out of a Studio project package.
+ *
+ * This is how a project becomes a team project: its author exports it from Studio and uploads the
+ * package here, into a project made for it a moment before (`projects.create`). Studio itself no
+ * longer puts a local project on a server from the project's window.
+ *
+ * The package is streamed to disk first, never held whole, and read from there file by file into
+ * the project's working copy, which then becomes its first version. Only an owner may do it, and
+ * only while the project holds nothing: a package is a project's beginning, not a way to overwrite
+ * one that has history.
+ */
+async function uploadPackage(
+  service: TeamService,
+  request: IncomingMessage,
+  response: ServerResponse,
+  projectId: string,
+  user: UserRecord,
+): Promise<void> {
+  if (projectRole(service.database, projectId, user) !== "owner") {
+    refuse(response, 403, "only an owner of this project puts a project package into it");
+    request.resume();
+    return;
+  }
+  const authorities = service.authorities;
+  if (authorities === undefined) {
+    refuse(response, 501, "this server does not take project packages");
+    request.resume();
+    return;
+  }
+  const declared = Number(request.headers["content-length"] ?? "0");
+  if (declared > PACKAGE_MAX_BYTES) {
+    response.setHeader("connection", "close");
+    refuse(response, 413, "that package is larger than this server takes");
+    request.resume();
+    return;
+  }
+
+  const dir = join(service.root, "imports");
+  await mkdir(dir, { recursive: true });
+  const partial = join(dir, `${randomUUID()}.nlspkg`);
+  try {
+    let size = 0;
+    let tooLarge = false;
+    const out = createWriteStream(partial);
+    try {
+      for await (const chunk of request) {
+        const buffer = chunk as Buffer;
+        size += buffer.length;
+        if (size > PACKAGE_MAX_BYTES) {
+          tooLarge = true;
+          request.resume();
+          break;
+        }
+        if (!out.write(buffer)) await new Promise<void>((resolve) => out.once("drain", resolve));
+      }
+    } finally {
+      await new Promise<void>((resolve) => out.end(resolve));
+    }
+    if (tooLarge || size === 0) {
+      refuse(response, tooLarge ? 413 : 400, tooLarge ? "that package is larger than this server takes" : "that package has nothing in it");
+      return;
+    }
+
+    let read: ProjectPackage;
+    try {
+      read = await readProjectPackage(partial);
+    } catch (error) {
+      if (error instanceof ProjectPackageError) {
+        refuse(response, 400, error.message);
+        return;
+      }
+      throw error;
+    }
+
+    let seeded: { revision?: string; changed: readonly string[] };
+    try {
+      seeded = await authorities.seed(
+        projectId,
+        (place) => copyPackageFiles(partial, read.files, place),
+        `Imported from a project package (${read.projectName})`,
+        user.username,
+      );
+    } catch (error) {
+      if (error instanceof RepositoryNotEmptyError) {
+        refuse(response, 409, "this project already holds a version; a project package goes only into a project that is still empty");
+        return;
+      }
+      if (error instanceof ProjectPackageError) {
+        refuse(response, 400, error.message);
+        return;
+      }
+      throw error;
+    }
+    service.log?.(`team: ${user.username} imported a project package into ${projectId} (${seeded.changed.length} files)`);
+    sendJson(response, 200, {
+      ...(seeded.revision === undefined ? {} : { revision: seeded.revision }),
+      files: seeded.changed.length,
+      leftOut: read.leftOut,
+    });
+  } finally {
+    await rm(partial, { force: true }).catch(() => undefined);
   }
 }
 

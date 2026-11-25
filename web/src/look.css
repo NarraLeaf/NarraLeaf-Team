@@ -454,6 +454,14 @@ button.big {
   margin-bottom: 20px;
 }
 
+/* Controls beside a page's title, kept together when the head wraps. */
+.page-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
 .page-title {
   font-size: 26px;
   font-weight: 650;

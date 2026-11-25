@@ -19,6 +19,7 @@ import { Admin, ADMIN_PHRASE, ADMIN_SECTIONS, type AdminSection } from "./Admin"
 import { PROJECT_SETTINGS_SECTIONS } from "./Versions";
 import { PROGRESS_SECTIONS } from "./Progress";
 import { JoinProjects } from "./Access";
+import { PackageImportDialog } from "./PackageImport";
 import { Icon } from "./Icon";
 import { teamName, teamNameUnset, useLook, type TeamLook } from "./look";
 import { LeafLogo } from "./LeafLogo";
@@ -653,6 +654,7 @@ function Projects({
   const [mayCreate, setMayCreate] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
   const [showArchived, setShowArchived] = useState(false);
+  const [importing, setImporting] = useState(false);
   const open = state.kind === "open";
 
   const load = useCallback(() => {
@@ -679,8 +681,26 @@ function Projects({
           <h1 className="page-title">{t("projects")}</h1>
           <p className="muted">{t("projectsLead")}</p>
         </div>
-        <Checkbox checked={showArchived} onChange={setShowArchived} label={t("showArchived")} />
+        <div className="page-head-actions">
+          <Checkbox checked={showArchived} onChange={setShowArchived} label={t("showArchived")} />
+          {open && mayCreate ? (
+            <button className="btn btn-sm" onClick={() => setImporting(true)}>
+              <Icon name="upload" size={14} />
+              {t("packageImportOpen")}
+            </button>
+          ) : null}
+        </div>
       </header>
+      {importing ? (
+        <PackageImportDialog
+          connection={connection}
+          onClose={() => setImporting(false)}
+          onImported={(projectId) => {
+            setImporting(false);
+            openProject(projectId);
+          }}
+        />
+      ) : null}
       {error !== undefined ? <Flash error={error} /> : null}
       {rows === undefined ? (
         <p className="muted">{t("loading")}</p>
