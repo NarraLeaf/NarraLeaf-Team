@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.1.1]
+
+### _Changes_
+
+- **A team project can be made from a Studio project package.** The console's
+  Projects page has an "Import a project package" button: choose the `.nlspkg`
+  that NarraLeaf Studio's File › Export Project writes, name the project, and
+  the server makes it and puts the package's files in as its first version.
+  This is now the way a local project becomes a team project, since Studio no
+  longer uploads one from the project's window. The package is streamed to disk
+  and copied file by file, up to 8 GB, and is taken only by an empty project;
+  a package that is refused takes the project made for it off the list again.
+  The route is `PUT /api/team/v1/projects/{project}/package`, for the project's
+  owners.
+
 ## [1.1.0]
 
 ### _Changes_

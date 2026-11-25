@@ -33,6 +33,7 @@ import {
   type StoredEffect,
 } from "./store.js";
 import { recordVersion } from "./versions.js";
+import { RepositoryNotEmptyError } from "../projects/workingCopy.js";
 
 export type { LoadedProject } from "./projectFiles.js";
 
@@ -78,6 +79,16 @@ export interface ProjectAuthoritiesOptions {
   readonly collectBytes?: (projectId: string, transferId: string) => Promise<Buffer | undefined>;
   /** Where arrived bytes wait for the next saved version. Without one they wait in the blob store. */
   readonly keepBytes?: OwedBytesKeeper;
+  /**
+   * Put a project's first version into its repository from files written straight into the working
+   * copy (see `seedWorkingCopy`). Absent on a server that cannot; {@link ProjectAuthorities.seed}
+   * then refuses.
+   */
+  readonly seed?: (
+    projectId: string,
+    write: (place: (relativePath: string) => string) => Promise<readonly string[]>,
+    message: string,
+  ) => Promise<{ readonly revision?: string; readonly changed: readonly string[] }>;
   /** Tell every Studio on the project what happened. */
   readonly publish: (projectId: string, event: DocTopicEvent) => void;
   readonly log?: (line: string) => void;
@@ -227,6 +238,8 @@ export class ProjectAuthorities {
   readonly #loaded = new Map<string, Loaded>();
   readonly #loading = new Map<string, Promise<Loaded | undefined>>();
   readonly #snapshotting = new Map<string, Promise<unknown>>();
+  /** Projects taking their first version from a package right now. */
+  readonly #seeding = new Set<string>();
   #timer: NodeJS.Timeout | undefined;
 
   constructor(options: ProjectAuthoritiesOptions) {
@@ -519,6 +532,50 @@ export class ProjectAuthorities {
       this.#options.log?.(`authority: ${projectId} saved a version at seq ${seq} (${committed.revision.slice(0, 12)})`);
     }
     return { ...(committed.revision === undefined ? {} : { revision: committed.revision }), seq };
+  }
+
+  /**
+   * Give a project that holds nothing yet its first version, from files written into its working
+   * copy - a project made from an uploaded package.
+   *
+   * Refused for a project with any state at all: an edit in the log, a saved version, or a loaded
+   * authority that has applied one. The repository is asked as well, by the working copy, because a
+   * Studio may have pushed to it without passing through here. What the authority held for the empty
+   * project is dropped afterwards, so the next use reads the new version rather than writing an empty
+   * project back over it.
+   */
+  async seed(
+    projectId: string,
+    write: (place: (relativePath: string) => string) => Promise<readonly string[]>,
+    message: string,
+    by: string,
+  ): Promise<{ revision?: string; changed: readonly string[] }> {
+    const seed = this.#options.seed;
+    if (seed === undefined) {
+      throw new Error("this server cannot put a first version into a project");
+    }
+    const database = this.#options.database;
+    const loaded = this.#loaded.get(projectId);
+    if (
+      this.#seeding.has(projectId)
+      || lastSeq(database, projectId) > 0
+      || snapshotMark(database, projectId) !== undefined
+      || (loaded !== undefined && loaded.authority.seq > 0)
+    ) {
+      throw new RepositoryNotEmptyError();
+    }
+    this.#seeding.add(projectId);
+    try {
+      const result = await seed(projectId, write, message);
+      this.#loaded.delete(projectId);
+      if (result.revision !== undefined) {
+        // A Studio that had the empty project open starts again from the version that now exists.
+        this.#options.publish(projectId, { kind: "doc-reset", seq: 0, revision: result.revision, by });
+      }
+      return result;
+    } finally {
+      this.#seeding.delete(projectId);
+    }
   }
 
   async restore(projectId: string, revision: string, who: { accountId: string; by: string }): Promise<{ seq: number; revision: string }> {

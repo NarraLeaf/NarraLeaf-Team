@@ -45,7 +45,7 @@ served as JSON, is never cached, and answers `GET` and `HEAD`.
   "data": { "url": "lore://team.example.lan:41337" },
   "capabilities": ["session", "comments", "clients", "live", "overlay", "admin", "password-sign-in", "project-history"],
   "authority": { "sha256": "3D:38:…" },
-  "version": "1.1.0"
+  "version": "1.1.1"
 }
 ```
 
@@ -163,7 +163,7 @@ Before anything is asked, the server sends one `hello`:
 {
   "t": "hello",
   "protocol": 2,
-  "server": { "name": "team.example.lan", "version": "1.1.0" },
+  "server": { "name": "team.example.lan", "version": "1.1.1" },
   "session": "<connection id>",
   "account": { "id": "…", "username": "ada", "displayName": "Ada", "operator": false },
   "methods": ["projects.list", "…"],

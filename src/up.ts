@@ -57,7 +57,7 @@ import { ProjectAuthorities } from "./authority/manager.js";
 import { openProjectFiles } from "./authority/project.js";
 import { OwedBytesStore } from "./authority/owedBytes.js";
 import { loadProjectFiles } from "./authority/projectFiles.js";
-import { commitSnapshot } from "./projects/workingCopy.js";
+import { commitSnapshot, seedWorkingCopy } from "./projects/workingCopy.js";
 import { accountNotificationsTopic, projectDocTopic, projectTopic, TOPIC_ADMIN_REFUSALS, TOPIC_PROJECTS } from "./team/protocol.js";
 import { digestJob } from "./collab/digest.js";
 import { backupJob, removePidFile, writePidFile } from "./backup.js";
@@ -430,6 +430,17 @@ export async function up(
           throw new Error("no such project");
         }
         return commitSnapshot({ ...options, removeMissing: true }, files, message, blobs, keep);
+      },
+      // A project made from an uploaded package: its files go straight into the working copy as
+      // the first version, and the reader is asked to look again so every list stops calling it empty.
+      seed: async (projectId, write, message) => {
+        const options = await projects.workingCopyOptions(projectId);
+        if (options === undefined) {
+          throw new Error("no such project");
+        }
+        const result = await seedWorkingCopy(options, write, message);
+        projects.request();
+        return result;
       },
       // Arrived bytes wait here for the next version, because the blob store is emptied on start.
       keepBytes: new OwedBytesStore(options.root),

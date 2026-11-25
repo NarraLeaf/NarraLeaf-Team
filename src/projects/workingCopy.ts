@@ -266,6 +266,81 @@ async function snapshotOnce(
   }
 }
 
+/** A repository that already has a revision, so it is not one a first version can be put into. */
+export class RepositoryNotEmptyError extends Error {
+  constructor() {
+    super("this project already holds a version");
+    this.name = "RepositoryNotEmptyError";
+  }
+}
+
+/**
+ * Put a project's first version into its repository: the files `write` puts
+ * into the working copy, committed and pushed as one revision.
+ *
+ * For a project made from a package, whose files arrive as bytes on this
+ * server's disk rather than through the authority. `write` is handed a way to
+ * turn a project-relative path into a path inside the working copy (checked the
+ * way every other write here is) and answers the paths it wrote, so a project's
+ * assets are copied file to file rather than held in memory.
+ *
+ * **Only into a repository with no revision yet**, and that is asked of the
+ * clone itself rather than of anything this server remembers: a Studio may have
+ * pushed to the repository directly, and a first version written over somebody
+ * else's would be a second history nobody asked for. The question and the
+ * commit sit in the same serialised turn as every snapshot of the project, so
+ * nothing commits between them.
+ */
+export async function seedWorkingCopy(
+  options: WorkingCopyOptions,
+  write: (place: (relativePath: string) => string) => Promise<readonly string[]>,
+  message: string,
+): Promise<SnapshotResult> {
+  const key = authorityWorkingCopyPath(options.root, options.projectId);
+  const previous = inFlight.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(() => seedOnce(options, write, message));
+  inFlight.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (inFlight.get(key) === run) {
+      inFlight.delete(key);
+    }
+  }
+}
+
+async function seedOnce(
+  options: WorkingCopyOptions,
+  write: (place: (relativePath: string) => string) => Promise<readonly string[]>,
+  message: string,
+): Promise<SnapshotResult> {
+  const copy = await ensureWorkingCopy(options);
+  const globals = globalsFor(copy.path, options);
+  try {
+    if ((await workingCopyHead(copy, options)) !== undefined) {
+      throw new RepositoryNotEmptyError();
+    }
+    const changed = await write((relativePath) => inside(copy.path, relativePath));
+    if (changed.length === 0) {
+      return { changed: [] };
+    }
+    await stagePaths(globals, changed.map((relativePath) => inside(copy.path, relativePath)));
+    const committed = await commitStaged(globals, message);
+    await flushRepository(globals);
+    await pushBranch(globals);
+    return { revision: committed.revision, changed };
+  } catch (error) {
+    // The same rule as a snapshot: a commit that could not be pushed must not linger. A refusal
+    // because the repository already had a version wrote nothing, so the copy is fine to keep.
+    if (!(error instanceof RepositoryNotEmptyError)) {
+      await discardWorkingCopy(options.root, options.projectId);
+    }
+    throw error;
+  } finally {
+    await releaseRepository(globals).catch(() => undefined);
+  }
+}
+
 async function documentsNotIn(
   copy: WorkingCopy,
   files: ReadonlyMap<string, unknown>,
