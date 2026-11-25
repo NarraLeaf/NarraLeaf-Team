@@ -385,6 +385,52 @@ describe("the project authorities", () => {
       expect(late).toMatchObject({ kind: "refusal", reason: "conflict", conflicts: [`file:${CHARACTERS}`] });
     });
 
+    it("writes an asset's bytes where Studio reads them: under the asset's id, not its digest", async () => {
+      const db = await database();
+      const repository = new FakeRepository();
+      const asset = "ab12cd34-0000-4000-8000-000000000001";
+      const bundle = "cd34ef56-0000-4000-8000-000000000002";
+      const blobs = new Map([
+        ["a1", Buffer.from([1, 2, 3])],
+        ["b1", Buffer.from([4, 5, 6])],
+        ["bad", Buffer.from([7, 8, 9])],
+      ]);
+      const live = authorities(db, repository, [], { now: 0 }, { blobs });
+      const answer = await live.intent(PROJECT, {
+        clientId: "a1",
+        accountId: "u1",
+        by: "Ada",
+        document: { doc: "assets", assetType: "image" },
+        op: {
+          op: "create-assets",
+          assetType: "image",
+          creates: [
+            { record: { id: asset, name: "bg" }, bytes: { from: "transfer", parts: [{ path: null, transferId: "a1", size: 3, digest: DIGEST }] } },
+            {
+              record: { id: bundle, name: "model" },
+              bytes: {
+                from: "transfer",
+                parts: [
+                  { path: "textures/skin.png", transferId: "b1", size: 3, digest: DIGEST },
+                  // Climbs out of the asset: never written anywhere.
+                  { path: "../escape.png", transferId: "bad", size: 3, digest: DIGEST },
+                ],
+              },
+            },
+          ],
+        },
+        basedOn: 0,
+      });
+      expect(answer).toMatchObject({ kind: "effect" });
+      for (const transfer of ["a1", "b1", "bad"]) await live.bytesArrived(PROJECT, transfer);
+      await live.snapshot(PROJECT);
+      const written = (repository.blobs.at(-1) ?? []).map((blob) => blob.path).sort();
+      expect(written).toEqual([
+        "assets/content/ab/12/cd34000040008000000000000001",
+        "assets/content/cd/34/ef56000040008000000000000002/textures/skin.png",
+      ]);
+    });
+
     it("keeps a file's bytes once they arrive, so a restart before the next version does not lose them", async () => {
       const db = await database();
       const repository = new FakeRepository();

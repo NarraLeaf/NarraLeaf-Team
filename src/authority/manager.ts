@@ -155,9 +155,31 @@ export interface DocBase {
 
 const RESTORE_OP = "restore-revision";
 
-/** Where an asset's bytes live in a project: `assets/content/<2>/<2>/<rest of the hex digest>`. */
-export function assetContentPath(digest: string): string {
-  return `assets/content/${digest.slice(0, 2)}/${digest.slice(2, 4)}/${digest.slice(4)}`;
+const UUID_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const LEGACY_ID = /^[0-9a-f]{64}$/i;
+
+/**
+ * Where an asset's bytes live in a project: `assets/content/<2>/<2>/<rest>` of the asset's id with
+ * its hyphens dropped - the same split Studio's `splitAssetStorageId` makes, because that is where
+ * every Studio reads the file from. A bundle's files sit under that directory by their own path.
+ *
+ * ❗ **The id, never the digest.** A part's `path` is null for "the asset's own file", and an
+ * earlier reading of that as "file it by its content" put every imported asset where no Studio looks,
+ * so a fresh clone showed them all as unreadable.
+ *
+ * Undefined for an id that is neither a UUID nor a legacy 64-hex digest, or a bundle path that is
+ * absolute or climbs out of the asset: both arrive from a client, and a path decides where bytes land.
+ */
+export function assetContentPath(assetId: string, inBundle: string | null = null): string | undefined {
+  if (!UUID_ID.test(assetId) && !LEGACY_ID.test(assetId)) return undefined;
+  const hex = assetId.replaceAll("-", "");
+  const root = `assets/content/${hex.slice(0, 2)}/${hex.slice(2, 4)}/${hex.slice(4)}`;
+  if (inBundle === null) return root;
+  const segments = inBundle.split(/[\\/]/);
+  if (inBundle.length === 0 || inBundle.startsWith("/") || segments.some((part) => part === "" || part === "." || part === "..")) {
+    return undefined;
+  }
+  return `${root}/${segments.join("/")}`;
 }
 
 interface Loaded {
@@ -184,12 +206,10 @@ interface OwedTransfer {
 
 /** Every transfer an operation names, with where its bytes go. */
 function owedBy(document: KernelDocument, op: KernelOp): OwedTransfer[] {
-  const owed: OwedTransfer[] = assetBytesOf(op).map((part) => ({
-    transferId: part.transferId,
-    path: part.path ?? assetContentPath(part.digest),
-    replace: false,
-    kept: false,
-  }));
+  const owed: OwedTransfer[] = assetBytesOf(op).flatMap((part) => {
+    const path = assetContentPath(part.assetId, part.path);
+    return path === undefined ? [] : [{ transferId: part.transferId, path, replace: false, kept: false }];
+  });
   const file = fileBytesOf(document, op);
   if (file !== undefined) {
     owed.push({
