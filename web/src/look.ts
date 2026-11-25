@@ -41,6 +41,31 @@ export function teamName(name: string | undefined): string {
   return teamNameUnset(name) ? "NarraLeaf Team" : (name ?? "").trim();
 }
 
+/** The tab icon the page ships with: NarraLeaf's leaf. */
+const DEFAULT_ICON = "/console/icon.svg";
+
+/**
+ * Show the team's logo as the page's icon (the browser tab, a bookmark, a
+ * home-screen shortcut), or NarraLeaf's leaf while the team has none.
+ * `index.html` links the leaf so a page that never reads the look still
+ * has one.
+ */
+export function applyTeamIcon(logoUrl: string | undefined): void {
+  for (const rel of ["icon", "apple-touch-icon"]) {
+    let link = document.head.querySelector<HTMLLinkElement>(`link[rel="${rel}"]`);
+    if (link === null) {
+      link = document.createElement("link");
+      link.rel = rel;
+      document.head.append(link);
+    }
+    link.href = logoUrl ?? DEFAULT_ICON;
+    // The leaf is SVG; an uploaded logo is a PNG, JPEG or WebP, and a wrong
+    // `type` makes a browser skip the icon rather than sniff it.
+    if (logoUrl === undefined && rel === "icon") link.type = "image/svg+xml";
+    else link.removeAttribute("type");
+  }
+}
+
 let pending: Promise<TeamLook> | undefined;
 
 export function fetchLook(fresh = false): Promise<TeamLook> {
@@ -52,6 +77,7 @@ export function fetchLook(fresh = false): Promise<TeamLook> {
           document.documentElement.style.setProperty("--nl-primary", hexChannels(look.accent));
         }
         document.title = teamName(look.name);
+        applyTeamIcon(look.logoUrl);
         return look;
       });
   }

@@ -1,3 +1,5 @@
+import { LEAF_PATH, LEAF_VIEWBOX } from "./LeafLogo";
+
 /**
  * The console's icons: thin strokes in the current text colour, the way
  * Studio draws its own. Decorative unless given a label.
@@ -40,7 +42,8 @@ const PATHS = {
   gamepad: "M6 8h12a4 4 0 0 1 4 4v1a4 4 0 0 1-7 2.6L14 14h-4l-1 1.6A4 4 0 0 1 2 13v-1a4 4 0 0 1 4-4zM8 10v4M6 12h4M15.5 11h.01M17.5 13h.01",
   pause: "M7 4h3v16H7zM14 4h3v16h-3z",
   lock: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4",
-  leaf: "M5 19c11 0 16-7 16-16C12 3 5 8 5 19zm0 0 9-9",
+  // Not drawn from here: `leaf` is NarraLeaf's own mark (LeafLogo), filled. See Icon.
+  leaf: "",
   music: "M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
   file: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6",
   server: "M3 4h18v6H3zM3 14h18v6H3zM7 7h.01M7 17h.01",
@@ -62,6 +65,15 @@ const PATHS = {
 export type IconName = keyof typeof PATHS;
 
 export function Icon({ name, size = 16, label }: { name: IconName; size?: number; label?: string }) {
+  const labelled = label === undefined ? { "aria-hidden": true } : { role: "img", "aria-label": label };
+  if (name === "leaf") {
+    // Studio itself, wherever the console points to it: NarraLeaf's own leaf, not a stand-in.
+    return (
+      <svg className="icon" width={size} height={size} viewBox={LEAF_VIEWBOX} fill="currentColor" {...labelled}>
+        <path d={LEAF_PATH} fillRule="evenodd" />
+      </svg>
+    );
+  }
   return (
     <svg
       className="icon"
@@ -73,7 +85,7 @@ export function Icon({ name, size = 16, label }: { name: IconName; size?: number
       strokeWidth={1.8}
       strokeLinecap="round"
       strokeLinejoin="round"
-      {...(label === undefined ? { "aria-hidden": true } : { role: "img", "aria-label": label })}
+      {...labelled}
     >
       <path d={PATHS[name]} />
     </svg>
