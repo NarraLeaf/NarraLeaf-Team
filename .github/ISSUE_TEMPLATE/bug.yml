@@ -12,7 +12,7 @@ body:
     attributes:
       label: Version
       description: The output of `nlteam --version`, or the image tag.
-      placeholder: 1.1.1
+      placeholder: 1.1.2
     validations:
       required: true
   - type: dropdown

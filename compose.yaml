@@ -18,7 +18,7 @@ services:
     # A deployment names the version it means. `:latest` moves with each release
     # and `:develop` follows the integration branch, so both change under a
     # deployment that pulls them.
-    image: ghcr.io/narraleaf/team:1.1.1
+    image: ghcr.io/narraleaf/team:1.1.2
     # Or, from a checkout of this repository:
     # build: .
     restart: unless-stopped
