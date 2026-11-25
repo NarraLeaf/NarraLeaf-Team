@@ -1,5 +1,5 @@
 /**
- * Asking loreserver to create or look up a repository.
+ * Asking loreserver to create, look up or delete a repository.
  *
  * gRPC is the whole interface. Team never opens a repository's store, and does
  * not link against lore's library to do it: loreserver holds an exclusive lock
@@ -18,8 +18,10 @@ import { unaryCall } from "../grpc/client.js";
 import {
   decodeRepositoryResponse,
   encodeRepositoryCreateRequest,
+  encodeRepositoryDeleteRequest,
   encodeRepositoryGetRequest,
   METHOD_REPOSITORY_CREATE,
+  METHOD_REPOSITORY_DELETE,
   METHOD_REPOSITORY_GET,
   type Repository,
   type RepositoryQuery,
@@ -116,4 +118,33 @@ export async function repositoryGet(options: RepositoryGetOptions): Promise<Repo
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
   });
   return repositoryOrFail(reply, METHOD_REPOSITORY_GET);
+}
+
+/** What deleting a repository needs. */
+export interface RepositoryDeleteOptions {
+  readonly url: string;
+  readonly token: string;
+  /** The repository id; lore deletes by id only. */
+  readonly id: string;
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Delete a repository for good: every branch and revision, and its name.
+ *
+ * It goes through the same permission check as a look-up, so the repository
+ * has to be a project this server holds and the caller one its role opens it
+ * to. Once it has gone, loreserver says so over `RebacApi/DeleteResource`
+ * (./service.ts), and that is what takes the project row away. The answer is
+ * the record as it was just before.
+ */
+export async function repositoryDelete(options: RepositoryDeleteOptions): Promise<Repository> {
+  const reply = await unaryCall({
+    url: options.url,
+    path: METHOD_REPOSITORY_DELETE,
+    message: encodeRepositoryDeleteRequest(options.id),
+    authorization: `Bearer ${options.token}`,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+  });
+  return repositoryOrFail(reply, METHOD_REPOSITORY_DELETE);
 }

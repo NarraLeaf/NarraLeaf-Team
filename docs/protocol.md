@@ -334,8 +334,8 @@ or `closed`, and on a closed deployment:
   methods would have stopped it collecting a transfer it had already agreed. The
   route reads the setting as it stands at the moment of the request.
 - `projects.list`, `projects.get`, `projects.history`, `members.list`,
-  `projects.create` and `projects.forget` are refused to anybody who is not an
-  operator: what is on this server becomes its operators' to read and to change.
+  `projects.create`, `projects.forget` and `projects.delete` are refused to
+  anybody who is not an operator: what is on this server becomes its operators' to read and to change.
   Those are `session` methods, and `session` cannot be withdrawn, a server
   answering the socket has it, so this is a refusal per call rather than a
   capability that disappears. The refusal says what happened and names the
@@ -383,8 +383,9 @@ unless a capability is named.
 
 On a deployment closed to collaboration, every method under `comments`, `live`,
 `overlay` and `clients` is refused to everybody, and `projects.list`,
-`projects.get`, `projects.history`, `members.list`, `projects.create` and
-`projects.forget` are refused to anybody who is not an operator, see
+`projects.get`, `projects.history`, `members.list`, `projects.create`,
+`projects.forget` and `projects.delete` are refused to anybody who is not an
+operator, see
 [Capabilities](#capabilities).
 
 | Method | Capability | What it does |
@@ -394,6 +395,7 @@ On a deployment closed to collaboration, every method under `comments`, `live`,
 | `projects.history` | `session` | A page of one project's revisions, newest first. `limit` defaults to 20 and is capped at 100, and a page also ends once the revisions on it total a mebibyte, whichever comes first, since a revision carries the message it was pushed with and that message comes out of a repository rather than out of a field this server bounds. The cursor is the id of the revision to carry on after, and is absent when there is no page beyond this one. A project the server has no checkout of yet answers an empty page rather than a refusal, which is not the same as a project with no revisions. |
 | `projects.create` | `session` | Make a project, or, given a `repositoryId`, register a repository the author already has. Making one asks the content server for the repository and takes the row back if it refuses; registering one asks it for nothing, because the repository already exists under that id. Announces `project-created` on the `projects` topic. The project row carries `role`, the caller's role in it, as every project row does. |
 | `projects.forget` | `session` | Take a project off this server's list. The row goes; the repository and every revision in it stay exactly as they were. Only an owner of the project, or an operator, may (anybody else is `refused`); where `project.delete_by` is `admins`, only an operator may. Forgetting a project that is already gone, or one the caller cannot see, answers `{}` rather than a refusal. Announces `project-forgotten` on the `projects` topic and on the project's own. |
+| `projects.delete` | `session` | Delete a project for good: loreserver deletes its repository, every branch and revision in it, and the row goes with everything Team kept about the project, freeing its name. `name` is required and must be the project's own, as the caller's confirmation. Without `repositoryId` it names the listed project of that name; with one, the repository of that id, which must carry that name: a listed project, or one taken off the list earlier, whose repository Team looks up by id and deletes only if it carries that name. The same people as `projects.forget` may delete a listed project; only an operator may delete a repository on no list. Answers `{deleted: {name, repositoryId}}`; `not-found` for a name or repository that is not there, `bad-params` where the repository carries another name, `conflict` where a listed project holds the name under another repository, `unavailable` with loreserver's words where it refuses. Announces `project-forgotten` as `projects.forget` does. A `projects.create` refused because a removed project's repository still holds the name is `conflict`, naming that repository as `(repository <id>)`. |
 | `projects.members.list` | `session` | Who belongs to one project: `members` (username, display name, role, who gave them it, when), owners first, with `total`, and `role`, the caller's own, which for an operator without a row of their own is `owner`. Any member may ask. A project the caller has no role in is `not-found`. |
 | `projects.members.set` | `session` | Give an account (`username`) a role (`role`: `owner`, `editor`, `reviewer` or `viewer`) in a project, adding it if it is not a member. For an editor, `areas` is the list of the project's areas they may change (`story`, `characters`, `assets`, `ui`, `localization`, `config`); `null` or every area means all of them, and leaving it out keeps what the editor had. Any other role ignores it. In place of `role` and `areas`, `template` names one of the permission templates (below); naming both is `bad-params`. An editor kept to some areas does not open the repository, which cannot tell one file from another, and edits through Team. Only an owner, or an operator, may (anybody else is `refused`). Refused when it would demote the project's only owner of its own. Setting the role somebody already has changes nothing and announces nothing. Announces `member-set` on the project's members topic, and `project-access-changed` on `projects` to that account alone. |
 | `server.ping` | `session` | Answers at once with `at`, this server's clock in epoch milliseconds, and echoes `sent` when given. What a client times to show its round trip; it reads and writes nothing. The plain HTTP equivalent is `GET /api/team/v1/ping`: a `204` with `x-team-time`, never cached, asking nobody who they are. |

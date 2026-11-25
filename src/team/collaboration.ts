@@ -108,6 +108,7 @@ const KEPT_FOR_OPERATORS: readonly string[] = [
   TEAM_METHODS.projectsHistory,
   TEAM_METHODS.projectsCreate,
   TEAM_METHODS.projectsForget,
+  TEAM_METHODS.projectsDelete,
   TEAM_METHODS.membersList,
 ];
 

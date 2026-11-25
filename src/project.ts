@@ -278,6 +278,7 @@ export async function projectCreate(
         // Worded by the registry, which is what refused, and carried through
         // unedited for the same reason a server's refusal is.
         throw new Error(outcome.message);
+      case "name-held":
       case "repository-refused":
         // loreserver's own sentence, and the row it was about is already gone.
         // It is the other server that said no, so it says so in its own words

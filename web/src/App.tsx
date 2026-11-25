@@ -694,6 +694,7 @@ function Projects({
       {importing ? (
         <PackageImportDialog
           connection={connection}
+          operator={operator}
           onClose={() => setImporting(false)}
           onImported={(projectId) => {
             setImporting(false);

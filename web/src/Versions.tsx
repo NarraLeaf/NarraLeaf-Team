@@ -213,6 +213,23 @@ function GeneralSettings({
         })
         .catch((caught: unknown) => setFailure(caught));
     });
+  const deleteForever = () =>
+    void confirmAction({
+      title: t("deleteForeverTitle"),
+      body: t("deleteForeverConfirm", { name: project.name }),
+      confirmLabel: t("deleteForever"),
+      danger: true,
+      typeToConfirm: project.name,
+    }).then((yes) => {
+      if (!yes) return;
+      void connection
+        .call("projects.delete", { name: project.name, repositoryId: project.id })
+        .then(() => {
+          toast(t("deletedForever", { name: project.name }));
+          removed();
+        })
+        .catch((caught: unknown) => setFailure(caught));
+    });
   const archived = project.archivedAt !== undefined;
   const setArchived = () =>
     void confirmAction(
@@ -309,6 +326,17 @@ function GeneralSettings({
               </div>
               <button className="btn btn-danger" onClick={remove}>
                 {t("removeProject")}
+              </button>
+            </div>
+          ) : null}
+          {project.mayRemove === true ? (
+            <div className="box-row">
+              <div className="box-row-text">
+                <strong>{t("deleteForeverTitle")}</strong>
+                <span>{t("deleteForeverLead")}</span>
+              </div>
+              <button className="btn btn-danger" onClick={deleteForever}>
+                {t("deleteForever")}
               </button>
             </div>
           ) : null}
