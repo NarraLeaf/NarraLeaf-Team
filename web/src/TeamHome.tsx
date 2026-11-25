@@ -11,6 +11,7 @@ import { ACTIVITY_PHRASE, ago, Face, useNotifications } from "./Collab";
 import { Icon } from "./Icon";
 import { t, type Phrase } from "./i18n";
 import { Flash, Hash } from "./ui";
+import { ReleaseNotice } from "./updates";
 import type { ConnectionState, TeamConnection } from "./socket";
 
 /** Where somebody last read in the workbench, kept in this browser by the workbench. */
@@ -358,6 +359,7 @@ export function TeamHome(props: {
         ) : null}
       </header>
 
+      <ReleaseNotice account={account} />
       <BetaNotice />
 
       {placeProject !== undefined ? (

@@ -17,6 +17,7 @@ import type {
 } from "@narraleaf/team-protocol";
 
 import { t, type Phrase } from "./i18n";
+import { fetchLook } from "./look";
 import { ActionMenu, Checkbox, confirmAction, CopyText, Dialog, Flash, FormDialog, RelativeTime, SettingsLayout, Skeleton, Subhead, toast, type MenuAction } from "./ui";
 import { Icon, type IconName } from "./Icon";
 import { Face } from "./Collab";
@@ -613,6 +614,8 @@ function Brand({ connection }: { connection: TeamConnection }) {
       const response = await fetch(path, { method: "PUT", credentials: "same-origin", headers: { "content-type": file.type }, body: file });
       if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? response.statusText);
       load();
+      // The new logo is this tab's icon at once, not after the next reload.
+      void fetchLook(true).catch(() => undefined);
     }, t("saved"));
   };
   const removePicture = async () => {

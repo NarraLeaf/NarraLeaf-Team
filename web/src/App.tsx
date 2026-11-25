@@ -27,6 +27,7 @@ import { ShareView } from "./Builds";
 import { projectHue, TeamHome } from "./TeamHome";
 import { Palette, type PaletteItem } from "./Palette";
 import { Blankslate, Checkbox, Flash, RelativeTime, UiHost } from "./ui";
+import { UpgradedNotice } from "./updates";
 
 type Route =
   | { readonly screen: "home" }
@@ -477,7 +478,10 @@ function Shell({ account, look, onSignedOut }: { account: ConsoleAccount; look: 
           </div>
         </div>
       </nav>
-      <main className="main">{content}</main>
+      <main className="main">
+        <UpgradedNotice state={state} />
+        {content}
+      </main>
       {paletteView}
       <TabBar route={route} go={go} unread={unread} name={name} user={account.username} />
     </div>

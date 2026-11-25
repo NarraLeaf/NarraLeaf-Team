@@ -22,6 +22,7 @@ import type { RevisionPage } from "../projects/read.js";
 import type { ProjectFileView, RevisionView } from "../teamview.js";
 import type { TeamCapability } from "./protocol.js";
 import type { ProjectAuthorities } from "../authority/manager.js";
+import type { UpdateCheck } from "../updates.js";
 
 /**
  * What Team has read out of the repositories, and a way to read one page more.
@@ -148,6 +149,11 @@ export interface TeamService {
    * then every `doc.*` call is refused as unavailable.
    */
   readonly authorities?: ProjectAuthorities;
+  /**
+   * Whether a newer Team has been released (src/updates.ts), for the console
+   * to tell an operator. Absent where nothing asks, as in most tests.
+   */
+  readonly updates?: UpdateCheck;
 }
 
 /**

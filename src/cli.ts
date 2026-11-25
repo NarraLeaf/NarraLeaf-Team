@@ -179,6 +179,11 @@ Options for up:
       --identity            Ask for what happens anyway; accepted so that a
                             command line written before it was the default
                             still runs
+      --no-update-check     Never ask GitHub whether a newer Team has been
+                            released. It asks twice a day unless this is given,
+                            or NLTEAM_UPDATE_CHECK is 0, false or no, and only
+                            the console's operators are told; nothing is
+                            installed by itself
       --tls-cert <path>     A certificate you already hold, in PEM, presented to
                             clients that ask for a name it covers. Their
                             machines trust its issuer already, so those people
@@ -345,6 +350,7 @@ export async function run(
             ? {}
             : { certificate: invocation.certificate }),
           overrides: invocation.overrides,
+          updateCheck: invocation.updateCheck,
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         },
         stdout,

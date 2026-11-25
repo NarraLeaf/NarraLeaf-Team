@@ -105,6 +105,12 @@ export type Invocation =
        */
       readonly certificate: { readonly certPath: string; readonly keyPath: string } | undefined;
       readonly overrides: IdentityOverrides;
+      /**
+       * Whether to ask GitHub, twice a day, whether a newer Team has been
+       * released, so the console can tell an operator (src/updates.ts). On
+       * unless `--no-update-check` or `NLTEAM_UPDATE_CHECK=false`.
+       */
+      readonly updateCheck: boolean;
     }
   /** Make the first account, on a server that has none. */
   | {
@@ -342,6 +348,9 @@ const ENVIRONMENT: Readonly<Record<string, string>> = {
   // {@link identityFrom}, because a flag stands for itself and a variable does
   // not.
   "--identity": "NLTEAM_IDENTITY",
+  // The same shape as --identity: a flag pair on the line, a boolean-ish
+  // variable off it, read in {@link updateCheckFrom}.
+  "--update-check": "NLTEAM_UPDATE_CHECK",
 };
 
 /**
@@ -830,6 +839,26 @@ function readIdentityOverrides(tokens: Tokens, env: NodeJS.ProcessEnv): Identity
   return overrides;
 }
 
+/**
+ * Whether to ask whether a newer Team has been released, read as
+ * {@link identityFrom} reads `--identity`: a flag decides, then
+ * `NLTEAM_UPDATE_CHECK`, and with neither it is on. Returns a sentence when
+ * the variable is neither on nor off.
+ */
+function updateCheckFrom(tokens: Tokens, env: NodeJS.ProcessEnv): boolean | string {
+  if (tokens.flags.has("--no-update-check")) return false;
+  if (tokens.flags.has("--update-check")) return true;
+  const value = envValue(env, "--update-check");
+  if (value === undefined) return true;
+  const normalized = value.trim().toLowerCase();
+  if (IDENTITY_ON.includes(normalized)) return true;
+  if (IDENTITY_OFF.includes(normalized)) return false;
+  return (
+    `NLTEAM_UPDATE_CHECK is on or off: ${IDENTITY_ON.join("/")} or ${IDENTITY_OFF.join("/")}, ` +
+    `not "${value}"`
+  );
+}
+
 /** Parse the arguments that follow `up`. */
 function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const result = readTokens(
@@ -838,7 +867,7 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
     // `--identity` is still taken and means what it has always meant. It now
     // asks for what happens anyway, which is what keeps an operator's existing
     // command line working rather than becoming an unknown argument.
-    ["--identity", "--no-identity"],
+    ["--identity", "--no-identity", "--update-check", "--no-update-check"],
     IDENTITY_LIST_OPTIONS,
   );
   if (result.kind !== "tokens") {
@@ -865,6 +894,14 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
   const identity = identityFrom(tokens, env);
   if (typeof identity === "string") {
     return error(identity);
+  }
+
+  if (tokens.flags.has("--update-check") && tokens.flags.has("--no-update-check")) {
+    return error("--update-check and --no-update-check cannot both be given");
+  }
+  const updateCheck = updateCheckFrom(tokens, env);
+  if (typeof updateCheck === "string") {
+    return error(updateCheck);
   }
 
   let healthPort = DEFAULT_PORTS.healthPort;
@@ -924,6 +961,7 @@ function parseUp(argv: readonly string[], env: NodeJS.ProcessEnv): Invocation {
     certificate:
       certPath === undefined || keyPath === undefined ? undefined : { certPath, keyPath },
     overrides,
+    updateCheck,
   };
 }
 
