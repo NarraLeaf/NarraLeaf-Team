@@ -830,6 +830,13 @@
   align-self: flex-start;
 }
 
+.flash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .flash-danger {
   border-color: rgb(var(--nl-danger) / 0.4);
   background: rgb(var(--nl-danger) / 0.08);

@@ -688,4 +688,4 @@ export function gateCall(
 }
 
 /** What may still be done to an archived project. */
-const ARCHIVE_EXEMPT = new Set(["projects.restore", "projects.archive", "projects.forget", "projects.update"]);
+const ARCHIVE_EXEMPT = new Set(["projects.restore", "projects.archive", "projects.forget", "projects.delete", "projects.update"]);

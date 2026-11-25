@@ -37,6 +37,7 @@ import { countUsers, eachUser, findUser, type UserRecord } from "../../identity/
 import { NOT_READ_YET } from "../../teamview.js";
 import { mayRemoveProject, memberBody, projectBody, projectMemberBody } from "../../projects/answers.js";
 import { makeOrAdoptProject } from "../../projects/create.js";
+import { deleteForever, deletionTarget } from "../../projects/delete.js";
 import { findTemplate } from "../../collab/templates.js";
 import { applyAndAnnounce } from "./planning.js";
 import { setVersionRoles, versionsOf } from "../../authority/versions.js";
@@ -492,6 +493,18 @@ export function projectMethods(): TeamMethod[] {
             );
           case "name-taken":
             throw new MethodError("conflict", result.message);
+          case "name-held":
+            // A repository by this name is in loreserver's store and on nobody's
+            // list. The id is said in this server's own words, in parentheses,
+            // so that the console can offer the two ways out: record it again
+            // (`repositoryId`), or delete it for good (`projects.delete`).
+            throw new MethodError(
+              "conflict",
+              result.repositoryId === undefined
+                ? `the name ${name} is still held by a repository on this server that is on no project's list: ${result.message}`
+                : `the name ${name} is still held by the repository of a project taken off this server's list (repository ${result.repositoryId}). ` +
+                    "Record it again with that repository id to bring the project back, or delete it for good to free the name",
+            );
           case "repository-refused":
             // loreserver would not make the repository, and the row was rolled
             // back. The other server is what refused, so its sentence is carried
@@ -565,6 +578,80 @@ export function projectMethods(): TeamMethod[] {
         announceProjects(context, { kind: "project-forgotten", project: project.id }, audience);
         // An object rather than null: a method with nothing to report says {}.
         return {};
+      },
+    },
+    {
+      name: TEAM_METHODS.projectsDelete,
+      capability: "session",
+      handle: async (params: unknown, context: MethodContext) => {
+        const read = paramsObject(params);
+        // The name always, typed by the person as their confirmation; the
+        // repository id as well for a repository that is on no list.
+        const name = requiredText(read, "name", NAME_LIMIT);
+        const repositoryId = optionalText(read, "repositoryId", ID_LIMIT);
+        const database = context.options.database;
+        const target = deletionTarget(database, { name, ...(repositoryId === undefined ? {} : { repositoryId }) });
+        switch (target.kind) {
+          case "invalid-repository-id":
+            throw new MethodError("bad-params", "a repository id is thirty-two hexadecimal characters");
+          case "not-found":
+            throw new MethodError("not-found", `there is no project called ${name} on this server`);
+          case "name-mismatch":
+            throw new MethodError("bad-params", `that repository is called ${target.actual}, not ${name}`);
+          case "name-taken":
+            throw new MethodError("conflict", `${name} is a project on this server's list, under another repository`);
+          case "project":
+            // A project the caller cannot see is, to them, not there.
+            if (!projectVisible(context, target.project.id)) {
+              throw new MethodError("not-found", `there is no project called ${name} on this server`);
+            }
+            // Whoever may take it off the list may delete it: the owners, or the
+            // operators alone where `project.delete_by` says so.
+            if (!mayRemoveProject(context.options, context.user, projectRole(database, target.project.id, context.user))) {
+              throw new MethodError(
+                "refused",
+                storedProjectDeleters(database) === "admins"
+                  ? "on this server, projects are deleted by its operators"
+                  : "only an owner of this project may delete it",
+              );
+            }
+            break;
+          case "leftover":
+            // Nobody owns a repository that is on no list, so the operators decide.
+            if (!isOperator(context.user.groups)) {
+              throw new MethodError("refused", "a repository that is on no project's list is deleted by this server's operators");
+            }
+            break;
+        }
+
+        // Read before the row goes, because the member rows go with it.
+        const audience = target.kind === "project" ? projectAudience(database, target.project.id) : new Set<string>();
+        const result = await deleteForever(context.options, context.user, target);
+        switch (result.kind) {
+          case "no-repository":
+            throw new MethodError("not-found", "there is no repository of that id on this server");
+          case "name-mismatch":
+            throw new MethodError("bad-params", `that repository is called ${result.actual}, not ${name}`);
+          case "repository-refused":
+            throw new MethodError("unavailable", result.message);
+          case "deleted":
+            recordDecision(database, {
+              username: context.user.username,
+              resource: `project:${result.name}`,
+              allowed: true,
+              detail: result.alreadyGone ? "deleted; its repository was already gone" : `deleted with its repository ${result.repositoryId}`,
+            });
+            // loreserver's `DeleteResource` normally took the row away and told
+            // everybody; where it had not by the time loreserver answered, this
+            // does what that path does.
+            if (result.forgotHere) {
+              context.options.readings?.forget?.(result.repositoryId);
+              if (target.kind === "project") {
+                announceProjects(context, { kind: "project-forgotten", project: result.repositoryId }, audience);
+              }
+            }
+            return { deleted: { name: result.name, repositoryId: result.repositoryId } };
+        }
       },
     },
     {

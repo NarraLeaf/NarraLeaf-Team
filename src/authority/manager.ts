@@ -607,6 +607,16 @@ export class ProjectAuthorities {
     return { seq, revision: head };
   }
 
+  /**
+   * Let go of a project whose repository was deleted for good.
+   *
+   * Whatever was held for it is dropped unsaved: there is no repository left to
+   * save a version into, and a project kept loaded would go on trying to.
+   */
+  forget(projectId: string): void {
+    this.#loaded.delete(projectId);
+  }
+
   async tick(): Promise<void> {
     const now = this.#now();
     const idle = this.#options.idleSnapshotMs ?? 60_000;

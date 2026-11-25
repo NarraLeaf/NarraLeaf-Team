@@ -20,6 +20,27 @@ import {
   type ProjectRecord,
 } from "./registry.js";
 import { loreserverUrl, repositoryCreate } from "./repository.js";
+import { GrpcCallError } from "../grpc/client.js";
+
+/** gRPC's ALREADY_EXISTS, the status loreserver refuses a taken name with. */
+const ALREADY_EXISTS = 6;
+
+/**
+ * The id of the repository already holding a name, out of loreserver's refusal.
+ *
+ * loreserver 0.8.6 says "Repository <name> already exist with id <id> which does
+ * not match <ours>": the one thirty-two-hex-digit id in it that is not the one
+ * asked for. Read here because there is no other way to learn it — a repository
+ * this server has no row for is, to every other loreserver call, not found.
+ * Nothing is done with it on the strength of this alone: deleting it first
+ * looks it up by id and checks it carries the name (./delete.ts), so a sentence
+ * reworded one day leaves an id that fails that check, or none, and never
+ * deletes the wrong repository.
+ */
+export function heldBy(message: string, asked: string): string | undefined {
+  const ids = [...message.toLowerCase().matchAll(/\b[0-9a-f]{32}\b/g)].map((match) => match[0]).filter((id) => id !== asked);
+  return ids.length === 1 ? ids[0] : undefined;
+}
 
 /**
  * The outcome of trying to make a project, apart from how the answer is carried.
@@ -53,7 +74,14 @@ export type ProjectCreation =
   /** The name is already in use on this server. */
   | { readonly kind: "name-taken"; readonly message: string }
   /** loreserver would not make the repository; the row was rolled back. */
-  | { readonly kind: "repository-refused"; readonly message: string };
+  | { readonly kind: "repository-refused"; readonly message: string }
+  /**
+   * loreserver already holds a repository by this name, which this server has
+   * no row for: most often one whose project was taken off the list. The row
+   * was rolled back. `repositoryId` is that repository's id where loreserver's
+   * sentence named one (see {@link heldBy}).
+   */
+  | { readonly kind: "name-held"; readonly message: string; readonly repositoryId?: string };
 
 /** What a create is asked for. */
 export interface ProjectCreationRequest {
@@ -204,6 +232,10 @@ export async function makeOrAdoptProject(
     });
   } catch (error) {
     forgetProject(options.database, project.id);
+    if (error instanceof GrpcCallError && error.status === ALREADY_EXISTS) {
+      const held = heldBy(error.statusMessage, project.id);
+      return { kind: "name-held", message: error.message, ...(held === undefined ? {} : { repositoryId: held }) };
+    }
     return {
       kind: "repository-refused",
       message: error instanceof Error ? error.message : String(error),

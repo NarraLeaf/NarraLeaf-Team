@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.1.2]
+
+### _Changes_
+
+- **A project can be deleted for good.** Removing a project only takes it off
+  the list: its repository stays in the store, history and name with it, so a
+  new project under that name was refused with loreserver's `ALREADY_EXISTS`.
+  "Delete for good" in a project's settings has loreserver delete the
+  repository and every revision in it, removes everything Team kept about the
+  project, and frees the name. It asks for the name to be typed, and is for the
+  same people as removing (`project.delete_by`). The method is
+  `projects.delete`.
+- **A name held by a removed project says so.** Making a project under such a
+  name is refused with the repository's id, and the console's package import
+  offers to bring the old project back or, for an operator, to delete it for
+  good. Removing a project now says that its name stays taken.
+
+### _Fixes_
+
+- **A failed package import no longer leaves its name taken.** The import took
+  the project it made back off the list, which left an empty repository holding
+  the name; it now deletes the project for good.
+
 ## [1.1.1]
 
 ### _Changes_

@@ -18,7 +18,7 @@ unpacked, so nothing is downloaded on first start.
 ```yaml
 services:
   team:
-    image: ghcr.io/narraleaf/team:1.1.1
+    image: ghcr.io/narraleaf/team:1.1.2
     restart: unless-stopped
     environment:
       NLTEAM_HOSTNAME: team.example.com
@@ -465,7 +465,7 @@ GET /.well-known/nlteam
   "data": { "url": "lore://team.example.com:41337" },
   "capabilities": ["session", "comments", "clients", "live", "overlay", "admin"],
   "authority": { "sha256": "3D:38:9F:E6:..." },
-  "version": "1.1.1"
+  "version": "1.1.2"
 }
 ```
 
@@ -606,7 +606,7 @@ nlteam status --server team.example.com:54080
 ```
 
 ```
-nlteam 1.1.1 under /srv/team
+nlteam 1.1.2 under /srv/team
 as of 2026-08-27T09:12:33.001Z, and an answer is kept for 10 seconds
 
 loreserver 0.8.6, answering
@@ -800,7 +800,7 @@ says who may make a project: everybody, the operators plus the accounts in the
 `admin.users.setCreator`, or the "allow creating projects" button in the web
 console's back office), or the operators alone. `project.delete_by` takes
 `owners` (the default) or `admins`, and says who may take a project off the
-list: any owner of it, or the operators alone. `project.default_access` takes
+list or delete it for good: any owner of it, or the operators alone. `project.default_access` takes
 `editor` (the default), `viewer` or `none`, and says what everybody else is
 given in a project they were not put in by hand: when a project is made (its
 maker always owns it), and in every project when an account is made. With
@@ -1057,6 +1057,32 @@ address this server advertises for work that has not moved.
 The row that comes back is a new row: today's date, and the account `--as` named
 as its creator. What an author opens is unchanged, because none of it was in the
 row.
+
+**The name stays taken.** loreserver keeps a repository's name for as long as the
+repository exists, so a new project under the old name is refused while the
+removed one's repository is there. `projects.create` says so, naming the
+repository's id, and the console's package import offers the two ways out:
+bring the old project back, or (for an operator) delete it for good.
+
+### Deleting a project for good
+
+Deleting a project removes its repository from loreserver's store, with every
+branch and revision in it, then the row and everything Team kept about the
+project, and frees its name. Nothing brings it back but a backup taken before.
+In the console it is "Delete for good" in a project's settings, beside "Remove
+project", and it asks for the project's name to be typed. The same people may do
+it as may remove the project (`project.delete_by`).
+
+`projects.delete` on a session is what does it. It takes the project's `name`,
+always, as the confirmation, and a `repositoryId` beside it reaches the
+repository of a project that was removed from the list earlier; only an operator
+may delete one of those, since nobody owns it any more. Before deleting such a
+repository Team looks it up by id and checks that it carries the name given, and
+deletes nothing if it does not. There is no `nlteam project delete`.
+
+A package import that the server refuses deletes the project it made for the
+package in the same way, so a failed import leaves no repository holding the
+name.
 
 ## Backups
 

@@ -1212,6 +1212,29 @@ describe("what a project's members see over the socket", () => {
     expect(await owner.value(TEAM_METHODS.projectsForget, { project: project.id })).toEqual({});
     expect(listProjects(team.database)).toEqual([]);
   });
+
+  it("lets only an owner delete a project for good, and only an operator a repository on no list", async () => {
+    const team = await harness();
+    const ada = await account(team.database, "ada");
+    await account(team.database, "bob");
+    const project = createProject(team.database, {
+      id: newProjectId(),
+      name: "lighthouse",
+      description: "",
+      createdBy: ada,
+    });
+
+    const editor = await team.connect(team.tokenFor("bob"));
+    expect((await editor.call(TEAM_METHODS.projectsDelete, { name: "lighthouse" })).code).toBe("refused");
+    // A leftover has no owner, so an operator decides; bob is not one.
+    expect((await editor.call(TEAM_METHODS.projectsDelete, { name: "harbour", repositoryId: newProjectId() })).code).toBe("refused");
+
+    const owner = await team.connect(team.tokenFor("ada"));
+    // The name is the confirmation, and has to be the project's own.
+    expect((await owner.call(TEAM_METHODS.projectsDelete, { name: "Lighthouse" })).code).toBe("not-found");
+    expect((await owner.call(TEAM_METHODS.projectsDelete, { name: "harbour", repositoryId: project.id })).code).toBe("bad-params");
+    expect(listProjects(team.database)).toHaveLength(1);
+  });
 });
 
 describe("changing who belongs to a project over the socket", () => {

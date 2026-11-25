@@ -2263,6 +2263,14 @@ export const TEAM_METHODS = {
    * owners, or the operators alone where `project.delete_by` says so.
    */
   projectsForget: "projects.forget",
+  /**
+   * Delete a project for good: its repository, every revision in it, and the
+   * row, freeing the name. `name` is required, as the caller's confirmation;
+   * `repositoryId` beside it reaches a repository taken off the list earlier,
+   * which only an operator may delete. Otherwise the same people as
+   * `projects.forget`.
+   */
+  projectsDelete: "projects.delete",
   /** Who belongs to one project, and in which role. Any member may ask. */
   projectsMembersList: "projects.members.list",
   /**

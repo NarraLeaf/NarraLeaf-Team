@@ -72,6 +72,7 @@ export const METHOD_CREATE_RESOURCE = "/ucs.auth.RebacApi/CreateResource";
 export const METHOD_DELETE_RESOURCE = "/ucs.auth.RebacApi/DeleteResource";
 export const METHOD_REPOSITORY_CREATE = "/lore.repository.v1.RepositoryService/RepositoryCreate";
 export const METHOD_REPOSITORY_GET = "/lore.repository.v1.RepositoryService/RepositoryGet";
+export const METHOD_REPOSITORY_DELETE = "/lore.repository.v1.RepositoryService/RepositoryDelete";
 
 /**
  * The encoding of a message with no fields.
@@ -808,8 +809,31 @@ export function decodeRepositoryGetRequest(bytes: Uint8Array): RepositoryQuery |
 }
 
 /**
- * The single `repository` field that both `RepositoryCreateResponse` and
- * `RepositoryGetResponse` carry, at field 1 in each.
+ * `lore.repository.v1.RepositoryDeleteRequest`: one field, the id.
+ *
+ * By id and never by name, as lore has it: a name is free again the moment its
+ * repository goes, so a name could by then mean another repository.
+ */
+export function encodeRepositoryDeleteRequest(id: string): Buffer {
+  return new MessageWriter().bytes(1, Buffer.from(id, "hex")).finish();
+}
+
+export function decodeRepositoryDeleteRequest(bytes: Uint8Array): string | undefined {
+  let id: string | undefined;
+  readFields(new MessageReader(bytes), (tag, message) => {
+    if (tag.field === 1 && tag.wireType === WIRE_DELIMITED) {
+      id = message.readDelimited().toString("hex");
+      return true;
+    }
+    return false;
+  });
+  return id;
+}
+
+/**
+ * The single `repository` field that `RepositoryCreateResponse`,
+ * `RepositoryGetResponse` and `RepositoryDeleteResponse` carry, at field 1 in
+ * each. The delete's is the record as it was just before it went.
  */
 export function encodeRepositoryResponse(repository: Repository): Buffer {
   return new MessageWriter().message(1, writeRepository(repository)).finish();
