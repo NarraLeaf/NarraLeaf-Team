@@ -83,17 +83,32 @@ check are bound to the loopback inside the container.
 `NLTEAM_HOSTNAME`, `--data-port` is `NLTEAM_DATA_PORT`, and so on. The storage
 root and the binary cache are already set in the image.
 
-**Upgrading.** Change the tag in `compose.yaml`, then
+**Image tags.** A release publishes `X.Y.Z` and moves `latest`. `develop`
+follows the integration branch. A deployment names the version it means: both
+`latest` and `develop` change under a deployment that pulls them, and an image
+that changes under a server nobody restarted is a change nobody chose.
+
+### Upgrading
+
+Change the tag in `compose.yaml`, then
 `docker compose pull && docker compose up -d`. The database migrates on start
 and the certificate authority is kept, so no machine is asked to trust anything
 again. A server coming from 1.0.0 moves its sign-in port from 41402 to 54080:
 change the published port with the tag and give authors the new address, or set
 `NLTEAM_AUTH_TLS_PORT: "41402"` and publish `41402:41402` to stay where it was.
 
-**Image tags.** A release publishes `X.Y.Z` and moves `latest`. `develop`
-follows the integration branch. A deployment names the version it means: both
-`latest` and `develop` change under a deployment that pulls them, and an image
-that changes under a server nobody restarted is a change nobody chose.
+**Knowing there is one.** The server asks GitHub for the newest `vX.Y.Z` tag
+once at start and twice a day after, and the web console's home page tells
+operators, and only operators, when it is newer than the running version, with
+a link to the release and to this section. Nothing is downloaded or installed:
+an upgrade is still the two commands above, run by an operator who chose the
+version. A server that must not reach the internet starts with
+`--no-update-check` or `NLTEAM_UPDATE_CHECK: "false"`; a failed check is only
+noted, and the console says nothing.
+
+Console pages that were open across an upgrade see the new version when their
+connection comes back, and offer a reload, since what is on screen is still the
+previous console.
 
 ### A certificate you already hold
 

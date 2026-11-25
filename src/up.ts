@@ -71,6 +71,7 @@ import { VERSION } from "./version.js";
 import type { TeamService } from "./team/service.js";
 import { webHandler } from "./web/router.js";
 import { consoleRoot } from "./web/console.js";
+import { UpdateCheck } from "./updates.js";
 
 export interface UpOptions extends LoreserverPorts {
   /** The storage root; everything Team writes goes underneath it. */
@@ -81,6 +82,8 @@ export interface UpOptions extends LoreserverPorts {
    * tokens at all.
    */
   readonly identity?: boolean;
+  /** False to never ask GitHub whether a newer Team has been released (src/updates.ts). On when absent. */
+  readonly updateCheck?: boolean;
   /**
    * Identity settings an operator named; the rest keep their defaults.
    *
@@ -193,6 +196,9 @@ export async function up(
   const identity = identityLayout(options.root);
 
   let supervisor: Supervisor | undefined;
+  // Made before anything can fail so the way out can always stop it; started
+  // once the server is up, so a slow GitHub never delays a start.
+  const updates = new UpdateCheck({ enabled: options.updateCheck !== false });
   let endpoint: IdentityEndpoint | undefined;
   let authorizationTls: GrpcServer | undefined;
   let devConsole: Server | undefined;
@@ -472,6 +478,7 @@ export async function up(
       // that may not yet trust this server — the same claim `nlteam token mint`
       // writes, for the same reason.
       fingerprint: certificates.authority.fingerprint256,
+      updates,
       readings: projects,
       authorities,
       log: (line) => {
@@ -706,6 +713,9 @@ export async function up(
     // scrolled away by a download.
     printFirstAccountNotice(database, identity.root, authUrl(config), stdout);
 
+    updates.start();
+    if (options.updateCheck === false) stdout("not checking for newer releases (--no-update-check)\n");
+
     stdout("press Ctrl-C to stop\n");
 
     // Whichever comes first: the operator interrupting, or supervision ending.
@@ -757,6 +767,7 @@ export async function up(
     // It holds a sweep timer and parked readers, each of which is a response
     // waiting for a byte that is not going to come now.
     blobs?.close();
+    updates.stop();
     housekeeping?.stop();
     setNotificationAnnouncer(undefined);
     // It holds a timer and a reader that would go on reading repositories

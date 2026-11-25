@@ -69,6 +69,8 @@ describe("parseArgs, up", () => {
       // a command line that says nothing about it has to mean the safe one.
       identity: true,
       overrides: {},
+      // Asking about releases is on too: it only ever informs an operator.
+      updateCheck: true,
     });
   });
 
@@ -318,6 +320,18 @@ describe("parseArgs, the ports and identity from the environment", () => {
 });
 
 describe("parseArgs, identity on or off from the environment", () => {
+  it("checks for releases unless told not to, by flag or by NLTEAM_UPDATE_CHECK", () => {
+    expect(parseArgs(["up", "--root", "/srv/team"])).toMatchObject({ kind: "up", updateCheck: true });
+    expect(parseArgs(["up", "--root", "/srv/team", "--no-update-check"])).toMatchObject({ updateCheck: false });
+    for (const off of ["0", "false", "no", "FALSE"]) {
+      expect(parseArgs(["up", "--root", "/srv/team"], { NLTEAM_UPDATE_CHECK: off })).toMatchObject({ updateCheck: false });
+    }
+    // The flag beats the variable, as every flag does.
+    expect(parseArgs(["up", "--root", "/srv/team", "--update-check"], { NLTEAM_UPDATE_CHECK: "false" })).toMatchObject({ updateCheck: true });
+    expect(messageFor2(parseArgs(["up", "--root", "/srv/team"], { NLTEAM_UPDATE_CHECK: "maybe" }))).toContain("NLTEAM_UPDATE_CHECK");
+    expect(messageFor(["up", "--root", "/srv/team", "--update-check", "--no-update-check"])).toContain("cannot both be given");
+  });
+
   it("turns identity off when NLTEAM_IDENTITY says so, without a flag", () => {
     for (const off of ["0", "false", "no", "NO", "False"]) {
       expect(parseArgs(["up", "--root", "/srv/team"], { NLTEAM_IDENTITY: off })).toMatchObject({

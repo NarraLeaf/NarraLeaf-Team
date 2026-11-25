@@ -2,7 +2,25 @@
 
 ## [Unreleased]
 
+### _Changes_
+
+- **Operators are told when a newer Team is out.** The server asks GitHub for
+  the newest release tag at start and twice a day, and the console's home page
+  shows operators the new version with links to the release and to the upgrade
+  steps. Nothing is installed by itself. `--no-update-check` or
+  `NLTEAM_UPDATE_CHECK=false` turns the asking off for a server that must not
+  reach the internet. A console page left open across an upgrade offers a
+  reload.
+- **The console wears the team's logo as its tab icon** once an operator has
+  uploaded one, and the Studio entries show NarraLeaf's own leaf.
+
 ### _Fixes_
+
+- **Assets imported during a live session open in a fresh clone.** The server
+  wrote an asset's bytes under their content digest, while Studio reads them
+  under the asset's id, so a copy cloned afterwards listed those assets as
+  unreadable. They are written where Studio looks, and a model bundle's files
+  can no longer name a path outside their asset.
 
 - **An `http://` address on the sign-in port is redirected, not dropped.** A
   browser given `192.168.1.100:54080` with no scheme asks for `http://`, and

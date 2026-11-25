@@ -27,6 +27,7 @@ import { createTeamSocket } from "../src/team/endpoint.js";
 import { TEAM_SOCKET_PATH } from "../src/team/protocol.js";
 import type { TeamService } from "../src/team/service.js";
 import { CONSOLE_CSP } from "../src/web/console.js";
+import { UpdateCheck } from "../src/updates.js";
 import { webHandler } from "../src/web/router.js";
 import { useTemporaryRoots } from "./temporary.js";
 
@@ -62,7 +63,7 @@ interface Reply {
   readonly body: string;
 }
 
-async function harness(options: { built?: boolean } = {}) {
+async function harness(options: { built?: boolean; updates?: UpdateCheck } = {}) {
   const root = await temporaryRoot();
   const layout = identityLayout(root);
   const database = await openMigratedDatabase(layout.databasePath);
@@ -76,8 +77,10 @@ async function harness(options: { built?: boolean } = {}) {
     dataPort: 1,
     healthPort: 1,
     signIns: new SignInLimiter(),
+    ...(options.updates === undefined ? {} : { updates: options.updates }),
   };
   await createUser(database, hasher, { username: "ada", password: PASSWORD, displayName: "Ada" });
+  await createUser(database, hasher, { username: "root", password: PASSWORD, displayName: "Root", groups: ["admin"] });
 
   let consoleDir: string | undefined;
   if (options.built !== false) {
@@ -139,9 +142,9 @@ async function harness(options: { built?: boolean } = {}) {
       call.end(text);
     });
 
-  const signIn = async (): Promise<string> => {
+  const signIn = async (username = "ada"): Promise<string> => {
     const reply = await ask("POST", "/api/console/v1/sign-in", { origin: `https://${host}` }, {
-      username: "ada",
+      username,
       password: PASSWORD,
     });
     expect(reply.status).toBe(200);
@@ -311,6 +314,35 @@ describe("a console session", () => {
     });
     expect(hello["t"]).toBe("hello");
     expect((hello["account"] as { username: string }).username).toBe("ada");
+  });
+});
+
+describe("the console's release notice", () => {
+  it("tells an operator what GitHub last said, and nobody else anything", async () => {
+    const tags = [{ name: "v9.0.0" }, { name: "v1.0.0" }];
+    const updates = new UpdateCheck({
+      enabled: true,
+      current: "1.0.5",
+      fetch: (async () => new Response(JSON.stringify(tags), { status: 200 })) as typeof fetch,
+    });
+    await updates.check();
+    const team = await harness({ updates });
+
+    const operator = { cookie: `${WEB_SESSION_COOKIE}=${await team.signIn("root")}` };
+    const told = await team.ask("GET", "/api/console/v1/update", operator);
+    expect(told.status).toBe(200);
+    expect(JSON.parse(told.body)).toMatchObject({ current: "1.0.5", latest: "9.0.0", newer: true, enabled: true });
+
+    const member = { cookie: `${WEB_SESSION_COOKIE}=${await team.signIn("ada")}` };
+    expect((await team.ask("GET", "/api/console/v1/update", member)).status).toBe(403);
+    expect((await team.ask("GET", "/api/console/v1/update")).status).toBe(401);
+  });
+
+  it("answers off rather than failing on a server that does not ask", async () => {
+    const team = await harness();
+    const operator = { cookie: `${WEB_SESSION_COOKIE}=${await team.signIn("root")}` };
+    const told = await team.ask("GET", "/api/console/v1/update", operator);
+    expect(JSON.parse(told.body)).toMatchObject({ enabled: false, newer: false });
   });
 });
 

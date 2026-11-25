@@ -30,7 +30,13 @@ const result = await esbuild.build({
   sourcemap: true,
   metafile: true,
   tsconfig: join(root, "web", "tsconfig.json"),
-  define: { "process.env.NODE_ENV": '"production"' },
+  // The version the page was built as, from the same field the server's comes
+  // from: an open console compares it with the server's and offers a reload
+  // once the server has been upgraded under it (web/src/updates.tsx).
+  define: {
+    "process.env.NODE_ENV": '"production"',
+    __NLTEAM_VERSION__: JSON.stringify(JSON.parse(await readFile(join(root, "package.json"), "utf8")).version),
+  },
   legalComments: "linked",
 });
 

@@ -73,6 +73,7 @@ import {
 } from "./studio.js";
 import { oidcButton, serveConsoleSecurity } from "./consoleSecurity.js";
 import { totpEnabled, twoFactorRequired } from "../identity/totp.js";
+import { VERSION } from "../version.js";
 
 const API_PREFIX = "/api/console/v1";
 export const CONSOLE_SIGN_IN_PATH = `${API_PREFIX}/sign-in`;
@@ -80,6 +81,7 @@ export const CONSOLE_SIGN_OUT_PATH = `${API_PREFIX}/sign-out`;
 export const CONSOLE_SESSION_PATH = `${API_PREFIX}/session`;
 export const CONSOLE_LOOK_PATH = `${API_PREFIX}/look`;
 export const CONSOLE_SETUP_PATH = `${API_PREFIX}/setup`;
+export const CONSOLE_UPDATE_PATH = `${API_PREFIX}/update`;
 
 /** Where the page lives. */
 export const CONSOLE_PATH = "/console";
@@ -229,6 +231,21 @@ function serveApi(service: TeamService, request: IncomingMessage, response: Serv
       return;
     }
     sendJson(response, 200, lookBody(service, (request.headers.host ?? "").replace(/:\d+$/, "")));
+    return;
+  }
+  if (path === CONSOLE_UPDATE_PATH) {
+    if (request.method !== "GET") {
+      onlyMethods(response, "GET", "GET");
+      return;
+    }
+    // An operator's business: what to upgrade to is theirs to decide, and the
+    // answer is the same for everybody, so nobody else is shown a banner about it.
+    const identified = identifyWebSession(service.database, webSessionCookie(request.headers.cookie));
+    if (identified.kind !== "identified" || !isOperator(identified.user.groups)) {
+      refuse(response, identified.kind === "identified" ? 403 : 401, "only an operator of this server is told about releases");
+      return;
+    }
+    sendJson(response, 200, service.updates?.status() ?? { current: VERSION, enabled: false, newer: false });
     return;
   }
   if (path === CONSOLE_SETUP_PATH) {
